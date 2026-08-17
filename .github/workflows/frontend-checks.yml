@@ -1,0 +1,58 @@
+# Frontend Checks
+# 目的: frontend（Next.js）の ESLint / 型検査（tsc --noEmit）/ ビルド（next build）を
+# PR ごとに実行する。
+#
+# - 実 LLM・外部 API は一切呼ばない（ADR-0004）。build も API 呼び出しを含まない
+# - Node バージョンは .mise.toml の宣言（正本）と一致させる。
+#   一致は toolchain-version-check.yml（idp-golden-path の reusable workflow）が機械検査する。
+#   変更する場合は必ず同じ PR で .mise.toml と本ファイルの pin を揃えること
+# - この check は branch protection の required status checks に追加しない（Backend Tests と同じ扱い）。
+#   path filter 付き workflow を required にすると、該当パスに触れない PR で check が作成されず
+#   PR を恒久的にブロックする（docs/operations/branch-protection.md / idp-golden-path ADR-0006）
+# - アプリケーション層の CI を本リポジトリに置く判断は ADR-0005 参照
+
+name: Frontend Checks
+
+on:
+  pull_request:
+    branches: [main]
+    # frontend に影響しない変更（docs 等）では走らせない
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-checks.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  frontend-checks:
+    name: Frontend Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # .mise.toml の node と一致させる（toolchain-version-check が検査）
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (clean)
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Type check (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: Build (next build)
+        run: npm run build

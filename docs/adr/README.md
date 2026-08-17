@@ -41,3 +41,4 @@
 | [0002](./0002-alembic-for-schema-migrations.md) | Accepted | DB スキーマ管理に Alembic（raw SQL マイグレーション）を採用する |
 | [0003](./0003-provenance-schema-design.md) | Accepted | provenance を数値単位で保持する題材非依存スキーマ（プロパティ行テーブル + sources 正規化・vector(1536) 固定） |
 | [0004](./0004-stub-llm-and-no-llm-in-ci.md) | Accepted | LLM は故障注入可能なスタブで開発し、CI・テストから実 LLM を呼ばない |
+| [0005](./0005-app-ci-in-repo-not-idp.md) | Accepted | アプリケーション層（build / test / lint）の CI は本リポジトリに置き、idp-golden-path へ共通化しない |
