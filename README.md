@@ -18,7 +18,19 @@ docker compose ps      # STATUS が healthy になるまで待つ
 
 停止は `docker compose down`（データ保持）、破棄は `docker compose down -v`。
 
-### 2. backend（FastAPI）を起動する
+### 2. DB スキーマを適用する（マイグレーション）
+
+```bash
+cd backend
+uv sync
+set -a && source ../.env && set +a   # DATABASE_URL を読み込む
+uv run alembic upgrade head          # スキーマ適用
+uv run alembic downgrade base        # 全て戻す（破壊的。ローカル検証用）
+```
+
+スキーマ設計は [ADR-0003](./docs/adr/0003-provenance-schema-design.md)、ツール選定は [ADR-0002](./docs/adr/0002-alembic-for-schema-migrations.md) を参照。
+
+### 3. backend（FastAPI）を起動する
 
 ```bash
 mise install          # .mise.toml どおりの python を取得
