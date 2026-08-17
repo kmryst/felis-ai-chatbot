@@ -7,8 +7,10 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from app.config import Settings
+from app.db import check_database_ready
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
 
@@ -41,10 +43,17 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/readyz")
-async def readyz() -> dict[str, str]:
-    """readiness: トラフィックを受けられるか。
+async def readyz() -> JSONResponse:
+    """readiness: トラフィックを受けられるか。DB 到達性を実際に確認する。
 
-    現時点ではプロセス生存のみ。DB 到達性チェックは PR 2（docker compose +
-    PostgreSQL）で追加する。
+    DB に到達できない間は 503 を返し、トラフィックを受けない。
+    liveness（/health）とは役割が異なり、こちらが落ちてもプロセスは再起動されない。
     """
-    return {"status": "ok"}
+    db_ok = await check_database_ready(
+        settings.database_url, settings.db_connect_timeout_seconds
+    )
+    if not db_ok:
+        return JSONResponse(
+            status_code=503, content={"status": "unavailable", "db": "unreachable"}
+        )
+    return JSONResponse(status_code=200, content={"status": "ok", "db": "ok"})

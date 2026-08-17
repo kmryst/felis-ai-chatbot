@@ -8,7 +8,7 @@ secret（API キー・パスワード・接続文字列）は絶対にログへ�
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class MissingEnvError(RuntimeError):
@@ -33,15 +33,20 @@ def _require(name: str, missing: list[str]) -> str:
 class Settings:
     app_name: str
     log_level: str
+    # DB 接続文字列。secret を含むため repr=False（ログ・エラー画面への漏出防止）
+    database_url: str = field(repr=False)
+    db_connect_timeout_seconds: int
 
     @classmethod
     def from_env(cls) -> "Settings":
         missing: list[str] = []
-        # 現時点で必須の環境変数はない。DB 接続情報（PR 2 予定）など
-        # 必須項目を足すときは `_require("DATABASE_URL", missing)` の形で追加する。
         settings = cls(
             app_name=os.environ.get("APP_NAME", "felis-ai-chatbot-backend"),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+            database_url=_require("DATABASE_URL", missing),
+            db_connect_timeout_seconds=int(
+                os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "2")
+            ),
         )
         if missing:
             raise MissingEnvError(missing)

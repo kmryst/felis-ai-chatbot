@@ -1,0 +1,37 @@
+# ローカル開発用 PostgreSQL (pgvector)。
+#
+# 起動:  docker compose up -d
+# 停止:  docker compose down        # データ保持
+# 破棄:  docker compose down -v     # データも削除
+#
+# 値の上書きはリポジトリ直下の .env で行う（.env.example 参照。.env はコミット禁止）。
+# ここに書かれた既定値はローカル開発専用であり、secret ではない。
+# Azure（Day 3 以降）の接続情報は Key Vault / 環境変数で渡し、このファイルには書かない。
+#
+# イメージのメジャーバージョン 17 は Azure Database for PostgreSQL Flexible Server の
+# 採用予定バージョンと揃える（ローカルと本番で挙動差を作らない）。
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: felis-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-felis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-felis}
+    ports:
+      # ホスト側既定は 5433。同一マシンの別プロジェクト（ticket-c2c 等）が
+      # 5432 を使っていても衝突しないようにする。上書きは .env の POSTGRES_PORT で
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # コンテナ内では POSTGRES_USER / POSTGRES_DB が環境変数として解決される
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  db-data:
