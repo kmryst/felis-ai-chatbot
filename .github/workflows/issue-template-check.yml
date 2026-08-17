@@ -1,0 +1,40 @@
+# Issue Template Check
+# 目的: Issue 本文の必須見出し（目的 / 対象 / 受け入れ条件）と必須 4 ラベルを検証し、
+# フォーム回答からのラベル自動補正・不備コメント投稿を行う
+# 実体は kmryst/idp-golden-path の reusable workflow（タグ固定参照、idp-golden-path ADR-0008）。
+# 検証は GitHub API 経由で行うため、本リポジトリの checkout は不要
+# このワークフローは PR の required status check ではないため、
+# ここでの check 名の合成（`issue-template-check / Issue Template Check`）は
+# branch protection には影響しない。
+
+name: Issue Template Check
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled]
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  # callee（idp-golden-path 側の reusable workflow）も同名パターンの concurrency group を
+  # 持つため、caller 側と同一名にすると GitHub Actions が「caller と callee 間のデッドロック」
+  # と判定し job を1つも起動せず run をキャンセルする（Issue #106）。
+  # `-caller` サフィックスで区別する。
+  group: issue-template-check-caller-${{ github.event.issue.number || github.run_id }}
+  # opened / edited / labeled / unlabeled の並行実行による古い payload の後勝ち
+  # （コメント二重作成・ラベルのフラッピング）を避けるため Issue 番号単位で直列化する。
+  # 実行中 run の cancel は中途半端なラベル・コメント状態を残し得るため cancel しない。
+  cancel-in-progress: false
+
+jobs:
+  # caller job には name を付けない。job id（issue-template-check）にフォールバックさせる
+  # ことで、callee側 job 名（Issue Template Check）との完全な文字列重複
+  # （`Issue Template Check / Issue Template Check`）を避ける。
+  # 重複した表示はコピペミスに見え可読性を損なう（Issue #106）。
+  issue-template-check:
+    uses: kmryst/idp-golden-path/.github/workflows/issue-template-check.yml@v1
+    permissions:
+      issues: write
+      contents: read

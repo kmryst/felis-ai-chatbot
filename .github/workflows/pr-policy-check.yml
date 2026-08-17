@@ -1,0 +1,46 @@
+# PR Policy Check
+# 目的: CONTRIBUTING.md の PR 運用規約（必須ラベル・Issue リンク・厳密運用 PR のロールバック欄）を CI で検証する
+# 実体は kmryst/idp-golden-path の reusable workflow（タグ固定参照、idp-golden-path ADR-0008）。
+# チェックロジックの正本は idp-golden-path 側にあり、更新は Dependabot のタグバージョンアップ PR で取り込む
+# required status check の名称は `pr-policy-check / PR Policy Check` になる
+# （caller job の名前は job id にフォールバックさせている。理由は下記 jobs 参照）
+# 厳密運用 path を本リポジトリの CONTRIBUTING.md 定義に合わせて変える場合は
+# `with: strict-paths-regex` で上書きする（未指定時: ^(\.github/workflows/|scripts/github/|terraform/)）
+
+name: PR Policy Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # callee（idp-golden-path 側の reusable workflow）も同名パターンの concurrency group を
+  # 持つため、caller 側と同一名にすると GitHub Actions が「caller と callee 間のデッドロック」
+  # と判定し job を1つも起動せず run をキャンセルする（Issue #106）。
+  # `-caller` サフィックスで区別する。
+  group: pr-policy-check-caller-${{ github.event.pull_request.number }}
+  # 実行中 run のキャンセルは CANCELLED check run を commit に残し、
+  # required status checks の判定に混入して PR を恒久的にブロックし得るため cancel しない。
+  cancel-in-progress: false
+  # デフォルト（queue: single）は pending run を1つしか保持せず、labeled/unlabeled 連発時に
+  # 古い pending run が cancel されて required check が一時的に expected 扱いになるため、
+  # pending run を cancel せず FIFO で順次実行する（Issue #87）。
+  # reusable workflow の呼び出し元でもこの concurrency 設定が run のキュー制御に効くため、
+  # caller 側（本ファイル）にも同じ設定を入れる。
+  queue: max
+
+jobs:
+  # caller job には name を付けない。job id（pr-policy-check）にフォールバックさせることで、
+  # callee側 job 名（PR Policy Check）との完全な文字列重複（`PR Policy Check / PR Policy Check`）
+  # を避ける。重複した表示はコピペミスに見え可読性を損なう（Issue #106）。
+  pr-policy-check:
+    # Dependabot の免除判定は called workflow の step で行う。caller workflow は常に呼び出し、
+    # required status check の `<caller job id> / <called job name>` を作成させる。
+    uses: kmryst/idp-golden-path/.github/workflows/pr-policy-check.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read

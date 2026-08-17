@@ -1,0 +1,35 @@
+# Toolchain Version Check
+# 目的: ローカル正本（.mise.toml）が宣言するツールチェーンのバージョンと、
+#       CI workflow に直書きされた pin が一致することを機械検査する
+# 実体は kmryst/idp-golden-path の reusable workflow（タグ固定参照、idp-golden-path ADR-0008 / ADR-0014）。
+# チェックロジックの正本は idp-golden-path 側にあり、更新は Dependabot のタグバージョンアップ PR で取り込む
+# check run の名称は `toolchain-version-check / Toolchain Version Check` になる
+# （caller job の名前は job id にフォールバックさせている。理由は下記 jobs 参照）
+#
+# `.mise.toml` が存在しないと fail する。ファイルを消す・移す場合は、
+# 同じ PR で本 workflow の扱い（削除するか `mise-config-path` を渡すか）も決めること。
+
+name: Toolchain Version Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # callee（idp-golden-path 側の reusable workflow）も同名パターンの concurrency group を
+  # 持つため、caller 側と同一名にすると GitHub Actions が「caller と callee 間のデッドロック」
+  # と判定し job を1つも起動せず run をキャンセルする（idp-golden-path#106）。
+  # `-caller` サフィックスで区別する。
+  group: toolchain-version-check-caller-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  # caller job には name を付けない。job id（toolchain-version-check）にフォールバックさせることで、
+  # callee 側 job 名（Toolchain Version Check）との完全な文字列重複を避ける（idp-golden-path#106）。
+  toolchain-version-check:
+    uses: kmryst/idp-golden-path/.github/workflows/toolchain-version-check.yml@v1
+    permissions:
+      contents: read

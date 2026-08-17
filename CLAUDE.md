@@ -1,0 +1,156 @@
+# CLAUDE.md — felis-ai-chatbot Claude Code 作業ルール
+
+このファイルは Claude Code が `felis-ai-chatbot` で作業を開始する前に読む入口です。
+一般論ではなく、このリポジトリ固有のルールに従って作業してください。
+
+## このリポジトリの目的
+
+pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenance / Monitoring を設計・実装・検証する個人開発
+
+このリポジトリは [idp-golden-path](https://github.com/kmryst/idp-golden-path) の
+ゴールデンパステンプレート（service-baseline）から生成されており、
+Issue / PR 駆動の開発フローと CI ガードレールが最初から有効です。
+
+## 位置づけ
+
+- `CLAUDE.md`: Claude Code 向けの作業入口。このファイルを Claude Code の正本とする。
+- `CONTRIBUTING.md`: Issue / Branch / Commit / PR / Label / 軽運用・厳密運用の共通正本。
+- `.github/labels.yml`: ラベル一覧の正本。
+- `docs/adr/`: 設計判断（ADR）の正本。運用ルールは `docs/adr/README.md`。
+- `docs/operations/branch-protection.md`: main ブランチ保護設定の記録。
+
+内容が衝突する場合は、共通運用は `CONTRIBUTING.md` を優先する。
+
+## 作業開始前に必ず読むファイル
+
+1. `CONTRIBUTING.md`
+2. `README.md`
+3. 対象 Issue がある場合は `gh issue view <issue番号>`
+4. 変更対象ファイル
+
+## 開発フロー
+
+Issue / PR 駆動開発を必ず守る。
+順序: Issue 確認 → ブランチ作成 → 実装前計画提示 → 実装 → 検証 → コミット前停止 → コミット → push → PR → merge → cleanup。
+
+### Issue 作成
+
+Issue は起票前にプランを提示してユーザーに確認してもらう。
+
+```bash
+./scripts/github/create-issue-with-labels.sh \
+  --title "短い要約" \
+  --body-file docs/issue-templates/feature_request.md \
+  --type type:feature \
+  --area area:app \
+  --risk risk:low \
+  --cost cost:none
+```
+
+### Issue 着手
+
+新しい Issue に着手する時は、最新の `main` から作業ブランチを切る。
+
+```bash
+git switch main
+git pull --ff-only origin main
+git switch -c <issue番号>-<kebab-case要約>
+```
+
+未コミット変更がある場合は、勝手に stash / reset しない。変更内容を確認し、ユーザーの意図に沿って進める。
+
+### PR 作成
+
+PR は作成前にプランを提示してユーザーに確認してもらう。
+
+`--body-file` には `.github/pull_request_template.md` をそのまま渡さず、テンプレートを埋めたコピーを別ファイルとして作成して渡す。
+
+```bash
+./scripts/github/create-pr-with-labels.sh \
+  --title "feat: 変更の要約" \
+  --body-file /path/to/filled-pr-body.md \
+  --issue <issue番号> \
+  --type type:feature \
+  --area area:app \
+  --risk risk:low \
+  --cost cost:none \
+  --base main
+```
+
+helper は PR を draft で作成する。PR 内容を確認したら `gh pr ready <PR番号>` で ready にする。
+
+### マージ後 cleanup
+
+```bash
+./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
+```
+
+## 設計判断の記録
+
+トレードオフを伴う設計判断は `docs/adr/` に ADR として記録する。
+書き方と運用ルールは `docs/adr/README.md` に従う。番号は ADR を追加する PR の時点で確定する。
+
+## コミットメッセージ
+
+`CONTRIBUTING.md` の Conventional Commits ルールに従う。
+`wip`、`fix` のみ、`update files` のような曖昧なメッセージを使わない。
+
+```bash
+npx commitlint --from origin/main --to HEAD --verbose
+```
+
+## ローカル検証
+
+CI と同じチェックをローカルで実行できる。
+
+```bash
+npm ci
+npm run lint:md      # Markdown lint
+npm run commitlint -- --from origin/main --to HEAD --verbose
+```
+
+## 禁止事項
+
+ユーザーから明示的に指示された場合でも、実行前に必ず確認する。
+
+- Azure リソースを作成・変更・削除する CLI 操作（az の書き込み系コマンド）
+- `terraform apply` / `terraform destroy` / `terraform state rm`
+- `git push --force` / `main` ブランチへの direct push
+- branch protection などリポジトリ設定の無断変更
+- GitHub Issue / PR の無断作成・無断編集
+- secret / credential 値の出力
+- `.env` ファイルのコミット
+
+## ユーザー確認が必要な操作
+
+| 操作 | 確認のタイミング |
+| --- | --- |
+| Issue 起票 | 本文・ラベル案とコマンドを提示してから |
+| 実装着手 | 変更対象・変更内容・影響範囲を提示してから |
+| コミット | コミット前サマリを提示して停止してから |
+| git push | コミット確認後に明示的な許可を得てから |
+| PR 作成 | タイトル・本文・ラベル・コマンド案を提示してから |
+| ブランチ削除 | cleanup コマンド案を提示してから |
+| リポジトリ設定変更 | 変更内容と戻し方を提示してから |
+
+## PR 必須ラベル（4種類）
+
+| ラベル | 要件 |
+| --- | --- |
+| `type:*` | ちょうど 1 つ |
+| `area:*` | 1 つ以上（複数可） |
+| `risk:*` | ちょうど 1 つ |
+| `cost:*` | ちょうど 1 つ |
+
+PR 本文には `Closes #<issue番号>` / `Fixes #<issue番号>` / `Refs #<issue番号>` のいずれかを必須で含める。
+
+## ラベル一覧
+
+`.github/labels.yml` が正本。
+
+| 種別 | 値 |
+| --- | --- |
+| type | `type:feature` / `type:bug` / `type:docs` / `type:infra` / `type:chore` / `type:refactor` / `type:test` |
+| area | `area:app` / `area:api` / `area:infra` / `area:ci-cd` / `area:docs` / `area:architecture` |
+| risk | `risk:low` / `risk:medium` / `risk:high` |
+| cost | `cost:none` / `cost:small` / `cost:medium` / `cost:large` |

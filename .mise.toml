@@ -1,0 +1,23 @@
+# ローカル開発ツールチェーンの正本。
+#
+# ここで宣言したバージョンと CI の pin が一致することは、
+# .github/workflows/toolchain-version-check.yml（idp-golden-path の reusable workflow）が
+# PR ごとに機械検査する。バージョンを変える場合は、必ず同じ PR で CI 側の pin も更新すること。
+#
+# 使い方:
+#   mise install    # 宣言したバージョンを取得する
+#   mise current    # 実効バージョンを確認する
+#
+# 実際にこのリポジトリで使うツールだけを宣言する。使っていないツールを
+# 「揃えるため」に宣言しない（idp-golden-path ADR-0014）。
+
+[tools]
+# CI の setup-node 既定（24）と揃える。
+node = "24.18.0"
+
+# このリポジトリに Terraform を導入する場合は次の行を有効にする。
+# kmryst 配下 3 リポジトリの標準バージョンは 1.14.8（idp-golden-path ADR-0014）。
+# Terraform の state は前方互換がなく、記録された terraform_version より古い CLI での
+# 操作を拒否するため、勝手に下げないこと。
+# 有効にしたら、Terraform を使う workflow の pin も同じ値に揃える。
+# terraform = "1.14.8"

@@ -1,0 +1,32 @@
+# Markdown Lint
+# 目的: ドキュメントの品質を required status check として担保する
+# 実体は kmryst/idp-golden-path の reusable workflow（タグ固定参照、idp-golden-path ADR-0008）。
+# チェックロジックの正本は idp-golden-path 側にあり、更新は Dependabot のタグバージョンアップ PR で取り込む
+# required status check の名称は `markdown-lint / Markdown Lint` になる
+# （caller job の名前は job id にフォールバックさせている。理由は下記 jobs 参照）
+
+name: Markdown Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # callee（idp-golden-path 側の reusable workflow）も同名パターンの concurrency group を
+  # 持つため、caller 側と同一名にすると GitHub Actions が「caller と callee 間のデッドロック」
+  # と判定し job を1つも起動せず run をキャンセルする（Issue #106）。
+  # `-caller` サフィックスで区別する。
+  group: markdown-lint-caller-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  # caller job には name を付けない。job id（markdown-lint）にフォールバックさせることで、
+  # callee側 job 名（Markdown Lint）との完全な文字列重複（`Markdown Lint / Markdown Lint`）を
+  # 避ける。重複した表示はコピペミスに見え可読性を損なう（Issue #106）。
+  markdown-lint:
+    uses: kmryst/idp-golden-path/.github/workflows/markdown-lint.yml@v1
+    permissions:
+      contents: read

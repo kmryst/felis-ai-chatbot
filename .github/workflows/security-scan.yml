@@ -1,0 +1,33 @@
+# Gitleaks Secret Scan
+# 目的: git 履歴への secret / credential 混入を required status check として検出する
+# 実体は kmryst/idp-golden-path の reusable workflow（タグ固定参照、idp-golden-path ADR-0008）。
+# チェックロジックの正本は idp-golden-path 側にあり、更新は Dependabot のタグバージョンアップ PR で取り込む
+# required status check の名称は `gitleaks / Gitleaks Secret Scan` になる
+# （caller job の名前は job id にフォールバックさせている。理由は下記 jobs 参照）
+
+name: Gitleaks Secret Scan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # callee（idp-golden-path 側の reusable workflow）も同名パターンの concurrency group を
+  # 持つため、caller 側と同一名にすると GitHub Actions が「caller と callee 間のデッドロック」
+  # と判定し job を1つも起動せず run をキャンセルする（Issue #106）。
+  # `-caller` サフィックスで区別する。
+  group: security-scan-caller-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  # caller job には name を付けない。job id（gitleaks）にフォールバックさせることで、
+  # callee側 job 名（Gitleaks Secret Scan）との完全な文字列重複
+  # （`Gitleaks Secret Scan / Gitleaks Secret Scan`）を避ける。
+  # 重複した表示はコピペミスに見え可読性を損なう（Issue #106）。
+  gitleaks:
+    uses: kmryst/idp-golden-path/.github/workflows/security-scan.yml@v1
+    permissions:
+      contents: read
