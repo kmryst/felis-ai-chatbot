@@ -19,7 +19,7 @@ pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenan
 | `scripts/github/` | Issue / PR 作成・ラベル同期・ブランチ cleanup の helper |
 | `docs/adr/` | Architecture Decision Record（0001 に生成経緯を記録済み） |
 | `docs/operations/branch-protection.md` | main ブランチ保護の適用手順（初期状態では未適用） |
-| `mkdocs.yml` + `catalog-info.yaml` | Backstage TechDocs / Software Catalog 対応 |
+| `docs/operations/bootstrap.md` | Day 0 bootstrap の手順と検証証跡（本リポジトリ立ち上げの正本） |
 
 ## 初期セットアップ（生成後にやること）
 
@@ -62,4 +62,7 @@ Issue / PR 駆動開発を基本とします。詳細は [CONTRIBUTING.md](./CON
 ## ドキュメント
 
 - 設計判断: [docs/adr/](./docs/adr/README.md)
-- このリポジトリの TechDocs は `mkdocs.yml` でビルドされ、Backstage 上で閲覧できます
+- Day 0 bootstrap 手順書: [docs/operations/bootstrap.md](./docs/operations/bootstrap.md)
+
+本リポジトリは skeleton の手動コピーで立ち上げたため、Backstage TechDocs / Software Catalog 用ファイル
+（`mkdocs.yml` / `catalog-info.yaml`）は含まれていません（[ADR-0001](./docs/adr/0001-bootstrap-by-manual-skeleton-copy.md)）。
