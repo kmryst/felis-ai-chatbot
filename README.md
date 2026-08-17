@@ -53,6 +53,21 @@ uv run uvicorn app.main:app --reload
 - ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
 - 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
 
+### 4. テストを実行する
+
+```bash
+# テスト用 DB（開発用 DB とは分離。テストはスキーマを作り直すため必須）
+docker exec felis-db psql -U felis -d postgres -c "CREATE DATABASE felis_test"
+
+cd backend
+TEST_DATABASE_URL=postgresql://felis:local-dev-only@localhost:5433/felis_test \
+  uv run pytest -v
+```
+
+- `TEST_DATABASE_URL` 未設定なら DB テストは skip される（それ以外は常に実行）
+- テストは実 LLM・外部 API を一切呼ばない（[ADR-0004](./docs/adr/0004-stub-llm-and-no-llm-in-ci.md)）。pgvector 類似検索は手書きの固定ベクトルで決定的に検証する
+- CI（`.github/workflows/backend-tests.yml`）は `services:` の pgvector コンテナで同じテストを実行する
+
 ## このリポジトリに含まれるもの
 
 | 資産 | 役割 |
