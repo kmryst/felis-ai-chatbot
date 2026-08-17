@@ -13,6 +13,25 @@ updates:
         patterns:
           - "*"
 
+  # backend（FastAPI）。uv は Dependabot GA サポート済み（2025-03-13 Changelog）
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      backend-prod:
+        dependency-type: "production"
+        patterns:
+          - "*"
+      backend-dev:
+        dependency-type: "development"
+        patterns:
+          - "*"
+
   - package-ecosystem: "npm"
     directory: "/"
     schedule:

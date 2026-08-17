@@ -4,7 +4,23 @@ pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenan
 
 このリポジトリは [idp-golden-path](https://github.com/kmryst/idp-golden-path) の
 ゴールデンパステンプレート **service-baseline** から生成されました。
-アプリケーションコードはまだ含まれていません。以下の運用基盤（ガードレール）が最初から有効です。
+以下の運用基盤（ガードレール）が最初から有効です。
+
+## ローカルでの動かし方
+
+### backend（FastAPI）
+
+```bash
+mise install          # .mise.toml どおりの python を取得
+cd backend
+uv sync               # 依存インストール（.venv 作成）
+uv run uvicorn app.main:app --reload
+```
+
+- `GET /health` — liveness（プロセス生存のみ。依存先は見ない）
+- `GET /readyz` — readiness（DB 到達性チェックは今後追加）
+- ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
+- 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
 
 ## このリポジトリに含まれるもの
 
