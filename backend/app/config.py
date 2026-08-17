@@ -21,6 +21,29 @@ class MissingEnvError(RuntimeError):
         self.names = names
 
 
+class InvalidEnvError(RuntimeError):
+    """環境変数の値が不正。どの変数が原因かを明示して起動時に fail する。"""
+
+    def __init__(self, name: str, value: str, reason: str) -> None:
+        # 値そのものは secret の可能性があるためメッセージに含めない
+        super().__init__(f"環境変数 {name} の値が不正です（{reason}）")
+        self.name = name
+
+
+def _int_env(name: str, default: int) -> int:
+    """整数の環境変数を読む。数値でない場合は変数名を明示して即 fail する。
+
+    黙って既定値へフォールバックしない（設定ミスが運用まで潜伏するため）。
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise InvalidEnvError(name, raw, "整数を指定してください") from exc
+
+
 def _require(name: str, missing: list[str]) -> str:
     value = os.environ.get(name)
     if value is None or value == "":
@@ -44,9 +67,7 @@ class Settings:
             app_name=os.environ.get("APP_NAME", "felis-ai-chatbot-backend"),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             database_url=_require("DATABASE_URL", missing),
-            db_connect_timeout_seconds=int(
-                os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "2")
-            ),
+            db_connect_timeout_seconds=_int_env("DB_CONNECT_TIMEOUT_SECONDS", 2),
         )
         if missing:
             raise MissingEnvError(missing)

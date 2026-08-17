@@ -27,7 +27,10 @@ async def check_database_ready(database_url: str, connect_timeout_seconds: int) 
         ) as conn:
             await conn.execute("SELECT 1")
         return True
-    except psycopg.Error as exc:
+    except Exception as exc:
+        # readiness probe は落とさない。DB ドライバ以外の例外（OSError 等）も
+        # ここで受けて 503 に変換する。asyncio.CancelledError は BaseException
+        # 系のためここでは捕捉されない（キャンセルは妨げない）
         logger.warning(
             "database readiness check failed",
             extra={"error_type": type(exc).__name__},
