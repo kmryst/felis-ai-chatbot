@@ -61,7 +61,8 @@ def upgrade() -> None:
             value_numeric DOUBLE PRECISION,
             value_text TEXT,
             unit TEXT,
-            source_id BIGINT NOT NULL REFERENCES sources(id),
+            -- 出所が参照されている限り sources の行は消せない（provenance 保護）
+            source_id BIGINT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
             note TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT object_properties_value_present
@@ -82,10 +83,15 @@ def upgrade() -> None:
             id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             content TEXT NOT NULL,
             embedding vector(1536),
-            source_id BIGINT NOT NULL REFERENCES sources(id),
+            -- 出所が参照されている限り sources の行は消せない（provenance 保護）
+            source_id BIGINT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """
+    )
+    # sources との JOIN / sources 削除時の参照チェック用
+    op.execute(
+        "CREATE INDEX documents_source_id_idx ON documents (source_id)"
     )
     # cosine 距離での近傍検索用。データ量が小さいうちから作っておいて害はない
     op.execute(
