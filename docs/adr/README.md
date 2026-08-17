@@ -40,3 +40,4 @@
 | [0001](./0001-bootstrap-by-manual-skeleton-copy.md) | Accepted | idp-golden-path の service-baseline skeleton を手動コピーしてリポジトリを立ち上げる |
 | [0002](./0002-alembic-for-schema-migrations.md) | Accepted | DB スキーマ管理に Alembic（raw SQL マイグレーション）を採用する |
 | [0003](./0003-provenance-schema-design.md) | Accepted | provenance を数値単位で保持する題材非依存スキーマ（プロパティ行テーブル + sources 正規化・vector(1536) 固定） |
+| [0004](./0004-stub-llm-and-no-llm-in-ci.md) | Accepted | LLM は故障注入可能なスタブで開発し、CI・テストから実 LLM を呼ばない |

@@ -44,6 +44,17 @@ def _int_env(name: str, default: int) -> int:
         raise InvalidEnvError(name, raw, "整数を指定してください") from exc
 
 
+def _float_env(name: str, default: float) -> float:
+    """小数の環境変数を読む。数値でない場合は変数名を明示して即 fail する。"""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise InvalidEnvError(name, raw, "数値を指定してください") from exc
+
+
 def _require(name: str, missing: list[str]) -> str:
     value = os.environ.get(name)
     if value is None or value == "":
@@ -59,6 +70,12 @@ class Settings:
     # DB 接続文字列。secret を含むため repr=False（ログ・エラー画面への漏出防止）
     database_url: str = field(repr=False)
     db_connect_timeout_seconds: int
+    # LLM（既定はスタブ。提供元確定後に 'azure-openai' / 'openai' を追加）
+    llm_provider: str
+    llm_timeout_seconds: float
+    llm_max_attempts: int
+    llm_retry_base_delay_seconds: float
+    llm_retry_max_delay_seconds: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +85,15 @@ class Settings:
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             database_url=_require("DATABASE_URL", missing),
             db_connect_timeout_seconds=_int_env("DB_CONNECT_TIMEOUT_SECONDS", 2),
+            llm_provider=os.environ.get("LLM_PROVIDER", "stub"),
+            llm_timeout_seconds=_float_env("LLM_TIMEOUT_SECONDS", 10.0),
+            llm_max_attempts=_int_env("LLM_MAX_ATTEMPTS", 3),
+            llm_retry_base_delay_seconds=_float_env(
+                "LLM_RETRY_BASE_DELAY_SECONDS", 0.5
+            ),
+            llm_retry_max_delay_seconds=_float_env(
+                "LLM_RETRY_MAX_DELAY_SECONDS", 8.0
+            ),
         )
         if missing:
             raise MissingEnvError(missing)

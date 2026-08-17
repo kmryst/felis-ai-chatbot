@@ -43,6 +43,13 @@ uv run uvicorn app.main:app --reload
 - `GET /health` — liveness（プロセス生存のみ。依存先は見ない。DB 停止中でも 200）
 - `GET /readyz` — readiness（DB へ `SELECT 1`。到達不能なら 503。接続 timeout は `DB_CONNECT_TIMEOUT_SECONDS`、既定 2 秒）
 - `DATABASE_URL` は必須。欠けていると起動時に即 fail する
+- `POST /chat` — チャット応答。LLM は既定でスタブ（[ADR-0004](./docs/adr/0004-stub-llm-and-no-llm-in-ci.md)。API キー不要・実 LLM は呼ばない）
+
+  ```bash
+  curl -s -X POST localhost:8000/chat -H 'Content-Type: application/json' \
+    -d '{"message": "こんにちは"}'
+  ```
+
 - ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
 - 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
 
