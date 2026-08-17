@@ -32,6 +32,25 @@ updates:
         patterns:
           - "*"
 
+  # frontend（Next.js）。実行時依存が拾われるよう prod / dev でグループを分ける
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      frontend-prod:
+        dependency-type: "production"
+        patterns:
+          - "*"
+      frontend-dev:
+        dependency-type: "development"
+        patterns:
+          - "*"
+
   - package-ecosystem: "npm"
     directory: "/"
     schedule:

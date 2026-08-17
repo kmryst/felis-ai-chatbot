@@ -53,7 +53,19 @@ uv run uvicorn app.main:app --reload
 - ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
 - 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
 
-### 4. テストを実行する
+### 4. frontend（Next.js）を起動する
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:3000
+```
+
+- チャット UI からのメッセージは backend の `POST /chat` に送られる（現在はスタブ応答）
+- backend の URL は `NEXT_PUBLIC_BACKEND_URL` で上書き可能（既定 `http://localhost:8000`）
+- backend 側の CORS 許可 origin は `CORS_ALLOWED_ORIGINS`（既定 `http://localhost:3000`）
+
+### 5. テストを実行する
 
 ```bash
 # テスト用 DB（開発用 DB とは分離。テストはスキーマを作り直すため必須）
