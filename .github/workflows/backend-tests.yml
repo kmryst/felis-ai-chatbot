@@ -1,0 +1,63 @@
+# Backend Tests
+# 目的: backend の pytest（pgvector 類似検索の決定的テスト・LLM 故障注入テストを含む）を
+# PR ごとに実行する。
+#
+# - 実 LLM・外部 API は一切呼ばない（ADR-0004）。LLM はスタブ、embedding は固定ベクトル
+# - PostgreSQL(pgvector) は services: のコンテナで起動する（docker-compose.yml と同じ
+#   pgvector/pgvector:pg17 を使い、ローカルと CI の DB を揃える）
+# - Python バージョンは backend/.python-version（= .mise.toml の python）を uv が解決する
+
+name: Backend Tests
+
+on:
+  pull_request:
+    branches: [main]
+    # backend に影響しない変更（docs 等）では走らせない
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: felis
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: felis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U felis -d felis_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # conftest が DATABASE_URL と TEST_DATABASE_URL の同一を拒否するため、
+      # DATABASE_URL はダミーのまま（app import 用）にし、テスト DB のみ実体を指す
+      TEST_DATABASE_URL: postgresql://felis:ci-only@localhost:5432/felis_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+
+      - name: Install dependencies (frozen)
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Run pytest
+        working-directory: backend
+        run: uv run pytest -v
