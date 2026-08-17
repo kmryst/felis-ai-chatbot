@@ -67,6 +67,17 @@ class RetryConfig:
     base_delay_seconds: float = 0.5
     max_delay_seconds: float = 8.0
 
+    def __post_init__(self) -> None:
+        # max_attempts < 1 だと1回も呼ばずに終わる設定になるため、組み立て時に弾く
+        if self.max_attempts < 1:
+            raise ValueError(
+                f"max_attempts は 1 以上を指定してください: {self.max_attempts}"
+            )
+        if self.timeout_seconds <= 0:
+            raise ValueError(
+                f"timeout_seconds は正の値を指定してください: {self.timeout_seconds}"
+            )
+
     def backoff_delay(self, attempt: int, rng: random.Random) -> float:
         """attempt（1 始まり）回目の失敗後に待つ秒数。
 
@@ -198,6 +209,9 @@ class LLMClient:
             )
             await asyncio.sleep(delay)
 
+        if last_error is None:
+            # RetryConfig が max_attempts >= 1 を保証するため通常到達しない防御
+            raise LLMError(f"{operation} が一度も実行されませんでした")
         logger.error(
             "llm call failed, retries exhausted",
             extra={
