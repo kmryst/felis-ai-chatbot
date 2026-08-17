@@ -16,6 +16,7 @@ const BACKEND_URL =
 const REQUEST_TIMEOUT_MS = 15_000;
 
 type Message = {
+  id: string;
   role: "user" | "assistant";
   content: string;
 };
@@ -34,7 +35,10 @@ export default function Chat() {
 
     setError(null);
     setSending(true);
-    setMessages((prev) => [...prev, { role: "user", content: message }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "user", content: message },
+    ]);
     setInput("");
 
     try {
@@ -50,7 +54,7 @@ export default function Chat() {
       const data: { reply: string } = await res.json();
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.reply },
+        { id: crypto.randomUUID(), role: "assistant", content: data.reply },
       ]);
     } catch (err) {
       const reason =
@@ -70,8 +74,8 @@ export default function Chat() {
         {messages.length === 0 && (
           <p className="chat-empty">メッセージを入力して送信してください</p>
         )}
-        {messages.map((m, i) => (
-          <div key={i} className={`chat-message chat-message-${m.role}`}>
+        {messages.map((m) => (
+          <div key={m.id} className={`chat-message chat-message-${m.role}`}>
             <span className="chat-role">
               {m.role === "user" ? "あなた" : "bot"}
             </span>
