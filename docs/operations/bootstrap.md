@@ -603,6 +603,23 @@ Day 4 の restore drill は「バックアップが溜まっていること」�
 
 ---
 
+## Dependabot 対象の追加ルール（Day 1 / Day 3）
+
+現状の `.github/dependabot.yml` は skeleton 由来の汎用設定で、`github-actions` (/) と `npm` (/) の2つしかカバーしていない。ルートの npm は commitlint / markdownlint 用であり `dependency-type: development` の1グループのみ。**このプロジェクトの構成にはまだ即していない。**
+
+**ルール: 依存マニフェストを追加する PR で、同じ PR に Dependabot の対象追加も入れる。**
+
+| 追加対象 | directory | いつ | 注意 |
+| --- | --- | --- | --- |
+| npm | `/frontend` | Day 1（Next.js 初期化） | ルートとは別エントリ。**実行時依存が拾われるよう prod / dev でグループを分ける** |
+| pip | `/backend` | Day 1（FastAPI 初期化） | uv を使う場合は ecosystem 名を確認する |
+| terraform | `/terraform/persistent`, `/terraform/ephemeral` | Day 3 | provider のバージョン更新用 |
+| docker | `/backend`, `/frontend` | Day 3（Dockerfile 作成時） | ベースイメージ更新用 |
+
+マニフェストが存在しないディレクトリを先に登録すると Dependabot がエラーになるため、**先回りして追加しない。**
+
+---
+
 ## Day 1 以降で参照する既存資産（読み取りのみ・場所のメモ）
 
 | 参照先 | 使う場面 |
