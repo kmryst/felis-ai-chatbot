@@ -15,6 +15,9 @@
 # CI の setup-node 既定（24）と揃える。
 node = "24.18.0"
 
+# backend（FastAPI）用。CI に python の pin を置く場合は同じ PR でこの値と揃えること。
+python = "3.13.14"
+
 # このリポジトリに Terraform を導入する場合は次の行を有効にする。
 # kmryst 配下 3 リポジトリの標準バージョンは 1.14.8（idp-golden-path ADR-0014）。
 # Terraform の state は前方互換がなく、記録された terraform_version より古い CLI での
