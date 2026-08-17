@@ -6,11 +6,13 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.db import check_database_ready
+from app.llm.client import LLMError, RetryConfig, create_llm_client
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
 
@@ -23,6 +25,16 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # LLM クライアントは境界モジュール（app.llm）でのみ組み立てる（ADR-0004）
+    app.state.llm = create_llm_client(
+        settings.llm_provider,
+        RetryConfig(
+            max_attempts=settings.llm_max_attempts,
+            timeout_seconds=settings.llm_timeout_seconds,
+            base_delay_seconds=settings.llm_retry_base_delay_seconds,
+            max_delay_seconds=settings.llm_retry_max_delay_seconds,
+        ),
+    )
     logger.info("startup complete")
     yield
     # graceful shutdown の枠。DB プールのクローズ等は PR 2（DB 接続）で載せる
@@ -57,3 +69,29 @@ async def readyz() -> JSONResponse:
             status_code=503, content={"status": "unavailable", "db": "unreachable"}
         )
     return JSONResponse(status_code=200, content={"status": "ok", "db": "ok"})
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest) -> ChatResponse:
+    """チャット応答（現在はスタブ LLM）。RAG 検索の接続は Day 2。"""
+    try:
+        reply = await app.state.llm.chat(
+            [{"role": "user", "content": req.message}]
+        )
+    except LLMError as exc:
+        # 詳細（プロンプト等）はログに出さない。分類だけ返す
+        logger.error(
+            "chat failed", extra={"error_type": type(exc).__name__}
+        )
+        raise HTTPException(
+            status_code=502, detail="LLM 呼び出しに失敗しました"
+        ) from exc
+    return ChatResponse(reply=reply)
