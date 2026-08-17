@@ -28,8 +28,8 @@
 | 3 | §6 | caller workflow 確認 / AWS 文言の Azure 化（4箇所） | 0.5h | [x] |
 | 4 | §7 | `.mise.toml` 確認（Day 0 は node のみ。python / terraform は後日） | 10min | [x] |
 | 5 | §8 | 初回 ADR 作成（skeleton の ADR-0001 を書き換え）+ **本書を `docs/operations/` へ移動** | 0.5h | [x] |
-| 6 | §9 | 初回 push → 初回 PR → **CI green 確認（4 check）** | 1h | [ ] |
-| 7 | §10 | **branch protection 適用（必ず CI green の後）** | 15min | [ ] |
+| 6 | §9 | 初回 push → 初回 PR → **CI green 確認（4 check）** | 1h | [x] |
+| 7 | §10 | **branch protection 適用（必ず CI green の後）** | 15min | [x] |
 
 ### フェーズB: LLM 疎通の確定（Day 1 の前提。これだけは先にやる）
 
