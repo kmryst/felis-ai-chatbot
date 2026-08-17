@@ -25,21 +25,25 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         token = request_id_var.set(request_id)
         start = time.perf_counter()
+        # 例外時（ハンドラ未捕捉エラー）もアクセスログを欠かさず残すため finally で記録する。
+        # その場合 response は生成されないため 500 として記録し、例外はそのまま伝播させる
+        status_code = 500
         try:
             response = await call_next(request)
+            status_code = response.status_code
         finally:
             request_id_var.reset(token)
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            access_logger.info(
+                "request completed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                    # contextvar は reset 済みのため明示的に渡す
+                    "request_id": request_id,
+                },
+            )
         response.headers["X-Request-ID"] = request_id
-        access_logger.info(
-            "request completed",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-                "duration_ms": duration_ms,
-                # contextvar は reset 済みのため明示的に渡す
-                "request_id": request_id,
-            },
-        )
         return response

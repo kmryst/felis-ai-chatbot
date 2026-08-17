@@ -27,9 +27,11 @@ class JsonFormatter(logging.Formatter):
         request_id = request_id_var.get()
         if request_id is not None:
             payload["request_id"] = request_id
-        # logger.info(..., extra={"duration_ms": 12.3}) のような追加フィールドを拾う
+        # logger.info(..., extra={"duration_ms": 12.3}) のような追加フィールドを拾う。
+        # secret 混入防止のため whitelist 方式（列挙外の extra はログに出さない）
+        allowed_extra_fields = {"duration_ms", "method", "path", "status_code", "request_id"}
         for key, value in record.__dict__.items():
-            if key in ("duration_ms", "method", "path", "status_code", "request_id"):
+            if key in allowed_extra_fields:
                 payload[key] = value
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
