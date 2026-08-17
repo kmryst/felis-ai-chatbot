@@ -5,6 +5,7 @@ description = "FastAPI backend for felis-ai-chatbot (pgvector RAG chatbot)"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
+    "psycopg[binary]>=3.2",
     "uvicorn[standard]>=0.32",
 ]
 

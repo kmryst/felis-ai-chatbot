@@ -8,17 +8,29 @@ pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenan
 
 ## ローカルでの動かし方
 
-### backend（FastAPI）
+### 1. PostgreSQL（pgvector）を起動する
+
+```bash
+cp .env.example .env   # 初回のみ（.env はコミット禁止）
+docker compose up -d   # pgvector 入り PostgreSQL 17
+docker compose ps      # STATUS が healthy になるまで待つ
+```
+
+停止は `docker compose down`（データ保持）、破棄は `docker compose down -v`。
+
+### 2. backend（FastAPI）を起動する
 
 ```bash
 mise install          # .mise.toml どおりの python を取得
 cd backend
 uv sync               # 依存インストール（.venv 作成）
+set -a && source ../.env && set +a   # DATABASE_URL 等を読み込む
 uv run uvicorn app.main:app --reload
 ```
 
-- `GET /health` — liveness（プロセス生存のみ。依存先は見ない）
-- `GET /readyz` — readiness（DB 到達性チェックは今後追加）
+- `GET /health` — liveness（プロセス生存のみ。依存先は見ない。DB 停止中でも 200）
+- `GET /readyz` — readiness（DB へ `SELECT 1`。到達不能なら 503。接続 timeout は `DB_CONNECT_TIMEOUT_SECONDS`、既定 2 秒）
+- `DATABASE_URL` は必須。欠けていると起動時に即 fail する
 - ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
 - 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
 
