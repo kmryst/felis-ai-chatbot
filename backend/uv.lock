@@ -114,8 +114,8 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.3" },
 ]
 
 [package.metadata.requires-dev]
