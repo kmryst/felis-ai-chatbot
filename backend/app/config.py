@@ -76,6 +76,8 @@ class Settings:
     llm_max_attempts: int
     llm_retry_base_delay_seconds: float
     llm_retry_max_delay_seconds: float
+    # CORS で許可する origin（カンマ区切り）。既定はローカルの frontend のみ
+    cors_allowed_origins: tuple[str, ...]
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -93,6 +95,13 @@ class Settings:
             ),
             llm_retry_max_delay_seconds=_float_env(
                 "LLM_RETRY_MAX_DELAY_SECONDS", 8.0
+            ),
+            cors_allowed_origins=tuple(
+                origin.strip()
+                for origin in os.environ.get(
+                    "CORS_ALLOWED_ORIGINS", "http://localhost:3000"
+                ).split(",")
+                if origin.strip()
             ),
         )
         if missing:
