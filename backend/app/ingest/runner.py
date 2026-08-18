@@ -9,8 +9,11 @@
 - object_properties: UNIQUE (object_id, property_name, source_id) で
   ON CONFLICT DO NOTHING
 - documents: UNIQUE 制約がないため、(source_id, content) の完全一致で
-  存在チェックしてから挿入する（チャンクは静的データなので完全一致で足りる。
-  この用途のために新しい制約・マイグレーションは追加しない）
+  存在チェックしてから挿入する（この用途のために新しい制約・マイグレーション
+  は追加しない）。さらに、シードに現れる source_id の documents は本スクリプト
+  が所有するとみなし、現行 DOCUMENTS にない旧チャンクを削除して同期する。
+  これにより、シード文面を改訂（誤記修正など）したとき、既存 DB に古い文面が
+  残り続けない。シードに現れない source_id の documents には触れない
 
 embedding は投入しない（NULL のまま。LLM プロバイダ未確定。ADR-0004）。
 """
@@ -27,9 +30,10 @@ logger = logging.getLogger("app.ingest")
 
 @dataclass
 class IngestSummary:
-    """テーブルごとの挿入件数と、実行後の総行数。"""
+    """テーブルごとの挿入件数・削除件数と、実行後の総行数。"""
 
     inserted: dict[str, int] = field(default_factory=dict)
+    deleted: dict[str, int] = field(default_factory=dict)
     total: dict[str, int] = field(default_factory=dict)
 
 
@@ -149,6 +153,24 @@ def _upsert_properties(
 def _upsert_documents(
     cur, summary: IngestSummary, source_ids: dict[str, int]
 ) -> None:
+    # シード文面の改訂（誤記修正など）が既存 DB に反映されるよう、シードに
+    # 現れる source_id の documents を現行 DOCUMENTS と同期する。
+    # 挿入だけだと旧文面の行が残り続ける（module docstring 参照）
+    contents_by_source_id: dict[int, list[str]] = {}
+    for doc in nasa_seed.DOCUMENTS:
+        contents_by_source_id.setdefault(
+            source_ids[doc["source"]], []
+        ).append(doc["content"])
+    deleted = 0
+    for source_id, contents in contents_by_source_id.items():
+        cur.execute(
+            "DELETE FROM documents"
+            " WHERE source_id = %s AND content != ALL(%s)",
+            (source_id, contents),
+        )
+        deleted += cur.rowcount
+    summary.deleted["documents"] = deleted
+
     inserted = 0
     for doc in nasa_seed.DOCUMENTS:
         cur.execute(
