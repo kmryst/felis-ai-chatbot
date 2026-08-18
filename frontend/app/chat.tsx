@@ -15,24 +15,10 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 const REQUEST_TIMEOUT_MS = 15_000;
 
-/**
- * LLM を通していない未加工の原文抜粋と、その出所（ADR-0006）。
- * 出典（URL / タイトル / 取得日 / クレジット）は AI 生成文には付けず、
- * この未加工引用にのみ付ける。RAG 本結線は次フェーズのため現状は常に空。
- */
-type Reference = {
-  excerpt: string;
-  url: string;
-  title: string;
-  retrieved_at: string;
-  credit: string;
-};
-
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  references?: Reference[];
 };
 
 export default function Chat() {
@@ -65,16 +51,10 @@ export default function Chat() {
       if (!res.ok) {
         throw new Error(`backend が ${res.status} を返しました`);
       }
-      const data: { reply: string; references?: Reference[] } =
-        await res.json();
+      const data: { reply: string } = await res.json();
       setMessages((prev) => [
         ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.reply,
-          references: data.references ?? [],
-        },
+        { id: crypto.randomUUID(), role: "assistant", content: data.reply },
       ]);
     } catch (err) {
       const reason =
@@ -100,33 +80,6 @@ export default function Chat() {
               {m.role === "user" ? "あなた" : "bot"}
             </span>
             <p>{m.content}</p>
-            {m.role === "assistant" &&
-              m.references &&
-              m.references.length > 0 && (
-                // 回答本文（AI 生成）と混ざらない折りたたみ枠。
-                // 中身は LLM を通していない未加工の原文抜粋であり、
-                // 出典表記はこの枠の中にのみ付ける（ADR-0006）
-                <details className="chat-references">
-                  <summary>参照した資料（未加工の抜粋）</summary>
-                  <ul>
-                    {m.references.map((ref) => (
-                      <li key={`${m.id}-${ref.url}-${ref.excerpt}`}>
-                        <blockquote>{ref.excerpt}</blockquote>
-                        <p className="chat-reference-meta">
-                          <a
-                            href={ref.url}
-                            target="_blank"
-                            rel="noreferrer noopener"
-                          >
-                            {ref.title}
-                          </a>
-                          （取得日: {ref.retrieved_at} / {ref.credit}）
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
           </div>
         ))}
       </div>
