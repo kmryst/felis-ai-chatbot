@@ -42,3 +42,4 @@
 | [0003](./0003-provenance-schema-design.md) | Accepted | provenance を数値単位で保持する題材非依存スキーマ（プロパティ行テーブル + sources 正規化・vector(1536) 固定） |
 | [0004](./0004-stub-llm-and-no-llm-in-ci.md) | Accepted | LLM は故障注入可能なスタブで開発し、CI・テストから実 LLM を呼ばない |
 | [0005](./0005-app-ci-in-repo-not-idp.md) | Accepted | アプリケーション層（build / test / lint）の CI は本リポジトリに置き、idp-golden-path へ共通化しない |
+| [0006](./0006-nasa-ai-terms-compliance.md) | Accepted | NASA AI 条項準拠 — 帰属の対象を AI 生成文から未加工の原文抜粋へ付け替える |
