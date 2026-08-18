@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.config import Settings
 from app.db import check_database_ready
 from app.llm.client import LLMError, RetryConfig, create_llm_client
+from app.llm.prompts import build_messages
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
 
@@ -83,17 +84,36 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class Reference(BaseModel):
+    """LLM を通していない未加工の原文抜粋と、その出所（ADR-0006）。
+
+    出典の帰属は AI 生成文（reply）には付けず、この未加工引用にのみ付ける。
+    NASA AI 条項は生成文の NASA への帰属を禁止しているが、LLM を通していない
+    原文の引用には「取り込み後の正確性を保証できない」という懸念が生じないため。
+    """
+
+    excerpt: str  # ページ上の記述の未加工抜粋（LLM で書き換えない）
+    url: str
+    title: str
+    retrieved_at: str  # 取得日（ISO 8601）
+    credit: str
+
+
 class ChatResponse(BaseModel):
     reply: str
+    # RAG 検索でヒットした原文抜粋。本結線は次フェーズのため現状は常に空。
+    # フロントエンドは reply と分離した「参照した資料」欄にのみ表示する
+    references: list[Reference] = []
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
-    """チャット応答（現在はスタブ LLM）。RAG 検索の接続は Day 2。"""
+    """チャット応答（現在はスタブ LLM）。RAG 検索の本結線は次フェーズ。
+
+    システムプロンプト（NASA への帰属表現の禁止。ADR-0006）を必ず適用する。
+    """
     try:
-        reply = await app.state.llm.chat(
-            [{"role": "user", "content": req.message}]
-        )
+        reply = await app.state.llm.chat(build_messages(req.message))
     except LLMError as exc:
         # 詳細（プロンプト等）はログに出さない。分類だけ返す
         logger.error(
