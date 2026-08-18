@@ -2,7 +2,7 @@
 
 ## ステータス
 
-Accepted
+Superseded（[ADR-0008](./0008-jma-attribution-and-weather-act-compliance.md) により置き換え）
 
 ## 日付
 
@@ -64,6 +64,7 @@ NASA Brand Center の "Artificial Intelligence (AI) Applications" 条項（<http
 
 ## 関連
 
+- [ADR-0008](./0008-jma-attribution-and-weather-act-compliance.md) — 題材の気象庁乗り換え（ADR-0007）に伴い本 ADR を置き換えた
 - Issue: #33
 - ADR-0003（provenance スキーマ設計）
 - ADR-0004（スタブ LLM）
