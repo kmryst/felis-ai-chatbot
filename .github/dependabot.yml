@@ -41,6 +41,11 @@ updates:
       time: "09:15"
       timezone: "Asia/Tokyo"
     open-pull-requests-limit: 5
+    # typescript-eslint が TS 7 未対応（eslint-config-next 経由で hard error）のため、
+    # typescript のメジャー更新のみ一時 ignore。解除条件と追跡は Issue #28
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       frontend-prod:
         dependency-type: "production"
