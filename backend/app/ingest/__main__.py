@@ -2,8 +2,9 @@
 
 実行（backend/ で）: uv run python -m app.ingest
 
-DATABASE_URL の DB へ、NASA 出典のシードデータ（nasa_seed.py）を冪等に投入する。
-再実行しても行数は増えない。embedding は投入しない（NULL のまま。ADR-0004）。
+DATABASE_URL の DB へ、気象庁出典のシードデータ（jma_seed.py）を冪等に投入し、
+シードに現れない行（旧題材のデータ等）を削除して同期する。再実行しても行数は
+増えない。embedding は投入しない（NULL のまま。ADR-0004）。
 """
 
 import os
