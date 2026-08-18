@@ -8,15 +8,25 @@ export default function Home() {
         pgvector RAG チャットボット（Day 1: LLM はスタブ。RAG 接続は Day 2）
       </p>
       <Chat />
-      {/* ツール全体としての AI 生成表示・免責（常設）。NASA AI 条項が明示的に
-          許可しているのは「ツールが NASA 素材を含む」という事実の開示であり、
-          回答ごとの出典帰属ではない（ADR-0006） */}
+      {/* 出典表示（気象庁の出典記載例に準拠）・加工表記・AI 生成表示・
+          予報/警報を提供しない旨の常設フッター（ADR-0008）。
+          文言の削除・簡略化は ADR-0008 の再検討を要する */}
       <footer className="disclosure">
         <p>
-          本ツールは NASA の公開情報を素材として利用しています。回答は AI
-          が生成したものであり、NASA
-          による審査・許可・公認を受けたものではありません。NASA
-          の見解ではありません。
+          出典：気象庁ホームページ（
+          <a
+            href="https://github.com/kmryst/felis-ai-chatbot/blob/main/docs/data-sources.md"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            利用ページの一覧
+          </a>
+          ）
+        </p>
+        <p>
+          本サービスは気象庁ホームページの情報を felis-ai-chatbot
+          が加工して作成したものであり、気象庁が作成・提供するものではありません。回答は
+          AI が生成したものであり、独自の予報・警報の提供は行いません。
         </p>
       </footer>
     </main>

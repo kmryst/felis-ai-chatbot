@@ -131,7 +131,7 @@ body {
   cursor: not-allowed;
 }
 
-/* ツール全体としての AI 生成表示・免責（常設。ADR-0006） */
+/* 出典表示・加工表記・AI 生成表示・免責の常設フッター（ADR-0008） */
 .disclosure {
   margin-top: 1rem;
   padding-top: 0.75rem;
@@ -140,37 +140,3 @@ body {
   color: var(--muted);
 }
 
-/* 参照した資料（未加工の原文抜粋）。回答本文と視覚的に分離する（ADR-0006） */
-.chat-references {
-  margin-top: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px dashed var(--border);
-  border-radius: 0.5rem;
-  font-size: 0.8125rem;
-}
-
-.chat-references summary {
-  cursor: pointer;
-  color: var(--muted);
-}
-
-.chat-references ul {
-  list-style: none;
-  padding: 0;
-  margin: 0.5rem 0 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.chat-references blockquote {
-  margin: 0;
-  padding-left: 0.75rem;
-  border-left: 3px solid var(--border);
-  color: var(--fg);
-}
-
-.chat-reference-meta {
-  margin: 0.25rem 0 0;
-  color: var(--muted);
-}
