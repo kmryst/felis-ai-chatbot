@@ -42,4 +42,6 @@
 | [0003](./0003-provenance-schema-design.md) | Accepted | provenance を数値単位で保持する題材非依存スキーマ（プロパティ行テーブル + sources 正規化・vector(1536) 固定） |
 | [0004](./0004-stub-llm-and-no-llm-in-ci.md) | Accepted | LLM は故障注入可能なスタブで開発し、CI・テストから実 LLM を呼ばない |
 | [0005](./0005-app-ci-in-repo-not-idp.md) | Accepted | アプリケーション層（build / test / lint）の CI は本リポジトリに置き、idp-golden-path へ共通化しない |
-| [0006](./0006-nasa-ai-terms-compliance.md) | Accepted | NASA AI 条項準拠 — 帰属の対象を AI 生成文から未加工の原文抜粋へ付け替える |
+| [0006](./0006-nasa-ai-terms-compliance.md) | Superseded | NASA AI 条項準拠 — 帰属の対象を AI 生成文から未加工の原文抜粋へ付け替える（ADR-0008 により置き換え） |
+| [0007](./0007-jma-as-content-source.md) | Accepted | 題材の出典を気象庁ホームページ（気象・防災）に選定する |
+| [0008](./0008-jma-attribution-and-weather-act-compliance.md) | Accepted | 気象庁の出典表示（記載例準拠）と気象業務法（17条・23条）への設計対応 |

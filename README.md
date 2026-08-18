@@ -136,6 +136,7 @@ Issue / PR 駆動開発を基本とします。詳細は [CONTRIBUTING.md](./CON
 ## ドキュメント
 
 - 設計判断: [docs/adr/](./docs/adr/README.md)
+- 利用データソース一覧（気象庁ホームページ）: [docs/data-sources.md](./docs/data-sources.md)
 - Day 0 bootstrap 手順書: [docs/operations/bootstrap.md](./docs/operations/bootstrap.md)
 
 本リポジトリは skeleton の手動コピーで立ち上げたため、Backstage TechDocs / Software Catalog 用ファイル
