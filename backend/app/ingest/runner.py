@@ -73,7 +73,12 @@ def _upsert_sources(cur, summary: IngestSummary) -> dict[str, int]:
                 " WHERE source_url = %s AND retrieved_at = %s",
                 (src["source_url"], src["retrieved_at"]),
             )
-            ids[key] = cur.fetchone()[0]
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError(
+                    f"conflict したのに sources 行が見つかりません: {key}"
+                )
+            ids[key] = row[0]
     summary.inserted["sources"] = inserted
     return ids
 
@@ -99,7 +104,12 @@ def _upsert_objects(cur, summary: IngestSummary) -> dict[str, int]:
             cur.execute(
                 "SELECT id FROM objects WHERE name = %s", (obj["name"],)
             )
-            ids[obj["name"]] = cur.fetchone()[0]
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError(
+                    f"conflict したのに objects 行が見つかりません: {obj['name']}"
+                )
+            ids[obj["name"]] = row[0]
     summary.inserted["objects"] = inserted
     return ids
 
