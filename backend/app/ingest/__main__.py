@@ -33,8 +33,10 @@ def main() -> int:
         return 1
     print("ingest 完了（冪等。再実行しても行数は増えません）")
     for table in ("sources", "objects", "object_properties", "documents"):
+        deleted = summary.deleted.get(table, 0)
+        deleted_note = f" -{deleted} stale deleted" if deleted else ""
         print(
-            f"  {table}: +{summary.inserted[table]} inserted"
+            f"  {table}: +{summary.inserted[table]} inserted{deleted_note}"
             f" (total {summary.total[table]})"
         )
     return 0

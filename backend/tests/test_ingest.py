@@ -66,6 +66,9 @@ def test_ingest_is_idempotent(db_conn):
     # 2 回目は 1 行も挿入されず、総行数は変わらない
     assert all(count == 0 for count in second.inserted.values()), second.inserted
     assert second.total == first.total
+    # シード文面が変わっていなければ削除も発生しない
+    assert first.deleted["documents"] == 0
+    assert second.deleted["documents"] == 0
 
 
 @pytest.mark.db
@@ -99,3 +102,53 @@ def test_same_property_can_hold_multiple_sources(db_conn):
             """
         )
         assert cur.fetchone()[0] == 2
+
+
+def test_quasar_chunk_has_no_star_count_exaggeration():
+    """既知の誇張の回帰テスト（Issue #37）。
+
+    出典ページの記述は "an entire galaxy containing a hundred billion stars"
+    （= 1,000 億）。過去に「数千億」と数倍に誇張された文面が混入したため、
+    再混入を防ぐ。日本語要約と原文の整合を機械的に全文検証することはできない
+    ので、これは既知の誤りに対するピンポイントの回帰ガードにとどめる。
+    """
+    quasar_chunks = [
+        doc["content"]
+        for doc in nasa_seed.DOCUMENTS
+        if doc["source"] == "science-hubble-quasars"
+    ]
+    assert quasar_chunks, "クエーサーのチャンクが存在しない"
+    for content in quasar_chunks:
+        assert "数千億" not in content
+    assert any("1,000 億の星" in content for content in quasar_chunks)
+
+
+@pytest.mark.db
+def test_document_revision_replaces_stale_chunk(db_conn, monkeypatch):
+    """シード文面を改訂して再実行すると、旧チャンクが消え新チャンクに置き換わる。
+
+    挿入だけの実装だと、文面修正後も既存 DB に誤った旧文面が残り続ける
+    （Issue #37 で顕在化した経路）。
+    """
+    run_ingest(db_conn)
+
+    revised = [dict(doc) for doc in nasa_seed.DOCUMENTS]
+    old_content = revised[-1]["content"]
+    new_content = old_content + "（改訂版）"
+    revised[-1] = {**revised[-1], "content": new_content}
+    monkeypatch.setattr(nasa_seed, "DOCUMENTS", revised)
+
+    result = run_ingest(db_conn)
+
+    assert result.inserted["documents"] == 1
+    assert result.deleted["documents"] == 1
+    assert result.total["documents"] == len(revised)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM documents WHERE content = %s", (old_content,)
+        )
+        assert cur.fetchone()[0] == 0, "旧チャンクが DB に残っている"
+        cur.execute(
+            "SELECT count(*) FROM documents WHERE content = %s", (new_content,)
+        )
+        assert cur.fetchone()[0] == 1
