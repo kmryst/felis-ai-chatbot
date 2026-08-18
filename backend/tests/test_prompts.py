@@ -1,51 +1,64 @@
-"""システムプロンプト（NASA AI 条項準拠。ADR-0006）のテスト。
+"""システムプロンプト（気象業務法対応。ADR-0008）のテスト。
 
-NASA Brand Center の AI 条項は情報の NASA への帰属を禁止している。
-システムプロンプトがその禁止を LLM に指示していることを検証する。
+気象業務法は予報業務を許可制とし（第17条第1項）、警報の発表を気象庁以外に
+禁止している（第23条）。システムプロンプトが予報・警報に当たる出力の生成を
+禁止し、固定の案内文で断るよう LLM に指示していることを検証する。
 """
 
 from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.llm.prompts import (
-    FORBIDDEN_ATTRIBUTION_PHRASES,
+    FORBIDDEN_OUTPUT_KINDS,
+    REFUSAL_NOTICE,
     SYSTEM_PROMPT,
     build_messages,
 )
 
 
-def test_system_prompt_forbids_attribution_phrases():
-    """帰属表現（「NASA によると」等）が禁止事項として明示されている。"""
+def test_system_prompt_forbids_forecast_and_warning_outputs():
+    """予報・警報・独自の危険度判定が禁止事項として明示されている。"""
     assert "禁止" in SYSTEM_PROMPT
-    for phrase in FORBIDDEN_ATTRIBUTION_PHRASES:
-        assert phrase in SYSTEM_PROMPT, f"禁止対象 {phrase!r} がプロンプトにない"
-    # 代替の言い方（資料参照の形）へ誘導している
-    assert "参照資料には" in SYSTEM_PROMPT
+    for kind in FORBIDDEN_OUTPUT_KINDS:
+        assert kind in SYSTEM_PROMPT, f"禁止対象 {kind!r} がプロンプトにない"
+    # 禁止の根拠となる法令が明示されている
+    assert "気象業務法" in SYSTEM_PROMPT
+    assert "第17条" in SYSTEM_PROMPT
+    assert "第23条" in SYSTEM_PROMPT
 
 
-def test_system_prompt_forbids_implying_nasa_endorsement():
-    """NASA による審査・許可・公認を示唆する表現の禁止が明示されている。"""
-    for word in ("審査", "許可", "公認"):
-        assert word in SYSTEM_PROMPT
+def test_system_prompt_contains_refusal_notice():
+    """予報を求められたときの固定の案内文（拒否文言）が指示されている。"""
+    assert REFUSAL_NOTICE in SYSTEM_PROMPT
+    # 案内文は気象庁ホームページへ誘導し、断る内容であること
+    assert "予報・警報を提供しません" in REFUSAL_NOTICE
+    assert "気象庁ホームページ" in REFUSAL_NOTICE
+
+
+def test_system_prompt_allows_past_records_and_explanations():
+    """過去の記録・一般的な解説は回答してよいことが明示されている。"""
+    assert "過去の記録" in SYSTEM_PROMPT
+    assert "解説" in SYSTEM_PROMPT
 
 
 def test_build_messages_puts_system_prompt_first():
-    messages = build_messages("ブラックホールについて教えて")
+    messages = build_messages("台風について教えて")
     assert messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
     assert messages[-1] == {
         "role": "user",
-        "content": "ブラックホールについて教えて",
+        "content": "台風について教えて",
     }
 
 
-def test_chat_response_has_references_field():
-    """/chat は references（未加工の原文抜粋の器）を返す。
+def test_chat_response_has_no_references_field():
+    """/chat は references を返さない（回答ごとの出典表示は行わない。ADR-0008）。
 
-    RAG 本結線は次フェーズのため現状は空リスト。出典の帰属は AI 生成文
-    （reply）ではなくこのフィールドの未加工引用にのみ付ける（ADR-0006）。
+    出典表示はツール全体としてフロントエンドのフッターで常設表示し、
+    個別ページ URL へは docs/data-sources.md で辿れるようにする。
     """
     with TestClient(main_module.app) as client:
         res = client.post("/chat", json={"message": "こんにちは"})
     assert res.status_code == 200
     body = res.json()
-    assert body["references"] == []
+    assert "references" not in body
+    assert set(body.keys()) == {"reply"}
