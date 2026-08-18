@@ -84,33 +84,19 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-class Reference(BaseModel):
-    """LLM を通していない未加工の原文抜粋と、その出所（ADR-0006）。
-
-    出典の帰属は AI 生成文（reply）には付けず、この未加工引用にのみ付ける。
-    NASA AI 条項は生成文の NASA への帰属を禁止しているが、LLM を通していない
-    原文の引用には「取り込み後の正確性を保証できない」という懸念が生じないため。
-    """
-
-    excerpt: str  # ページ上の記述の未加工抜粋（LLM で書き換えない）
-    url: str
-    title: str
-    retrieved_at: str  # 取得日（ISO 8601）
-    credit: str
-
-
 class ChatResponse(BaseModel):
+    # 回答ごとの出典表示（references）は行わない（ADR-0008）。出典はツール
+    # 全体としてフロントエンドのフッターで常設表示し、個別ページ URL へは
+    # docs/data-sources.md で辿れるようにする
     reply: str
-    # RAG 検索でヒットした原文抜粋。本結線は次フェーズのため現状は常に空。
-    # フロントエンドは reply と分離した「参照した資料」欄にのみ表示する
-    references: list[Reference] = []
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
     """チャット応答（現在はスタブ LLM）。RAG 検索の本結線は次フェーズ。
 
-    システムプロンプト（NASA への帰属表現の禁止。ADR-0006）を必ず適用する。
+    システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
+    必ず適用する。
     """
     try:
         reply = await app.state.llm.chat(build_messages(req.message))
