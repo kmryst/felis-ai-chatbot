@@ -19,9 +19,10 @@ from app.llm.client import (
     RetryConfig,
     create_llm_client,
 )
-from app.llm.prompts import build_messages
+from app.llm.prompts import NO_CONTEXT_NOTICE, build_context, build_messages
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
+from app.rag import fetch_property_records, search_similar_documents
 
 logger = logging.getLogger("app")
 
@@ -112,13 +113,72 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
-    """チャット応答（現在はスタブ LLM）。RAG 検索の本結線は次フェーズ。
+    """RAG つきチャット応答（ADR-0010）。
 
-    システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
-    必ず適用する。
+    - ユーザー質問を embedding し、documents を cosine 類似度で検索する
+    - ハルシネーション・ガード: 検索結果が 0 件、または最上位の類似度が
+      閾値未満なら、LLM を呼ばずに固定文言（NO_CONTEXT_NOTICE）を返す。
+      参照資料が空のとき LLM が事前知識で誤答する事象を実測しており、
+      プロンプト指示ではなくコードで担保する
+    - システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
+      必ず適用する
     """
     try:
-        reply = await app.state.llm.chat(build_messages(req.message))
+        query_embedding = await app.state.llm.embed(req.message)
+    except LLMError as exc:
+        logger.error(
+            "chat embed failed", extra={"error_type": type(exc).__name__}
+        )
+        raise HTTPException(
+            status_code=502, detail="LLM 呼び出しに失敗しました"
+        ) from exc
+
+    try:
+        chunks = await search_similar_documents(
+            settings.database_url,
+            query_embedding,
+            settings.rag_top_k,
+            settings.db_connect_timeout_seconds,
+        )
+    except Exception as exc:
+        # DSN（secret）を含み得るため例外本文は出さずクラス名のみログへ
+        logger.error(
+            "rag search failed", extra={"error_type": type(exc).__name__}
+        )
+        raise HTTPException(
+            status_code=503, detail="検索に失敗しました"
+        ) from exc
+
+    top_similarity = chunks[0].similarity if chunks else None
+    if not chunks or top_similarity < settings.rag_similarity_threshold:
+        # ガード発動: LLM は呼ばない（ADR-0010）
+        logger.info(
+            "rag guard rejected",
+            extra={
+                "top_similarity": top_similarity,
+                "threshold": settings.rag_similarity_threshold,
+            },
+        )
+        return ChatResponse(reply=NO_CONTEXT_NOTICE)
+
+    try:
+        property_records = await fetch_property_records(
+            settings.database_url, settings.db_connect_timeout_seconds
+        )
+    except Exception as exc:
+        logger.error(
+            "rag properties fetch failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="検索に失敗しました"
+        ) from exc
+
+    context = build_context(
+        [chunk.content for chunk in chunks], property_records
+    )
+    try:
+        reply = await app.state.llm.chat(build_messages(req.message, context))
     except LLMError as exc:
         # 詳細（プロンプト等）はログに出さない。分類だけ返す
         logger.error(

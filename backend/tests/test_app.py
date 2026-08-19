@@ -7,6 +7,19 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.config import InvalidEnvError, MissingEnvError, Settings
+from app.llm.prompts import NO_CONTEXT_NOTICE
+from app.rag import ScoredChunk
+
+
+def _fake_search(chunks):
+    async def fake(database_url, query_embedding, top_k, timeout):
+        return chunks
+
+    return fake
+
+
+async def _fake_properties(database_url, timeout):
+    return ["気温 / record_highest_temperature: 41.8 celsius（根拠原文: …伊勢崎…）"]
 
 
 @pytest.fixture()
@@ -43,13 +56,79 @@ def test_request_id_is_honored_and_generated(client):
     assert res2.headers["x-request-id"] != "req-abc-123"
 
 
-def test_chat_returns_stub_reply(client):
-    """/chat はスタブ LLM の決定的応答を返す（実 LLM は呼ばない）。"""
-    res = client.post("/chat", json={"message": "こんにちは"})
+def test_chat_returns_stub_reply_when_search_hits(client, monkeypatch):
+    """検索ヒット時はスタブ LLM の決定的応答を返す（実 LLM は呼ばない）。"""
+    monkeypatch.setattr(
+        main_module,
+        "search_similar_documents",
+        _fake_search([ScoredChunk(content="台風とは…", similarity=0.9)]),
+    )
+    monkeypatch.setattr(main_module, "fetch_property_records", _fake_properties)
+    res = client.post("/chat", json={"message": "台風について教えて"})
     assert res.status_code == 200
     body = res.json()
     assert body["reply"].startswith("[stub]")
-    assert "こんにちは" in body["reply"]
+    assert "台風について教えて" in body["reply"]
+
+
+def test_chat_passes_context_to_llm_when_search_hits(client, monkeypatch):
+    """検索ヒット時、チャンクと数値記録がコンテキストとして LLM に渡る。"""
+    monkeypatch.setattr(
+        main_module,
+        "search_similar_documents",
+        _fake_search([ScoredChunk(content="台風とは…", similarity=0.9)]),
+    )
+    monkeypatch.setattr(main_module, "fetch_property_records", _fake_properties)
+    captured: list[list[dict[str, str]]] = []
+    original_chat = main_module.app.state.llm.chat
+
+    async def spy_chat(messages):
+        captured.append(messages)
+        return await original_chat(messages)
+
+    monkeypatch.setattr(main_module.app.state.llm, "chat", spy_chat)
+    res = client.post("/chat", json={"message": "台風について教えて"})
+    assert res.status_code == 200
+    assert len(captured) == 1
+    context_text = "\n".join(m["content"] for m in captured[0])
+    assert "台風とは…" in context_text
+    assert "41.8" in context_text
+
+
+def test_chat_guard_zero_hits_does_not_call_llm(client, monkeypatch):
+    """検索 0 件なら LLM を呼ばずに固定文言を返す（ADR-0010 の本丸）。
+
+    LLM の chat が呼ばれたら即 fail する差し替えで「呼ばれないこと」を担保する。
+    """
+    monkeypatch.setattr(
+        main_module, "search_similar_documents", _fake_search([])
+    )
+
+    async def must_not_be_called(messages):
+        raise AssertionError("ガードが素通りして LLM chat が呼ばれた")
+
+    monkeypatch.setattr(main_module.app.state.llm, "chat", must_not_be_called)
+    res = client.post("/chat", json={"message": "おすすめのラーメン屋は？"})
+    assert res.status_code == 200
+    assert res.json()["reply"] == NO_CONTEXT_NOTICE
+
+
+def test_chat_guard_below_threshold_does_not_call_llm(client, monkeypatch):
+    """最上位の類似度が閾値未満でも LLM を呼ばずに固定文言を返す。"""
+    below = main_module.settings.rag_similarity_threshold - 0.01
+    monkeypatch.setattr(
+        main_module,
+        "search_similar_documents",
+        _fake_search([ScoredChunk(content="無関係なチャンク", similarity=below)]),
+    )
+
+    async def must_not_be_called(messages):
+        raise AssertionError("ガードが素通りして LLM chat が呼ばれた")
+
+    monkeypatch.setattr(main_module.app.state.llm, "chat", must_not_be_called)
+    res = client.post("/chat", json={"message": "おすすめのラーメン屋は？"})
+    assert res.status_code == 200
+    assert res.json()["reply"] == NO_CONTEXT_NOTICE
 
 
 def test_chat_rejects_empty_message(client):
