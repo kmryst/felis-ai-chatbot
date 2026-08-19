@@ -18,6 +18,11 @@ from app.llm.prompts import (
 
 def test_system_prompt_forbids_forecast_and_warning_outputs():
     """予報・警報・独自の危険度判定が禁止事項として明示されている。"""
+    # FORBIDDEN_OUTPUT_KINDS が空になると下のループが空回りして素通りし、
+    # 気象業務法対応の形骸化を検出できないため、まず非空を保証する
+    # （予報・警報・独自の危険度判定の 3 種類が最低ライン）
+    assert len(FORBIDDEN_OUTPUT_KINDS) >= 3, "禁止事項の定数が減っている"
+    assert all(kind for kind in FORBIDDEN_OUTPUT_KINDS), "空文字の禁止事項がある"
     assert "禁止" in SYSTEM_PROMPT
     for kind in FORBIDDEN_OUTPUT_KINDS:
         assert kind in SYSTEM_PROMPT, f"禁止対象 {kind!r} がプロンプトにない"
