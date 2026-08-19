@@ -23,6 +23,10 @@ def test_seed_properties_reference_known_objects_and_sources():
 
 def test_seed_properties_have_value_and_verbatim_note():
     """全プロパティが値を持ち、note に根拠原文（引用符付き）が残っている。"""
+    # PROPERTIES が空になるとループが空回りして provenance 検証（ADR-0003）が
+    # 素通りするため、非空を保証する。DOCUMENTS / SOURCES / OBJECTS の空は
+    # 逐語表現テストと相互参照テストの連鎖で検出できるため、ここが唯一の穴
+    assert len(jma_seed.PROPERTIES) > 0, "シードのプロパティが空になっている"
     for prop in jma_seed.PROPERTIES:
         has_value = (
             prop.get("value_numeric") is not None
