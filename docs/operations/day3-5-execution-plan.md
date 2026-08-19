@@ -77,7 +77,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | 8 | 停止サーバーの自動再起動 | 停止後 **7 日で自動的に起動する** | [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits)（Stop/start operations） |
 | 9 | 階層変更（Burstable→GP） | 可能（"Scale the compute tier up or down between Burstable, General Purpose, and Memory Optimized"）。**再起動を伴う**。near-zero downtime scaling（10〜30 秒）は存在するが、**Burstable の 1〜2 vCore が絡むスケーリングは対象外**（"Near-zero doesn't work if you scale the compute of your server from or to a compute size of 1 or 2 vCores of the Burstable tier"）。通常スケーリングは 2〜10 分（"this process takes anywhere from 2 to 10 minutes with regular scaling"）→ B1ms からの変更は通常経路。**実ダウンタイムは Day 5 で実測** | [Scaling resources](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-scaling-resources) |
 | 10 | HA の階層要件 | **Burstable は HA 非対応**。ゾーン冗長 / 同一ゾーンとも General Purpose か Memory Optimized が必要 | [Reliability in Azure Database for PostgreSQL](https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql) / [Configure high availability](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) |
-| 11 | **既存サーバーへの後からの HA 有効化** | **可能**（"You can enable high availability on an existing Azure Database for PostgreSQL flexible server at any time"）。有効化・無効化は**オンライン操作**（"Enabling or disabling high availability is an online operation. This operation doesn't affect your application connectivity and operations"）。CLI: `az postgres flexible-server update --high-availability ZoneRedundant` | [Configure high availability](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) |
+| 11 | **既存サーバーへの後からの HA 有効化** | **可能**（"You can enable high availability on an existing Azure Database for PostgreSQL flexible server at any time"）。有効化・無効化は**オンライン操作**（"Enabling or disabling high availability is an online operation. This operation doesn't affect your application connectivity and operations"）。CLI 引数は No.25（現環境での実測）に従う | [Configure high availability](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) |
 | 12 | HA と計画メンテナンス | HA 有効時、メンテナンスは **standby に先に適用 → standby を昇格 → 旧 primary に適用**のローリング方式（"minor version upgrades happen on the standby replica first. To reduce downtime, the standby is promoted to primary"）。非 HA サーバーは「メンテナンス中に短時間のダウンタイム」 | [Reliability in Azure Database for PostgreSQL](https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql)（Resilience to service maintenance） |
 | 13 | ゾーン障害時（≒強制）フェイルオーバー時間 | ゾーン冗長 HA のフェイルオーバーは通常 **60〜120 秒**（"Failover typically completes within 60-120 seconds"）。計画フェイルオーバーは「最小のダウンタイム」とのみ記載で数値なし → **Day 5 で実測** | [Reliability in Azure Database for PostgreSQL](https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql) |
 | 14 | フェイルオーバーのテスト方法 | 強制: `az postgres flexible-server restart --failover Forced` / 計画: `--failover Planned`。**連続実行は不可で 15〜20 分空ける**（"Wait for at least 15 to 20 minutes between failovers"）。「Portal 表示の所要時間より実ダウンタイムは短いことがあり、アプリ視点で測れ」と明記（"You should measure the downtime from the application's perspective"） | [Configure high availability](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) |
@@ -91,6 +91,10 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | 22 | B1ms の接続数上限 | max 50 / ユーザー接続 35（15 は予約） | [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) |
 | 23 | Burstable の監視推奨 | **CPU Credits Remaining** を監視し低クレジットでアラートせよと明記。クレジット枯渇時は baseline に制限され深刻な性能劣化 | [Compute options](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-compute) |
 | 24 | japaneast の HA / geo バックアップ対応 | `ZoneRedundantHa: Enabled` / `geoBackupSupported: Enabled`（Day 0 に `az postgres flexible-server list-skus -l japaneast` で実測済み） | CLI 実測（bootstrap 時） |
+| 25 | **HA 有効化 / 無効化の CLI 引数（現環境実測）** | az CLI **2.89.1** の `az postgres flexible-server update --help` / `create --help` を実測した結果、`--high-availability` は**存在しない**（grep 0 件）。現行引数は `--zonal-resiliency`（"Enable or disable high availability feature. Allowed values: Disabled, Enabled"）+ `--standby-zone` / `--allow-same-zone`。`--high-availability` は CLI 2.87.0 で削除済み。公式 How-to ページは新旧引数が混在しており（`--high-availability` / `--zonal-resiliency` / `--zone-resiliency` の 3 表記）、本書は実測で受理を確認した `--zonal-resiliency` のみを使う。`restart --failover Forced / Planned`（No.14）は 2.89.1 に存在することを同時に確認済み | CLI 実測（2026-08-19、az 2.89.1 の `--help`） / [Azure CLI release notes](https://learn.microsoft.com/en-us/azure/postgresql/release-notes/release-notes-cli) |
+| 26 | public access の既定接続可否 | firewall rule を作成するまで**すべての接続が拒否**される（"By default, the firewall blocks all access to the server"）。許可はサーバーレベル firewall rule に発信元 IP 範囲を登録する方式。**反映まで最大 5 分**（"Changes to the firewall configuration ... can take up to five minutes"） | [Firewall rules](https://learn.microsoft.com/en-us/azure/postgresql/security/security-firewall-rules) |
+| 27 | 拡張機能の事前許可 | `CREATE EXTENSION` の前にサーバーパラメータ `azure.extensions` への **allowlist 追加が必須**。CLI は `az postgres flexible-server parameter set --name azure.extensions --value "<ext>,<ext>"`。PG17 での提供バージョン: `vector` 0.8.2 / `pgstattuple` 1.5（いずれも `shared_preload_libraries` 不要） | [Allow extensions](https://learn.microsoft.com/en-us/azure/postgresql/extensions/how-to-allow-extensions) / [Extensions list](https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions-versions) |
+| 28 | 計画フェイルオーバーの断の順序 | 公式の手順表で、**書き込みブロック（Step 3 "Application writes are blocked when the standby server is close to the primary LSN"）が standby 昇格（Step 4）・DNS 切替（Step 5）より先に発生**する。アプリのダウンタイムは Step 3〜5（"Application downtime starts at step 3 and can resume operation after step 5"）。つまり読み取りの成否だけを見る probe では書き込み断の開始を見逃す | [High availability concepts](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability)（Planned failover の手順表） |
 
 ### 2-2. 出典が取れず「未実測」とする項目（Day 3〜5 で測る）
 
@@ -126,6 +130,8 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | バックアップ保持期間 | **7 日（既定のまま）** | 検証期間は 3 日で、復旧ウィンドウ 7 日で十分に覆う。延長はバックアップストレージ消費（=無料枠超過リスク）を増やすだけで、このプロジェクトでは得るものがない（§2-1 No.1）。「既定だから」ではなく「要件（3 日）< 窓（7 日）だから」と ADR に書く |
 | geo 冗長バックアップ | **無効** | (a) 有効化は作成時のみで後から変更不可（§2-1 No.5）なので今決める必要がある。(b) 有効時はバックアップサイズ 2 倍課金。(c) geo リストアは PITR 不可・RPO 最大 1 時間で、本プロジェクトの本命である PITR ドリルには寄与しない。(d) リージョン災害対策は本プロジェクトの要件にない。「無効にした」という判断と根拠を残すこと自体が成果物 1 になる |
 | HA | 無効（Day 5 に有効化） | Burstable は HA 非対応（§2-1 No.10） |
+| ネットワーク | **public access + サーバーレベル firewall rule**。許可対象は (a) 作業端末のグローバル IP（`curl -s ifconfig.me` で当日確認）、(b) Container Apps の egress IP（apply 後に判明するため Terraform で参照して許可） | firewall rule を作るまで全接続拒否（§2-1 No.26）。これがないと `/readyz`（アプリ→DB）も Day 4〜5 の `psql`（作業端末→DB）も開始できない。VNet 統合は本プロジェクトの検証目的に寄与せず作業量だけ増えるため採らない |
+| `azure.extensions` | **`VECTOR,PGSTATTUPLE`**（Terraform のサーバーパラメータで設定） | `CREATE EXTENSION` は事前 allowlist 必須（§2-1 No.27）。`vector` は既存 migration `backend/migrations/versions/0001_initial_schema.py` が `CREATE EXTENSION IF NOT EXISTS vector` を実行するため Alembic 適用の前提。`pgstattuple` は Day 4 の bloat 実測（§4-6）で使う。PG17 で両方提供済み（§2-1 No.27） |
 | メンテナンスウィンドウ | カスタム: 水曜 17:00 UTC 開始（木曜 02:00 JST） | 検証作業（日中〜夜）と重ならない深夜帯。カスタム設定の実物を持つこと自体が成果物 3 の一部。ただし実メンテは月次（§2-1 No.16）で Day 3〜5 中の遭遇は期待しない、と証跡に正直に書く |
 
 `.mise.toml` への `terraform = "1.14.8"` 追加と、Terraform を使う workflow の pin を**同じ PR で**揃える（bootstrap §7 の予告どおり。勝手に下げない）。
@@ -157,15 +163,16 @@ az monitor metrics list \
 後から HA を有効化できること自体はドキュメントで確認済み（§2-1 No.11）。残るリスクは **FreeTrial のクォータ / リージョン容量**（§2-2 No.9）で、これは実際に叩くまで分からない。Day 5 の朝に発覚すると最終日が崩れるため、Day 3 の終わりに潰す。
 
 1. GP 最小 SKU へスケール: `az postgres flexible-server update -g rg-felisaichatbot-dev -n felisaichatbot-pg-dev --tier GeneralPurpose --sku-name Standard_D2ds_v5`（SKU 名は当日 `list-skus` の実物で確定）
-2. HA 有効化を発行: `az postgres flexible-server update ... --high-availability ZoneRedundant`
+2. HA 有効化を発行: `az postgres flexible-server update ... --zonal-resiliency Enabled`（引数は 2.89.1 で実測確認済み。`--high-availability` は現環境に存在しない。§2-1 No.25）
    - クォータ / 容量系のエラーは同期的に返る（[Configure HA](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) にエラー応答の実例が列挙されている）。**エラーなく受理されデプロイが始まれば合格**とする
-3. `highAvailability.state` が `Healthy` になったら所要時間を記録（§2-2 No.5 の1回目の実測）→ HA 無効化 → B1ms へ戻す
+3. `highAvailability.state` が `Healthy` になったら所要時間を記録（§2-2 No.5 の1回目の実測）→ HA 無効化（`--zonal-resiliency Disabled`。§2-1 No.25）→ B1ms へ戻す
 4. タイムボックス超過時: Healthy 待ちの間に §3-5 の teardown 以外を進め、無効化と B1ms 戻しだけ就寝前に必ず行う（GP×2 台を夜間放置しない）
 5. **クォータ等で失敗した場合**: Day 5 を「GP サーバー新規作成（HA 有効で作成。10〜15 分）+ アプリ向け替え」に差し替えると**この時点で決めて**本書に追記する。Day 5 当日に迷わない
 
 ### 3-5. 検証（これが通れば Day 4 へ）
 
-- CI（GitHub Actions）経由で Container Apps がデプロイされ、`/readyz` が 200 を返す（= Azure 上の PostgreSQL へ `SELECT 1` が通っている）
+- CI（GitHub Actions）経由で Container Apps がデプロイされ、`/readyz` が 200 を返す（= Azure 上の PostgreSQL へ `SELECT 1` が通っている = Container Apps からの接続経路が開通している）
+- 作業端末から `psql` で接続でき、Alembic migration（`CREATE EXTENSION IF NOT EXISTS vector` を含む）が適用済み（= firewall と `azure.extensions` の設定が効いている。§3-1）。ここが通らないと Day 4 の `psql` 作業・pgstattuple・seed 投入がすべて開始できない
 - `az postgres flexible-server show` で `backup.backupRetentionDays: 7` / geo 冗長無効 / `earliestRestoreDate` の値が記録済み
 - §3-4 の結果（HA 可否）が確定し、Day 5 の経路（変更 or 新規作成）が決まっている
 
@@ -215,13 +222,14 @@ az postgres flexible-server start -g rg-felisaichatbot-dev -n felisaichatbot-pg-
    ```
 
 5. **RTO 実測**: restore 発行 → 復元サーバーへ `psql` で `SELECT 1` が通るまでの経過時間（1 分間隔でポーリングし、`state` 遷移もログする）
-6. **RPO 実測**: 復元サーバーのマーカー最新時刻と `T_target` の差。破壊したテーブルが `T_target` 時点の内容で存在することを行数で確認
-7. アプリの向け替え: 接続文字列を復元サーバーに変えて `/readyz` → `/chat` を確認（「復旧した」の判定はアプリが動くことまで）
-8. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**であり、ファイアウォール規則は引き継がれない。復元後に接続規則を再設定する手順まで込みで計測する
+6. **RPO 実測（実損失）**: `T1 −（復元サーバーに残っている最新マーカー時刻）`。RPO は「障害時点（T1）からどれだけのデータが失われたか」なので、意図的に 1 分手前を指定した分も含めて T1 起点で計算する（RPO の定義: [Business continuity concepts](https://learn.microsoft.com/en-us/azure/reliability/concept-business-continuity-high-availability-disaster-recovery)）。破壊したテーブルが `T_target` 時点の内容で存在することを行数で確認
+7. **復元点精度（RPO とは別に記録）**: `T_target −（復元サーバーの最新マーカー時刻）`。指定した時刻をどこまで正確に再現できたかの値であり、RPO と混ぜない。マーカーは 1 分間隔のため、両値とも最大 1 分の標本化誤差を含む（この注記ごと証跡に書く）
+8. アプリの向け替え: 接続文字列を復元サーバーに変えて `/readyz` → `/chat` を確認（「復旧した」の判定はアプリが動くことまで）
+9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**であり、ファイアウォール規則は引き継がれない。復元後に接続規則を再設定する手順まで込みで計測する
 
 ### 4-4. ドリル証跡（`docs/verification/restore-drill/`）
 
-`2026-08-XX-pitr-drill.md` に以下を残す: タイムライン表（T0 / T1 / T_target / restore 発行 / 接続回復 / アプリ回復）、実行コマンド全文と出力、**RTO / RPO の実測値**、引っかかった点、次にやるなら変える点。
+`2026-08-XX-pitr-drill.md` に以下を残す: タイムライン表（T0 / T1 / T_target / restore 発行 / 接続回復 / アプリ回復）、実行コマンド全文と出力、**RTO / RPO（実損失）の実測値と復元点精度**（§4-3 の 5〜7）、引っかかった点、次にやるなら変える点。
 
 ### 4-5. ドリル後始末
 
@@ -236,7 +244,8 @@ az postgres flexible-server start -g rg-felisaichatbot-dev -n felisaichatbot-pg-
 2. **autovacuum 発火の実測**: 行数 N のテーブルに「0.2 × N + 50」を超える UPDATE を流し、[公式の監視 SQL](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-autovacuum-tuning)（`pg_stat_all_tables` の `n_dead_tup` / `last_autovacuum` / `dead_pct`）で発火前後を記録
 3. **bloat 計測**: `CREATE EXTENSION pgstattuple;`（利用可否は `SHOW azure.extensions` で確認）でテーブル / インデックスの実 bloat を、`bloat_percent` メトリックで推定値を、それぞれ記録して突き合わせる
 4. **ANALYZE と統計情報**: `ANALYZE` 前後で `EXPLAIN` の推定行数がどう変わるかを 1 例記録
-5. **長時間トランザクションの vacuum 阻害**: セッション A で `BEGIN;` して放置 → UPDATE で dead tuples を作る → autovacuum が回っても `n_dead_tup` が回収されないことを観測 → `COMMIT` 後に回収されることを観測。検出には公式の長時間トランザクション検出 SQL（`pg_stat_activity` の `backend_xid` age）を使う
+5. **長時間トランザクションの vacuum 阻害**: セッション A で `BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM <対象テーブル>;` を実行して放置 → セッション B の UPDATE + COMMIT で dead tuples を作る → autovacuum / `VACUUM (VERBOSE)` が回っても dead tuples が「dead but not yet removable」で回収されないことを観測 → セッション A の `COMMIT` 後に回収されることを観測。阻害中は `pg_stat_activity` のセッション A の **`backend_xmin` の age** も記録する（読み取りのみのトランザクションは `backend_xid` を持たないため、`backend_xmin` 側を見る）
+   - 手順の根拠（ローカル Docker の PostgreSQL 17.11 で 2026-08-19 に実測確認済み）: Read Committed では `BEGIN;` のみ・`SELECT` 実行後のアイドル、いずれも `backend_xid` / `backend_xmin` が NULL のままで dead tuples は全量回収され（1000/1000 removed）、阻害を**再現できない**。REPEATABLE READ + `SELECT` のみが `backend_xmin` を保持し「0 removed / 1000 dead but not yet removable」を再現した。仕様上も、スナップショットは最初のクエリで取得され（[Transaction isolation](https://www.postgresql.org/docs/17/transaction-iso.html)）、Read Committed はステートメント単位でスナップショットを取り直す。検出 SQL の `backend_xmin` / `backend_xid` は [pg_stat_activity](https://www.postgresql.org/docs/17/monitoring-stats.html) 参照
 
 ### 4-7. 検証（これが通れば Day 5 へ）
 
@@ -253,14 +262,31 @@ az postgres flexible-server start -g rg-felisaichatbot-dev -n felisaichatbot-pg-
 
 ## 5. Day 5: General Purpose + ゾーン冗長 HA（フェイルオーバー実測）→ 全消し
 
-計測の共通道具として、別端末で 1 秒間隔の疎通ループを回し続ける（断の開始・終了時刻がそのままダウンタイム実測になる）:
+計測の共通道具として、別端末で 1 秒間隔の疎通ループを**読み取り・書き込みの 2 本**回し続ける。計画フェイルオーバーは書き込みブロックが DNS 切替より先に始まる（§2-1 No.28）ため、読み取りだけでは断の開始を見逃す。また `connect_timeout` 未指定の接続は**無期限に待つ**（"Zero, negative, or not specified means wait indefinitely"。[libpq](https://www.postgresql.org/docs/17/libpq-connect.html)）ため、障害中の 1 試行がハングするとその間の計測が空白になる。タイムアウトを明示し、**各試行の開始時刻・終了時刻・終了コード**を残す:
 
 ```bash
+export PGCONNECT_TIMEOUT=3   # libpq が読む接続タイムアウト（未指定は無期限待機）
+# 事前に 1 回だけ: psql "$DATABASE_URL" -c 'CREATE TABLE IF NOT EXISTS failover_probe (ts timestamptz);'
+
+# 読み取り probe
 while true; do
-  echo "$(date -u +%FT%T.%3NZ) $(psql "$DATABASE_URL" -qtAc 'SELECT 1' 2>&1 | head -c 40)"
+  s=$(date -u +%FT%T.%3NZ)
+  out=$(timeout 5 psql "$DATABASE_URL" -qtAc 'SELECT 1' 2>&1); rc=$?
+  echo "$s $(date -u +%FT%T.%3NZ) rc=$rc ${out:0:40}"
   sleep 1
-done | tee failover-probe.log
+done | tee read-probe.log
+
+# 書き込み probe（別端末。COMMIT まで成功して初めて rc=0 になる）
+while true; do
+  s=$(date -u +%FT%T.%3NZ)
+  out=$(timeout 5 psql "$DATABASE_URL" -qtAc "INSERT INTO failover_probe VALUES (now()) RETURNING 1" 2>&1); rc=$?
+  echo "$s $(date -u +%FT%T.%3NZ) rc=$rc ${out:0:40}"
+  sleep 1
+done | tee write-probe.log
 ```
+
+- ダウンタイムはログから読み取り断・書き込み断を**別々に**算出する: 断の下限 =「最後に成功した試行の終了時刻 → 最初に復帰した試行の開始時刻」、上限 =「最後に成功した試行の開始時刻 → 最初に復帰した試行の終了時刻」。試行間隔（1 秒）+ タイムアウト分の幅がある値として証跡に書く
+- `timeout 5` は接続後のクエリ側ハング（TCP 切断が伝わらないケース）の保険。probe の追加コストは書き込み 1 行 / 秒で、実行時間は増やさない
 
 ### 5-1. 階層変更（Burstable → General Purpose）ダウンタイム実測
 
@@ -270,7 +296,7 @@ done | tee failover-probe.log
 
 ### 5-2. HA 有効化（§3-4 で確定した経路で）
 
-- 経路 A（既存サーバーへ有効化）: `az postgres flexible-server update --high-availability ZoneRedundant`。オンライン操作でアプリ断がないこと（§2-1 No.11）を疎通ループで裏取りし、`Healthy` までの所要時間を記録
+- 経路 A（既存サーバーへ有効化）: `az postgres flexible-server update --zonal-resiliency Enabled`（§2-1 No.25）。オンライン操作でアプリ断がないこと（§2-1 No.11）を疎通ループで裏取りし、`Healthy` までの所要時間を記録
 - 経路 B（Day 3 で不可と判明した場合）: HA 有効の GP サーバーを新規作成（10〜15 分）→ seed 再投入 → アプリ向け替え
 
 ### 5-3. フェイルオーバー実測（成果物 3 の中核）
