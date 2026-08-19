@@ -41,14 +41,19 @@ async def lifespan(app: FastAPI):
             base_delay_seconds=settings.llm_retry_base_delay_seconds,
             max_delay_seconds=settings.llm_retry_max_delay_seconds,
         ),
-        # stub のときは未使用。azure-openai のときは Settings が
-        # endpoint / api_key の非空を起動時に保証している（config.py）
-        azure=AzureOpenAIConfig(
-            endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
-            api_version=settings.azure_openai_api_version,
-            chat_deployment=settings.azure_openai_chat_deployment,
-            embedding_deployment=settings.azure_openai_embedding_deployment,
+        # azure-openai のときだけ組み立てる（stub では credential を含む
+        # オブジェクトを作らない）。endpoint / api_key の非空は Settings が
+        # 起動時に保証している（config.py）
+        azure=(
+            AzureOpenAIConfig(
+                endpoint=settings.azure_openai_endpoint,
+                api_key=settings.azure_openai_api_key,
+                api_version=settings.azure_openai_api_version,
+                chat_deployment=settings.azure_openai_chat_deployment,
+                embedding_deployment=settings.azure_openai_embedding_deployment,
+            )
+            if settings.llm_provider == "azure-openai"
+            else None
         ),
     )
     logger.info("startup complete")
