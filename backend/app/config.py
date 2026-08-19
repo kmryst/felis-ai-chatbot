@@ -63,6 +63,17 @@ def _require(name: str, missing: list[str]) -> str:
     return value
 
 
+def _require_if(condition: bool, name: str, missing: list[str]) -> str:
+    """condition が真のときだけ必須として読む。偽なら空文字を返す。
+
+    LLM_PROVIDER=stub のとき Azure 用変数を要求しないために使う
+    （スタブのままローカル起動・CI が通ることを壊さない。ADR-0004）。
+    """
+    if not condition:
+        return os.environ.get(name) or ""
+    return _require(name, missing)
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str
@@ -76,18 +87,28 @@ class Settings:
     llm_max_attempts: int
     llm_retry_base_delay_seconds: float
     llm_retry_max_delay_seconds: float
+    # Azure OpenAI（LLM_PROVIDER=azure-openai のときのみ必須。ADR-0009）
+    azure_openai_endpoint: str
+    # API キーは secret のため repr=False（ログ・エラー画面への漏出防止）
+    azure_openai_api_key: str = field(repr=False)
+    azure_openai_api_version: str
+    azure_openai_chat_deployment: str
+    azure_openai_embedding_deployment: str
     # CORS で許可する origin（カンマ区切り）。既定はローカルの frontend のみ
     cors_allowed_origins: tuple[str, ...]
 
     @classmethod
     def from_env(cls) -> "Settings":
         missing: list[str] = []
+        llm_provider = os.environ.get("LLM_PROVIDER", "stub")
+        # Azure 用変数は azure-openai のときだけ必須（stub のままなら不要）
+        azure_required = llm_provider == "azure-openai"
         settings = cls(
             app_name=os.environ.get("APP_NAME", "felis-ai-chatbot-backend"),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             database_url=_require("DATABASE_URL", missing),
             db_connect_timeout_seconds=_int_env("DB_CONNECT_TIMEOUT_SECONDS", 2),
-            llm_provider=os.environ.get("LLM_PROVIDER", "stub"),
+            llm_provider=llm_provider,
             llm_timeout_seconds=_float_env("LLM_TIMEOUT_SECONDS", 10.0),
             llm_max_attempts=_int_env("LLM_MAX_ATTEMPTS", 3),
             llm_retry_base_delay_seconds=_float_env(
@@ -95,6 +116,22 @@ class Settings:
             ),
             llm_retry_max_delay_seconds=_float_env(
                 "LLM_RETRY_MAX_DELAY_SECONDS", 8.0
+            ),
+            azure_openai_endpoint=_require_if(
+                azure_required, "AZURE_OPENAI_ENDPOINT", missing
+            ),
+            azure_openai_api_key=_require_if(
+                azure_required, "AZURE_OPENAI_API_KEY", missing
+            ),
+            # api-version は疎通実測済みの GA 版を既定にする（ADR-0009）
+            azure_openai_api_version=os.environ.get(
+                "AZURE_OPENAI_API_VERSION", "2024-10-21"
+            ),
+            azure_openai_chat_deployment=os.environ.get(
+                "AZURE_OPENAI_CHAT_DEPLOYMENT", "chat"
+            ),
+            azure_openai_embedding_deployment=os.environ.get(
+                "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "embedding"
             ),
             cors_allowed_origins=tuple(
                 origin.strip()

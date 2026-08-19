@@ -68,3 +68,33 @@ def test_settings_fail_fast_on_invalid_int(monkeypatch):
     with pytest.raises(InvalidEnvError) as exc_info:
         Settings.from_env()
     assert "DB_CONNECT_TIMEOUT_SECONDS" in str(exc_info.value)
+
+
+def test_settings_stub_provider_does_not_require_azure_vars(monkeypatch):
+    """LLM_PROVIDER=stub（既定）では Azure 用変数なしで起動できる（ADR-0004）。"""
+    for name in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings.from_env()
+    assert settings.llm_provider == "stub"
+
+
+def test_settings_azure_provider_requires_azure_vars(monkeypatch):
+    """LLM_PROVIDER=azure-openai では endpoint / api key 欠落で即 fail する。"""
+    monkeypatch.setenv("LLM_PROVIDER", "azure-openai")
+    for name in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(MissingEnvError) as exc_info:
+        Settings.from_env()
+    assert "AZURE_OPENAI_ENDPOINT" in str(exc_info.value)
+    assert "AZURE_OPENAI_API_KEY" in str(exc_info.value)
+
+
+def test_settings_repr_does_not_leak_azure_api_key(monkeypatch):
+    """API キーは repr に出さない（ログ・エラー画面への漏出防止）。"""
+    monkeypatch.setenv("LLM_PROVIDER", "azure-openai")
+    monkeypatch.setenv(
+        "AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/"
+    )
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-value-do-not-print")
+    settings = Settings.from_env()
+    assert "secret-value-do-not-print" not in repr(settings)

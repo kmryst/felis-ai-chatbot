@@ -45,3 +45,4 @@
 | [0006](./0006-nasa-ai-terms-compliance.md) | Superseded | NASA AI 条項準拠 — 帰属の対象を AI 生成文から未加工の原文抜粋へ付け替える（ADR-0008 により置き換え） |
 | [0007](./0007-jma-as-content-source.md) | Accepted | 題材の出典を気象庁ホームページ（気象・防災）に選定する |
 | [0008](./0008-jma-attribution-and-weather-act-compliance.md) | Accepted | 気象庁の出典表示（記載例準拠）と気象業務法（17条・23条）への設計対応 |
+| [0009](./0009-azure-openai-as-llm-provider.md) | Accepted | LLM 提供元を Azure OpenAI（japaneast。chat は無料試用クォータ制約で GlobalStandard）に確定する |

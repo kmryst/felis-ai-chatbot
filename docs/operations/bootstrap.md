@@ -35,9 +35,9 @@
 
 | 順 | § | ステップ | 目安 | 完了 |
 | --- | --- | --- | --- | --- |
-| 8 | §1 | Azure アカウント作成・サブスクリプションID / テナントID 確認 | 0.5〜1h | [ ] |
-| 9 | §2 | **Azure OpenAI 可否判定（タイムボックス2h・撤退基準あり）+ リージョン確定** | 最大 2h | [ ] |
-| 10 | §13 | 題材確定の期限リマインド（Day 1 終了まで） | — | [ ] |
+| 8 | §1 | Azure アカウント作成・サブスクリプションID / テナントID 確認 | 0.5〜1h | [x] |
+| 9 | §2 | **Azure OpenAI 可否判定（タイムボックス2h・撤退基準あり）+ リージョン確定** | 最大 2h | [x] |
+| 10 | §13 | 題材確定の期限リマインド（Day 1 終了まで） | — | [x] |
 
 **フェーズB をここに置く理由**: Day 1「Bot 本体をローカルで動かす」には chat / embedding の呼び出し先が必要。Azure OpenAI を第一選択にした以上、ローカル開発にも Azure 上のリソースとデプロイ済みモデルが要る。撤退して OpenAI API になった場合は、フェーズB は「OpenAI アカウント作成 + キー取得」に置き換わり所要時間はさらに短くなる（Azure アカウント作成はフェーズC まで後ろ倒しできる）。
 
@@ -144,6 +144,16 @@ az account show --query "{subscriptionId: id, tenantId: tenantId, name: name}" -
 | OpenAI API にフォールバック | `japaneast` | 該当なし（外部） | `japaneast` |
 
 tfstate Storage はどのリージョンでもよく、アプリとの latency も関係しない（Terraform 実行時にしか触らない）。運用者が1箇所を覚えていれば済むよう `japaneast` に固定する。
+
+### 判定結果（実施済み）
+
+**Azure OpenAI 採用で確定。** リージョンは上表 1 行目（`japaneast` で取れた）に該当し、アプリ + PostgreSQL / LLM / tfstate Storage すべて `japaneast`（ステップ12以降のリージョン表記も `japaneast` のままで確定）。
+
+- リソース: `felisaichatbot-openai-dev`（リソースグループ `rg-felisaichatbot-dev` / japaneast）
+- デプロイ `chat`: gpt-4.1-mini 2025-04-14 / GlobalStandard / capacity 10
+- デプロイ `embedding`: text-embedding-3-small v1 / Standard / capacity 10
+- chat / embedding とも疎通実測済み（api-version `2024-10-21`。embedding は 1536 次元を実測）
+- chat が GlobalStandard SKU である制約（無料試用のクォータ都合。推論データがリージョンを跨ぐ）は [ADR-0009](../adr/0009-azure-openai-as-llm-provider.md) を参照
 
 ---
 

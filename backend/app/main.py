@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.db import check_database_ready
-from app.llm.client import LLMError, RetryConfig, create_llm_client
+from app.llm.client import (
+    AzureOpenAIConfig,
+    LLMError,
+    RetryConfig,
+    create_llm_client,
+)
 from app.llm.prompts import build_messages
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
@@ -35,6 +40,15 @@ async def lifespan(app: FastAPI):
             timeout_seconds=settings.llm_timeout_seconds,
             base_delay_seconds=settings.llm_retry_base_delay_seconds,
             max_delay_seconds=settings.llm_retry_max_delay_seconds,
+        ),
+        # stub のときは未使用。azure-openai のときは Settings が
+        # endpoint / api_key の非空を起動時に保証している（config.py）
+        azure=AzureOpenAIConfig(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            api_version=settings.azure_openai_api_version,
+            chat_deployment=settings.azure_openai_chat_deployment,
+            embedding_deployment=settings.azure_openai_embedding_deployment,
         ),
     )
     logger.info("startup complete")

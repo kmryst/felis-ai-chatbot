@@ -58,4 +58,5 @@ CI から実 LLM を呼ばない理由:
 
 - Issue: #16
 - ADR-0003（embedding 1536 次元固定）
-- `docs/operations/bootstrap.md` §2（Azure OpenAI 可否判定・フェーズB）
+- **ADR-0009（LLM 提供元を Azure OpenAI に確定）**: 「提供元は未確定」という本 ADR の前提は解消された。ただし「既定はスタブ」「CI・テストから実 LLM を呼ばない」という本 ADR の決定自体は ADR-0009 後も有効（supersede ではない）
+- `docs/operations/bootstrap.md` §2（Azure OpenAI 可否判定・フェーズB。実施済み）
