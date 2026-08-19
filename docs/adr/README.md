@@ -46,3 +46,4 @@
 | [0007](./0007-jma-as-content-source.md) | Accepted | 題材の出典を気象庁ホームページ（気象・防災）に選定する |
 | [0008](./0008-jma-attribution-and-weather-act-compliance.md) | Accepted | 気象庁の出典表示（記載例準拠）と気象業務法（17条・23条）への設計対応 |
 | [0009](./0009-azure-openai-as-llm-provider.md) | Accepted | LLM 提供元を Azure OpenAI（japaneast。chat は無料試用クォータ制約で GlobalStandard）に確定する |
+| [0010](./0010-rag-wiring-and-hallucination-guard.md) | Accepted | RAG を結線し、検索結果が閾値未満なら LLM を呼ばないハルシネーション・ガードをコードで担保する |

@@ -28,6 +28,23 @@ REFUSAL_NOTICE = (
     "最新の予報・警報は気象庁ホームページをご確認ください。"
 )
 
+# 出典表記の禁止指示（ADR-0008: 回答ごとの出典表示は行わず、フロントエンドの
+# フッターと docs/data-sources.md に集約する）。実 LLM が回答末尾に
+# 「（参考：気象庁｜…）」という出典表記を自記した実測があり、明示的に禁止する。
+# テストからも参照する
+NO_CITATION_INSTRUCTION = (
+    "回答本文に出典・参考文献・URL の表記（例: 「（参考：気象庁｜…）」）を"
+    "書かないでください。出典はサービス全体として画面フッターに常設表示されます。"
+)
+
+# 検索結果が 0 件・類似度が閾値未満のときにコードが返す固定文言。
+# LLM は呼ばない（ガードはプロンプトではなくコードで担保する。ADR-0010）。
+# テストからも参照する
+NO_CONTEXT_NOTICE = (
+    "参照資料に記載がないため、お答えできません。"
+    "本サービスは気象庁ホームページに基づく過去の記録と一般的な解説のみを扱っています。"
+)
+
 SYSTEM_PROMPT = f"""\
 あなたは、気象・防災（台風・大雨・竜巻・津波・大雪・地震の揺れ（震度）・\
 活火山・風・気温や雨などの過去の記録）を一般の人向けに解説する日本語\
@@ -63,12 +80,42 @@ SYSTEM_PROMPT = f"""\
 活かして、スケール感が伝わるように説明する
 - 回答は AI が生成したものであり、参照資料にない質問には「参照資料に記載がない」\
 と正直に答える
+- {NO_CITATION_INSTRUCTION}
 """
 
+# 参照資料（コンテキスト）ブロックの見出し。テストからも参照する
+CONTEXT_HEADER = "## 参照資料（この内容にもとづいて回答すること）"
 
-def build_messages(user_message: str) -> list[dict[str, str]]:
-    """/chat 用のメッセージ列を組み立てる。システムプロンプトを必ず先頭に置く。"""
+
+def build_context(
+    document_chunks: list[str], property_records: list[str]
+) -> str:
+    """検索結果チャンクと数値記録から参照資料ブロックを組み立てる。"""
+    sections = [CONTEXT_HEADER]
+    if document_chunks:
+        sections.append("### 解説チャンク")
+        sections.extend(f"- {chunk}" for chunk in document_chunks)
+    if property_records:
+        sections.append("### 数値記録（気象庁ホームページの記録より）")
+        sections.extend(f"- {record}" for record in property_records)
+    return "\n".join(sections)
+
+
+def build_messages(user_message: str, context: str) -> list[dict[str, str]]:
+    """/chat 用のメッセージ列を組み立てる。システムプロンプトを必ず先頭に置く。
+
+    context は build_context() で組み立てた参照資料ブロック。呼び出し側の
+    ガード（app.main）が「検索結果が閾値を満たすときだけ LLM を呼ぶ」ことを
+    保証するため、ここでは常に非空を要求する（空のまま LLM を呼ぶ経路を
+    作らない。ADR-0010）。
+    """
+    if not context:
+        raise ValueError(
+            "context が空です。検索結果が無い場合は LLM を呼ばず"
+            " NO_CONTEXT_NOTICE を返してください（ADR-0010）"
+        )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": context},
         {"role": "user", "content": user_message},
     ]

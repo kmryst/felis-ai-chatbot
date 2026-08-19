@@ -94,6 +94,9 @@ class Settings:
     azure_openai_api_version: str
     azure_openai_chat_deployment: str
     azure_openai_embedding_deployment: str
+    # RAG 検索（ADR-0010）。閾値の既定値は実測スコア分布にもとづく
+    rag_top_k: int
+    rag_similarity_threshold: float
     # CORS で許可する origin（カンマ区切り）。既定はローカルの frontend のみ
     cors_allowed_origins: tuple[str, ...]
 
@@ -132,6 +135,13 @@ class Settings:
             ),
             azure_openai_embedding_deployment=os.environ.get(
                 "AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "embedding"
+            ),
+            rag_top_k=_int_env("RAG_TOP_K", 5),
+            # 既定値 0.25 の根拠はドメイン内/外の質問群の実測スコア分布
+            # （ドメイン内 top1 最小 0.357 / ドメイン外 top1 最大 0.149。
+            #   ほぼ中間値をとり両側に約 0.1 のマージンを確保。ADR-0010）
+            rag_similarity_threshold=_float_env(
+                "RAG_SIMILARITY_THRESHOLD", 0.25
             ),
             cors_allowed_origins=tuple(
                 origin.strip()
