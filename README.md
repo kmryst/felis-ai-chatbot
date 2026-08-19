@@ -138,6 +138,7 @@ Issue / PR 駆動開発を基本とします。詳細は [CONTRIBUTING.md](./CON
 - 設計判断: [docs/adr/](./docs/adr/README.md)
 - 利用データソース一覧（気象庁ホームページ）: [docs/data-sources.md](./docs/data-sources.md)
 - Day 0 bootstrap 手順書: [docs/operations/bootstrap.md](./docs/operations/bootstrap.md)
+- Day 3〜5 実行計画書（PostgreSQL Backup / PITR / Maintenance / HA / Monitoring）: [docs/operations/day3-5-execution-plan.md](./docs/operations/day3-5-execution-plan.md)
 
 本リポジトリは skeleton の手動コピーで立ち上げたため、Backstage TechDocs / Software Catalog 用ファイル
 （`mkdocs.yml` / `catalog-info.yaml`）は含まれていません（[ADR-0001](./docs/adr/0001-bootstrap-by-manual-skeleton-copy.md)）。
