@@ -1,7 +1,9 @@
-"""LLM クライアント境界（ADR-0004）。
+"""LLM クライアント境界（ADR-0004 / ADR-0009）。
 
-- 提供元（Azure OpenAI / OpenAI API）は未確定のため、既定はスタブ。
-  本実装への差し替えはこのモジュール内の transport 追加だけで行う
+- 提供元は Azure OpenAI に確定（ADR-0009）。既定はスタブのままとし、
+  実 LLM は `LLM_PROVIDER=azure-openai` の明示指定でのみ使う
+  （CI・テストから実 LLM を呼ばない決定は維持する。ADR-0004）。
+  本実装の追加はこのモジュール内の transport 追加だけで行った
   （Azure / OpenAI 両対応の抽象化レイヤーは作らない。5日制約下では過剰設計）。
 - すべての呼び出しに明示的な timeout を設定する（timeout なしの外部通信を作らない）。
 - retry は上限回数つき exponential backoff + jitter。retry するのは
@@ -16,6 +18,8 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
+
+import httpx
 
 logger = logging.getLogger("app.llm")
 
@@ -134,6 +138,109 @@ class StubTransport:
         return [rng.uniform(-1.0, 1.0) for _ in range(EMBEDDING_DIMENSIONS)]
 
 
+# --- Azure OpenAI transport（ADR-0009） ---------------------------------------
+
+
+@dataclass(frozen=True)
+class AzureOpenAIConfig:
+    """Azure OpenAI transport の接続設定。値は環境変数から渡す（config.py）。"""
+
+    endpoint: str
+    # API キーは secret のため repr=False（ログ・エラー画面への漏出防止）
+    api_key: str = field(repr=False)
+    api_version: str
+    chat_deployment: str
+    embedding_deployment: str
+
+
+class AzureOpenAITransport:
+    """Azure OpenAI（chat / embedding）への HTTP transport。
+
+    timeout / retry / backoff は LLMClient が一元管理するため、ここでは
+    再実装しない。この transport の責務は、HTTP エラーを既存のエラー分類へ
+    正しくマッピングすることに絞る。
+
+    - HTTP 429 → LLMRateLimitError（retry する）
+    - HTTP 5xx → LLMServerError（retry する）
+    - その他の 4xx → LLMBadRequestError（retry しても直らないため即失敗）
+    - 接続断など transport 層の例外 → LLMServerError（一時障害として retry）
+
+    この分類を誤ると「直らないリクエストを上限回数まで投げ続ける」
+    「一時障害を即諦める」という運用上の実害が出る（テストで検証する）。
+    """
+
+    def __init__(
+        self,
+        config: AzureOpenAIConfig,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._config = config
+        # httpx 既定の 5s timeout は使わない（timeout は LLMClient の
+        # asyncio.wait_for が一元管理する。二重 timeout を作らない）
+        self._http = http_client or httpx.AsyncClient(
+            base_url=config.endpoint.rstrip("/"), timeout=None
+        )
+
+    async def chat(self, messages: list[dict[str, str]]) -> str:
+        data = await self._post(
+            f"/openai/deployments/{self._config.chat_deployment}"
+            "/chat/completions",
+            {"messages": messages},
+        )
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMServerError("chat 応答の形式が不正です") from exc
+        if not isinstance(content, str):
+            # コンテンツフィルタ等で content が null のケース。
+            # 同じリクエストを retry しても直らないため即失敗させる
+            raise LLMBadRequestError("chat 応答に本文が含まれていません")
+        return content
+
+    async def embed(self, text: str) -> list[float]:
+        data = await self._post(
+            f"/openai/deployments/{self._config.embedding_deployment}"
+            "/embeddings",
+            {"input": text},
+        )
+        try:
+            return data["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise LLMServerError("embedding 応答の形式が不正です") from exc
+
+    async def _post(self, path: str, payload: dict) -> dict:
+        """POST して JSON を返す。HTTP エラーは既存のエラー分類へ変換する。"""
+        try:
+            response = await self._http.post(
+                path,
+                params={"api-version": self._config.api_version},
+                json=payload,
+                headers={"api-key": self._config.api_key},
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMTimeoutError(f"HTTP timeout: {path}") from exc
+        except httpx.HTTPError as exc:
+            # 接続断・DNS 失敗など。一時障害の可能性があるため retry させる。
+            # 例外メッセージは URL（api-version 等）を含み得るため型名だけ出す
+            raise LLMServerError(
+                f"HTTP transport error: {type(exc).__name__}"
+            ) from exc
+
+        status = response.status_code
+        if status == 429:
+            raise LLMRateLimitError("rate limited (HTTP 429)")
+        if status >= 500:
+            raise LLMServerError(f"server error (HTTP {status})")
+        if status >= 400:
+            # レスポンス本文はログへ流さない（エラー詳細に入力の断片が
+            # 含まれ得るため）。分類とステータスだけで運用上は切り分け可能
+            raise LLMBadRequestError(f"bad request (HTTP {status})")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise LLMServerError("応答が JSON ではありません") from exc
+
+
 # --- クライアント本体 ---------------------------------------------------------
 
 
@@ -141,8 +248,7 @@ class LLMClient:
     """timeout / retry / backoff を一手に引き受けるクライアント。
 
     transport は `async chat(messages) -> str` / `async embed(text) -> list[float]`
-    を持つオブジェクト。現状はスタブのみ。本実装（Azure OpenAI / OpenAI API）は
-    提供元確定後にこのモジュールへ追加する。
+    を持つオブジェクト（StubTransport / AzureOpenAITransport）。
     """
 
     def __init__(
@@ -223,14 +329,24 @@ class LLMClient:
         raise last_error
 
 
-def create_llm_client(provider: str, retry: RetryConfig) -> LLMClient:
+def create_llm_client(
+    provider: str,
+    retry: RetryConfig,
+    azure: AzureOpenAIConfig | None = None,
+) -> LLMClient:
     """設定から LLMClient を組み立てる。
 
-    現時点でサポートするのは 'stub' のみ。提供元確定後に
-    'azure-openai' / 'openai' をここへ追加する。
+    サポートは 'stub'（既定。ADR-0004）と 'azure-openai'（ADR-0009）。
     """
     if provider == "stub":
         return LLMClient(StubTransport(), retry=retry)
+    if provider == "azure-openai":
+        if azure is None:
+            raise ValueError(
+                "LLM_PROVIDER=azure-openai には AzureOpenAIConfig が必要です"
+            )
+        return LLMClient(AzureOpenAITransport(azure), retry=retry)
     raise ValueError(
-        f"未対応の LLM_PROVIDER です: {provider}（現在サポート: stub）"
+        f"未対応の LLM_PROVIDER です: {provider}"
+        "（現在サポート: stub / azure-openai）"
     )
