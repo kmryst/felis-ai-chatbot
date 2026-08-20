@@ -47,3 +47,4 @@
 | [0008](./0008-jma-attribution-and-weather-act-compliance.md) | Accepted | 気象庁の出典表示（記載例準拠）と気象業務法（17条・23条）への設計対応 |
 | [0009](./0009-azure-openai-as-llm-provider.md) | Accepted | LLM 提供元を Azure OpenAI（japaneast。chat は無料試用クォータ制約で GlobalStandard）に確定する |
 | [0010](./0010-rag-wiring-and-hallucination-guard.md) | Accepted | RAG を結線し、検索結果が閾値未満なら LLM を呼ばないハルシネーション・ガードをコードで担保する |
+| [0011](./0011-backup-retention-and-geo-redundancy.md) | Accepted | PostgreSQL のバックアップ保持 7 日（検証 3 日 < 窓 7 日）・geo 冗長無効を作成時に確定する |
