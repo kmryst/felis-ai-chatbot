@@ -12,7 +12,7 @@ variable "resource_group_name" {
 variable "server_name" {
   description = "PostgreSQL Flexible Server 名（グローバル一意。bootstrap.md §3 で空き確認済み）"
   type        = string
-  default     = "felisaichatbot-pg-dev"
+  default     = "pgsql-felisaichatbot-dev"
 }
 
 variable "administrator_login" {

@@ -159,13 +159,13 @@ tfstate Storage はどのリージョンでもよく、アプリとの latency �
 
 ## 3. グローバル一意名の空き確認（15min）
 
-ACR / Key Vault / PostgreSQL Flexible Server / Storage Account は DNS 名になるためグローバル一意。**Terraform 実装（Day 3）の前ではなく、この Day 0 時点で空きを確認**し、取れなければ命名を再調整してから先に進む（すべて読み取り系コマンド）。
+ACR / Key Vault / PostgreSQL Flexible Server / Storage Account は DNS 名になるためグローバル一意。命名規則は [ADR-0013](../adr/0013-azure-resource-naming-convention.md)（CAF 略語準拠）に従う。**Terraform 実装（Day 3）の前ではなく、この Day 0 時点で空きを確認**し、取れなければ命名を再調整してから先に進む（すべて読み取り系コマンド）。
 
 | リソース | 予定名 | 制約 |
 | --- | --- | --- |
 | ACR | `felisaichatbotacrdev` | 20/50 文字・英数字のみ |
 | Key Vault | `kv-felisaichatbot-dev` | 21/24 文字 |
-| PostgreSQL Flexible Server | `felisaichatbot-pg-dev` | 小文字英数字とハイフン |
+| PostgreSQL Flexible Server | `pgsql-felisaichatbot-dev` | 小文字英数字とハイフン |
 | tfstate Storage Account | `felisaichatbottfstate` | 21/24 文字・小文字英数字のみ |
 
 ```bash
@@ -183,7 +183,7 @@ az rest --method post \
 # PostgreSQL Flexible Server（同上）
 az rest --method post \
   --uri "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.DBforPostgreSQL/checkNameAvailability?api-version=2024-08-01" \
-  --body '{"name": "felisaichatbot-pg-dev", "type": "Microsoft.DBforPostgreSQL/flexibleServers"}'
+  --body '{"name": "pgsql-felisaichatbot-dev", "type": "Microsoft.DBforPostgreSQL/flexibleServers"}'
 ```
 
 ### 検証
@@ -536,7 +536,7 @@ az role assignment create \
   --assignee-object-id "$(az ad sp show --id <appId> --query id -o tsv)" \
   --assignee-principal-type ServicePrincipal \
   --role "Storage Blob Data Contributor" \
-  --scope "/subscriptions/${SUB_ID}/resourceGroups/felisaichatbot-rg-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
+  --scope "/subscriptions/${SUB_ID}/resourceGroups/rg-felisaichatbot-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
 ```
 
 **付与しないもの（ADR-0012）**:
@@ -560,10 +560,10 @@ Terraform backend が使う Storage を Terraform で作る鶏と卵を、**こ�
 
 ```bash
 # 1. RG と Storage Account（コントロールプレーン。Owner で実行可能）
-az group create --name felisaichatbot-rg-tfstate --location japaneast
+az group create --name rg-felisaichatbot-tfstate --location japaneast
 az storage account create \
   --name felisaichatbottfstate \
-  --resource-group felisaichatbot-rg-tfstate \
+  --resource-group rg-felisaichatbot-tfstate \
   --sku Standard_LRS \
   --min-tls-version TLS1_2 \
   --allow-blob-public-access false
@@ -574,7 +574,7 @@ az role assignment create \
   --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
   --assignee-principal-type User \
   --role "Storage Blob Data Contributor" \
-  --scope "/subscriptions/${SUB_ID}/resourceGroups/felisaichatbot-rg-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
+  --scope "/subscriptions/${SUB_ID}/resourceGroups/rg-felisaichatbot-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
 
 # 3. ロール反映（数分かかることがある）を待ちながら container 作成をリトライ
 #    （成功したらループを抜ける。最大 10 分 = 30 秒 x 20 回）
@@ -589,7 +589,7 @@ done
 # 4. state の誤削除・破損からの復旧手段（S3 の versioning 相当）
 az storage account blob-service-properties update \
   --account-name felisaichatbottfstate \
-  --resource-group felisaichatbot-rg-tfstate \
+  --resource-group rg-felisaichatbot-tfstate \
   --enable-versioning true
 ```
 

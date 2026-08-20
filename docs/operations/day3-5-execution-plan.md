@@ -122,7 +122,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 
 | 項目 | 値 | 根拠 |
 | --- | --- | --- |
-| 名前 | `felisaichatbot-pg-dev` | bootstrap §3 で空き確認済みの予定名 |
+| 名前 | `pgsql-felisaichatbot-dev` | 命名規則は ADR-0013（CAF 略語準拠）。bootstrap §3 で空き確認済みの予定名（改名後の 2026-08-20 再確認で nameAvailable: true） |
 | resource group | `rg-felisaichatbot-dev-tf`（bootstrap §11-3 で手動作成。Terraform 管理にしない） | Terraform 管理外の Azure OpenAI が同居する `rg-felisaichatbot-dev` から分離し、CI 用 service principal の Contributor スコープを Terraform 管理リソースに限定する（ADR-0012）。既存リソースは移動しない |
 | リージョン | japaneast | Day 0 決定（アプリ・DB 同一リージョン原則） |
 | SKU | `B_Standard_B1ms`（1 vCore / 2 GiB） | Day 3〜4 の検証には最小で足りる。HA が必要になる Day 5 に GP へ変更（§2-1 No.9 で変更可能と確認済み） |
@@ -148,11 +148,11 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 サーバー作成直後と停止直前に以下を記録する（読み取り系）。
 
 ```bash
-az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev \
+az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
   --query "{state: state, earliestRestoreDate: backup.earliestRestoreDate, retention: backup.backupRetentionDays, geo: backup.geoRedundantBackup}" -o json
 # Backup Storage Used メトリック（直近1時間）
 az monitor metrics list \
-  --resource "$(az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev --query id -o tsv)" \
+  --resource "$(az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query id -o tsv)" \
   --metric backup_storage_used --interval PT1H -o table
 ```
 
@@ -163,7 +163,7 @@ az monitor metrics list \
 
 後から HA を有効化できること自体はドキュメントで確認済み（§2-1 No.11）。残るリスクは **FreeTrial のクォータ / リージョン容量**（§2-2 No.9）で、これは実際に叩くまで分からない。Day 5 の朝に発覚すると最終日が崩れるため、Day 3 の終わりに潰す。
 
-1. GP 最小 SKU へスケール: `az postgres flexible-server update -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev --tier GeneralPurpose --sku-name Standard_D2ds_v5`（SKU 名は当日 `list-skus` の実物で確定）
+1. GP 最小 SKU へスケール: `az postgres flexible-server update -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --tier GeneralPurpose --sku-name Standard_D2ds_v5`（SKU 名は当日 `list-skus` の実物で確定）
 2. HA 有効化を発行: `az postgres flexible-server update ... --zonal-resiliency Enabled`（引数は 2.89.1 で実測確認済み。`--high-availability` は現環境に存在しない。§2-1 No.25）
    - クォータ / 容量系のエラーは同期的に返る（[Configure HA](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-configure-high-availability) にエラー応答の実例が列挙されている）。**エラーなく受理されデプロイが始まれば合格**とする
 3. `highAvailability.state` が `Healthy` になったら所要時間を記録（§2-2 No.5 の1回目の実測）→ HA 無効化（`--zonal-resiliency Disabled`。§2-1 No.25）→ B1ms へ戻す
@@ -183,7 +183,7 @@ az monitor metrics list \
 # Container Apps（ephemeral）は destroy（時間課金を止める）
 terraform -chdir=terraform/ephemeral destroy
 # PostgreSQL は削除せず stop（バックアップ蓄積と課金観測のため。§2-1 No.6/8）
-az postgres flexible-server stop -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev
+az postgres flexible-server stop -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存の目視確認
 ```
 
@@ -196,7 +196,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 ### 4-1. 朝: 起動と停止中挙動の実測
 
 ```bash
-az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev
+az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev
 ```
 
 - 起動所要時間を記録（保留メンテナンスが適用されると 5〜8 分延びる仕様。§2-1 No.17。適用有無も記録）
@@ -217,8 +217,8 @@ az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n felisaichatbot-
    ```bash
    az postgres flexible-server restore \
      -g rg-felisaichatbot-dev-tf \
-     --name felisaichatbot-pg-dev-restored \
-     --source-server felisaichatbot-pg-dev \
+     --name pgsql-felisaichatbot-dev-restored \
+     --source-server pgsql-felisaichatbot-dev \
      --restore-time "<T_target (ISO8601 UTC)>"
    ```
 
@@ -234,8 +234,8 @@ az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n felisaichatbot-
 
 ### 4-5. ドリル後始末
 
-- 元サーバー `felisaichatbot-pg-dev` を正として継続する（破壊したテーブルは Alembic + seed スクリプトで再構築できることを確認済みのうえで破壊対象に選ぶ）
-- 復元サーバー `felisaichatbot-pg-dev-restored` は証跡取得後に**削除**（放置課金の芽を残さない）
+- 元サーバー `pgsql-felisaichatbot-dev` を正として継続する（破壊したテーブルは Alembic + seed スクリプトで再構築できることを確認済みのうえで破壊対象に選ぶ）
+- 復元サーバー `pgsql-felisaichatbot-dev-restored` は証跡取得後に**削除**（放置課金の芽を残さない）
 
 ### 4-6. 午後: PostgreSQL 側メンテナンス（成果物 4。落とさない）
 
@@ -305,7 +305,7 @@ done | tee write-probe.log
 
 ### 5-3. フェイルオーバー実測（成果物 3 の中核）
 
-1. **計画フェイルオーバー**: `az postgres flexible-server restart -g rg-felisaichatbot-dev-tf -n felisaichatbot-pg-dev --failover Planned` → 疎通ループで実測。**この値が「メンテナンス中に止まりましたか？」への回答**になる（HA では計画メンテがこの standby 切替で処理される。§2-1 No.12。実メンテの実測ではなく代理実測である旨も証跡に書く）
+1. **計画フェイルオーバー**: `az postgres flexible-server restart -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --failover Planned` → 疎通ループで実測。**この値が「メンテナンス中に止まりましたか？」への回答**になる（HA では計画メンテがこの standby 切替で処理される。§2-1 No.12。実メンテの実測ではなく代理実測である旨も証跡に書く）
 2. **15〜20 分待つ**（§2-1 No.14 の明記事項。守らないと標的の standby が未確立）
 3. **強制フェイルオーバー**: `--failover Forced` → 実測（ドキュメント目安 60〜120 秒との差を記録）
 4. 証跡: `docs/verification/failover-drill/` にタイムライン・probe ログ抜粋・実測値・zone の入れ替わり（`show` の `availabilityZone` / `standbyAvailabilityZone`）を記録
@@ -373,7 +373,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（A
   ```bash
   az group delete -n rg-felisaichatbot-dev-tf --yes     # Terraform 管理リソース（アプリ・DB。ADR-0012 で分離）
   az group delete -n rg-felisaichatbot-dev --yes        # Azure OpenAI（面談デモ用に残すなら、この行だけ実行を保留する）
-  az group delete -n felisaichatbot-rg-tfstate --yes    # tfstate Storage（bootstrap §12）
+  az group delete -n rg-felisaichatbot-tfstate --yes    # tfstate Storage（bootstrap §12）
   ```
 
   実行前に、証跡（`docs/verification/`）がすべてコミット済みであることを確認する。
