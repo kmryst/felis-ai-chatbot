@@ -1,7 +1,12 @@
 variable "resource_group_name" {
-  description = "既存の dev 用 resource group 名。Azure OpenAI が同居しているため Terraform 管理（作成・削除）はしない"
+  description = <<-DESC
+    Terraform 管理リソース専用の resource group 名（bootstrap.md §11-3 で手動作成）。
+    Terraform 管理外の Azure OpenAI が同居する rg-felisaichatbot-dev とは分離し、
+    CI 用 service principal の Contributor スコープをこの RG に限定する（ADR-0012）。
+    RG 自体は Terraform 管理（作成・削除）にしない。
+  DESC
   type        = string
-  default     = "rg-felisaichatbot-dev"
+  default     = "rg-felisaichatbot-dev-tf"
 }
 
 variable "server_name" {
@@ -47,7 +52,15 @@ variable "firewall_allowed_client_ips" {
     Container Apps の egress IP は ephemeral 層が apply 後に自層の firewall rule で許可する。
   DESC
   type        = map(string)
-  default     = {}
+
+  # default を持たせない（必須入力）。さらに空 map を明示的に拒否する。
+  # Azure PostgreSQL の public access は firewall rule が 1 件もなければ全接続拒否のため、
+  # 空のまま apply すると psql / Alembic / Day 4 以降の検証すべてに進めないサーバーができる。
+  # 出典: https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-public
+  validation {
+    condition     = length(var.firewall_allowed_client_ips) > 0
+    error_message = "firewall_allowed_client_ips には少なくとも 1 件のクライアント IP を指定してください（空だと firewall rule 0 件 = 全接続拒否のサーバーができます）。"
+  }
 
   validation {
     condition     = alltrue([for ip in values(var.firewall_allowed_client_ips) : can(cidrnetmask("${ip}/32"))])

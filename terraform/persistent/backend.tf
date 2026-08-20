@@ -1,8 +1,8 @@
 terraform {
   backend "azurerm" {
     # tfstate 用 Storage Account は bootstrap.md §12 の手動作成（1回だけの鶏と卵解消）。
-    # dev 用 RG（rg-felisaichatbot-dev）と分けるのは、dev を destroy しても state が残る
-    # persistent / ephemeral 分離の一貫。
+    # Terraform 管理リソース用 RG（rg-felisaichatbot-dev-tf。ADR-0012）と分けるのは、
+    # dev を destroy しても state が残る persistent / ephemeral 分離の一貫。
     resource_group_name  = "felisaichatbot-rg-tfstate"
     storage_account_name = "felisaichatbottfstate"
     container_name       = "tfstate"
