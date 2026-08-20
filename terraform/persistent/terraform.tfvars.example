@@ -1,0 +1,7 @@
+# terraform.tfvars は gitignore 対象。実値はこのファイルをコピーして作る。
+# administrator_password はここにも書かず TF_VAR_administrator_password 環境変数で渡す。
+
+firewall_allowed_client_ips = {
+  # 作業端末のグローバル IP（当日 `curl -s ifconfig.me` で確認して記入）
+  "allow-workstation" = "203.0.113.10"
+}
