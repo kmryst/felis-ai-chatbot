@@ -59,4 +59,4 @@ geo 冗長はサーバー作成時にしか決められないため、apply 前�
 
 - `docs/operations/day3-5-execution-plan.md` §3-1（設計値の正本）・§2-1（出典一覧）
 - `terraform/persistent/main.tf`（実装）
-- ADR-0009（Azure OpenAI と同一 RG `rg-felisaichatbot-dev` を共有するが、RG は Terraform 管理にしない判断は main.tf のコメントに記載）
+- ADR-0009（記録当時は Azure OpenAI と同一 RG `rg-felisaichatbot-dev` を共有する前提だったが、ADR-0012 で Terraform 管理リソースは専用 RG `rg-felisaichatbot-dev-tf` へ分離した。RG を Terraform 管理にしない判断は変わらず、variables.tf の記述に引き継いだ）

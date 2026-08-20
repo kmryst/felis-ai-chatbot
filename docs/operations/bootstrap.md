@@ -489,31 +489,65 @@ az ad sp create --id <appId>
 
 ### 11-2. federated credential
 
-方針は `repo:kmryst/felis-ai-chatbot:*`（確定事項）。ただし **Entra ID の従来型 federated credential は subject の完全一致のみでワイルドカード不可**のため、実現方法は次の2択:
+**subject は immutable 形式（owner / repo の ID 入り）を使う。** 本リポジトリは 2026-08-17 作成で、GitHub が immutable subject claims を導入した 2026-07-15 より後のため、OIDC トークンの subject は自動的に次の形式になる（旧形式 `repo:kmryst/felis-ai-chatbot:...` を登録すると `azure/login` が必ず失敗する）。
 
-- **(a) flexible federated identity credential（claims matching expression）が利用可能なら**、式 `claims matches 'repo:kmryst/felis-ai-chatbot:*'` 相当で1本にまとめる。
-- **(b) 使えない場合は従来型で subject を個別登録**する（意味的に `repo:kmryst/felis-ai-chatbot:*` と同等になる最小セット）:
-  1. `repo:kmryst/felis-ai-chatbot:ref:refs/heads/main` — main への push でのデプロイ
-  2. `repo:kmryst/felis-ai-chatbot:pull_request` — PR での `terraform plan`
+- 出典: <https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims>
+- 実測値（`gh api repos/kmryst/felis-ai-chatbot --jq '{id: .id, owner_id: .owner.id, created_at: .created_at}'` で確認。2026-08-20）: owner_id `205493351` / repo_id `1336699843` / created_at `2026-08-17`
 
-いずれも issuer `https://token.actions.githubusercontent.com`、audience `api://AzureADTokenExchange`。
+登録する credential は **main 用の 1 本のみ**（従来型の完全一致で足りる）:
+
+1. `repo:kmryst@205493351/felis-ai-chatbot@1336699843:ref:refs/heads/main` — main への push でのデプロイ
+
+**PR 用（`:pull_request`）は登録しない。** PR 時の `terraform plan` workflow は未実装で、いま権限を開ける理由がないため（ADR-0012）。実装する時点で、subject `repo:kmryst@205493351/felis-ai-chatbot@1336699843:pull_request` を最小権限の別 credential として追加する。
+
+issuer `https://token.actions.githubusercontent.com`、audience `api://AzureADTokenExchange`。
+
+```bash
+az ad app federated-credential create --id <appId> --parameters '{
+  "name": "github-actions-main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:kmryst@205493351/felis-ai-chatbot@1336699843:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+```
 
 ### 11-3. ロール割当（least privilege）
 
-resource group を dev 用に 1 つ想定（例: `felisaichatbot-rg-dev`。Terraform 管理にするか手動作成にするかは Day 3 の設計に委ねるが、割当スコープとして先に決めておく）。
+**Terraform 管理リソース専用の RG `rg-felisaichatbot-dev-tf` を先に手動作成し、Contributor のスコープをそこに限定する**（ADR-0012）。既存の `rg-felisaichatbot-dev` には Terraform 管理外の Azure OpenAI `felisaichatbot-openai-dev`（稼働中・作り直し不可）が同居しており、そこへ Contributor を与えると service principal がこれを変更・削除できてしまうため。既存リソースの移動はしない。
+
+```bash
+az group create --name rg-felisaichatbot-dev-tf --location japaneast
+```
 
 | ロール | スコープ | 目的 |
 | --- | --- | --- |
-| `Contributor` | `felisaichatbot-rg-dev` | Terraform apply（リソース CRUD） |
-| `Role Based Access Control Administrator`（condition で付与可能ロールを絞る） | 同 RG | Terraform が Managed Identity へ AcrPull / Key Vault RBAC を割り当てるため。Owner は付与しない |
+| `Contributor` | `rg-felisaichatbot-dev-tf` | Terraform apply（リソース CRUD） |
 | `Storage Blob Data Contributor` | tfstate Storage Account（ステップ12） | azurerm backend の state 読み書き |
 
-サブスクリプション全体への Contributor は付与しない。
+```bash
+SUB_ID=$(az account show --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$(az ad sp show --id <appId> --query id -o tsv)" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Contributor" \
+  --scope "/subscriptions/${SUB_ID}/resourceGroups/rg-felisaichatbot-dev-tf"
+# tfstate SA への割当はステップ12で Storage Account を作成した後に行う
+az role assignment create \
+  --assignee-object-id "$(az ad sp show --id <appId> --query id -o tsv)" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Contributor" \
+  --scope "/subscriptions/${SUB_ID}/resourceGroups/felisaichatbot-rg-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
+```
+
+**付与しないもの（ADR-0012）**:
+
+- サブスクリプション全体への Contributor
+- `Role Based Access Control Administrator`。Privileged カテゴリのロール（roleAssignments の write / delete + 全リソースの read）で権限昇格経路になり、Day 3 の apply には不要。将来 Container Apps のマネージド ID へロール付与が必要になった時点で、condition で付与可能ロールを絞ってスコープ最小で追加する。出典: <https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/privileged>
 
 ### 検証
 
-- `az ad app federated-credential list --id <appId>` で登録済み credential が見える。
-- `az role assignment list --assignee <appId> --all -o table` で上記3件のみが見える（余分な割当がない）。
+- `az ad app federated-credential list --id <appId>` で main 用 credential 1 本のみが見える（subject が `repo:kmryst@205493351/felis-ai-chatbot@1336699843:ref:refs/heads/main` であること）。
+- `az role assignment list --assignee <appId> --all -o table` で上記2件のみが見える（余分な割当がない）。
 - 実際の OIDC ログイン疎通（`azure/login` action）は Day 3 の最初の workflow で確認する。Day 0 ではここまで。
 
 ---
@@ -522,7 +556,10 @@ resource group を dev 用に 1 つ想定（例: `felisaichatbot-rg-dev`。Terra
 
 Terraform backend が使う Storage を Terraform で作る鶏と卵を、**この1回だけの手動作成**で解消する（terraform-hannibal が S3 state bucket で採った方式と同型）。
 
+**順序が重要**: `az storage container create --auth-mode login` は blob の**データプレーン**操作で、サブスクリプション Owner（コントロールプレーンのロール。DataActions を含まない）だけでは実行できない。Storage Account 作成後、**実行者自身へ `Storage Blob Data Contributor` を割り当て、ロール反映を待ってから** container を作成する。出典: <https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-data-operations-cli>（"Even though you are the account owner, you need explicit permissions to perform data operations" / "Azure role assignments may take a few minutes to propagate"）
+
 ```bash
+# 1. RG と Storage Account（コントロールプレーン。Owner で実行可能）
 az group create --name felisaichatbot-rg-tfstate --location japaneast
 az storage account create \
   --name felisaichatbottfstate \
@@ -530,20 +567,35 @@ az storage account create \
   --sku Standard_LRS \
   --min-tls-version TLS1_2 \
   --allow-blob-public-access false
-az storage container create \
-  --name tfstate \
-  --account-name felisaichatbottfstate \
-  --auth-mode login
-# state の誤削除・破損からの復旧手段（S3 の versioning 相当）
+
+# 2. 実行者自身へ blob データプレーンのロールを割り当てる（Owner でも別途必須）
+SUB_ID=$(az account show --query id -o tsv)
+az role assignment create \
+  --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" \
+  --assignee-principal-type User \
+  --role "Storage Blob Data Contributor" \
+  --scope "/subscriptions/${SUB_ID}/resourceGroups/felisaichatbot-rg-tfstate/providers/Microsoft.Storage/storageAccounts/felisaichatbottfstate"
+
+# 3. ロール反映（数分かかることがある）を待ちながら container 作成をリトライ
+#    （成功したらループを抜ける。最大 10 分 = 30 秒 x 20 回）
+for i in $(seq 1 20); do
+  az storage container create \
+    --name tfstate \
+    --account-name felisaichatbottfstate \
+    --auth-mode login && break
+  echo "role assignment 反映待ち (${i}/20)"; sleep 30
+done
+
+# 4. state の誤削除・破損からの復旧手段（S3 の versioning 相当）
 az storage account blob-service-properties update \
   --account-name felisaichatbottfstate \
   --resource-group felisaichatbot-rg-tfstate \
   --enable-versioning true
 ```
 
-- state 用 RG を dev 用 RG と分けるのは、dev を destroy しても state が残る persistent / ephemeral 分離の一貫。
+- state 用 RG を Terraform 管理リソース用 RG（`rg-felisaichatbot-dev-tf`）と分けるのは、dev を destroy しても state が残る persistent / ephemeral 分離の一貫。
 - azurerm backend は blob lease による state lock が組み込みのため、DynamoDB 相当の追加リソースは不要。
-- ステップ11-3 の `Storage Blob Data Contributor` をこの Storage Account スコープで割り当てる。
+- ステップ11-3 の `Storage Blob Data Contributor`（service principal 向け）をこの Storage Account スコープで割り当てる（§11-3 の 2 本目の `az role assignment create` は Storage Account ができたこの時点で実行する）。
 
 ### 検証
 
