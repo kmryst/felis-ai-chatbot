@@ -10,7 +10,7 @@ Accepted
 
 ## 決定内容
 
-`terraform/persistent/` の PostgreSQL Flexible Server（`felisaichatbot-pg-dev`）のバックアップ設計を次のとおり確定する。
+`terraform/persistent/` の PostgreSQL Flexible Server（`pgsql-felisaichatbot-dev`。命名は [ADR-0013](./0013-azure-resource-naming-convention.md)）のバックアップ設計を次のとおり確定する。
 
 - `backup_retention_days = 7`（サービス既定と同値。7〜35 日の設定レンジの下限）
 - `geo_redundant_backup_enabled = false`
@@ -60,3 +60,4 @@ geo 冗長はサーバー作成時にしか決められないため、apply 前�
 - `docs/operations/day3-5-execution-plan.md` §3-1（設計値の正本）・§2-1（出典一覧）
 - `terraform/persistent/main.tf`（実装）
 - ADR-0009（記録当時は Azure OpenAI と同一 RG `rg-felisaichatbot-dev` を共有する前提だったが、ADR-0012 で Terraform 管理リソースは専用 RG `rg-felisaichatbot-dev-tf` へ分離した。RG を Terraform 管理にしない判断は変わらず、variables.tf の記述に引き継いだ）
+- ADR-0013 — 命名規則の制定に伴い、apply 前の予定名段階でサーバー名表記を `pgsql-felisaichatbot-dev` に更新した（本 ADR の決定内容そのものは不変）
