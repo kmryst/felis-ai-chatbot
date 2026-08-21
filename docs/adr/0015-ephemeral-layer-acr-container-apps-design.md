@@ -2,9 +2,9 @@
 
 ## ステータス
 
-Proposed
+Accepted
 
-（ACR pull の認証方式 1 点が未確定のため。他の決定はレビュー・マージをもって Accepted 化する）
+（起案時に未確定だった ACR pull の認証方式は、2026-08-21 のユーザー判断で選択肢 6-(b) に確定した）
 
 ## 日付
 
@@ -16,7 +16,7 @@ walking skeleton（[day3-5-execution-plan.md §3-2](../operations/day3-5-executi
 
 | リソース | 名前（ADR-0013 準拠） | 主要な設計値 |
 | --- | --- | --- |
-| ACR | `felisaichatbotacrdev` | **Basic** / admin user 無効（下記・未確定事項参照） |
+| ACR | `felisaichatbotacrdev` | **Basic** / admin user 無効（pull はマネージド ID。選択肢 6） |
 | Log Analytics workspace | `log-felisaichatbot-dev` | PerGB2018 / 保持 **30 日（最小）** / 日次取込上限 **1 GB** |
 | Container Apps Environment | `cae-felisaichatbot-dev` | **VNet 統合なし**（既定の Azure ネットワーク） |
 | Container App | `ca-felisaichatbot-dev` | **min_replicas 0（スケールゼロ）** / max 1 / 0.25 vCPU / 0.5 GiB / 外部 ingress |
@@ -24,7 +24,7 @@ walking skeleton（[day3-5-execution-plan.md §3-2](../operations/day3-5-executi
 
 イメージは **hello-world から始めて backend に差し替える 2 段階**とし、タグは **git commit SHA 由来の不変タグ（`latest` 禁止）** を使う。
 
-**未確定（本 ADR で確定させない）**: Container App が ACR から pull する際の認証方式。選択肢とトレードオフは「検討した選択肢 6」に整理し、ユーザー判断を待つ。確定までこの層の apply は行わない。
+Container App が ACR から pull する際の認証は、**user-assigned managed identity `id-felisaichatbot-dev` + AcrPull ロール割当（スコープは RG `rg-felisaichatbot-dev-tf`）** で行う。**ID とロール割当はどちらも Terraform 管理外（手動作成 + [管理外リソース台帳](../operations/terraform-unmanaged-resources.md) #8 / #9）**、ID を Container App に紐付ける記述は Terraform（data source 参照）が持つ。トレードオフと採択理由は「検討した選択肢 6」。ID とロール割当が手動作成されるまで、この層の apply は行わない。
 
 ## 背景
 
@@ -66,15 +66,25 @@ walking skeleton（[day3-5-execution-plan.md §3-2](../operations/day3-5-executi
 
 - タグ方針: **git commit SHA 由来の不変タグ（例 `sha-abc1234`）を使い、`latest` を使わない**。`latest` は「どのコードが動いているか」を state からもログからも特定できなくする。digest 固定（`@sha256:...`）は他リポジトリ（terraform-hannibal 等）で CI 基盤イメージに採用している方針だが、ここでのデプロイ対象イメージは自分でビルドして push した直後の SHA タグを参照するため、タグ改竄への防御を足す意味が薄く、5 日間プロジェクトには過剰と判断して見送る。Terraform には `:latest` を拒否する validation を入れた
 
-### 6. ACR pull の認証方式（未確定・ユーザー判断待ち）
+### 6. ACR pull の認証方式（2026-08-21 ユーザー判断で (b) に確定）
 
 前提: マネージド ID で pull するには ID への **AcrPull ロール割当**が必要だが、CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（ADR-0012 で RBAC Administrator を意図的に不付与）。Terraform にロール割当を書くと **CI からの apply は必ず失敗**する（ローカルの Owner 実行なら通ってしまい、CI と挙動が割れるのがなお悪い）。
 
-- (a) ACR の admin user を有効化し username/password で pull: 権限問題は消えるが、リポジトリ全体で積んできた least privilege の設計（ADR-0012）と不整合。資格情報が tfstate に平文で入る
-- (b) **user-assigned managed identity `id-felisaichatbot-dev` + AcrPull を手動作成し Terraform 管理外にする（起案者の推奨）**: 手動作成は 1 回きり（`az identity create` + `az role assignment create`）。ロール割当のスコープを ACR 個体ではなく **RG `rg-felisaichatbot-dev-tf`** にすれば、ACR が毎日 destroy / 再作成されてもロール割当は生き残り、毎朝の再設定が不要。管理外リソース台帳へ 2 エントリ追記する。ADR-0012 の決定（SP の権限 2 件のみ）は不変
-- (c) CI 用 SP に条件付き・スコープ限定の RBAC 権限を追加: ADR-0012 の決定の一部変更。割当可能ロールを AcrPull に限る condition を付ければ昇格リスクは小さいが、5 日間プロジェクトで得るもの（ロール割当の Terraform 管理）に対して ADR 改定 + 権限追加の作業が重い
+誤読を防ぐための整理: **3 案のうち「RBAC を使わない」のは (a) だけ**である。(b) と (c) の認証はどちらも同じ「マネージド ID + AcrPull ロール割当」（= RBAC）であり、両者の違いは**そのロール割当を誰が・どの管理下で払い出すか**（手動・Terraform 管理外か、CI の Terraform 管理下か）でしかない。(b) の採択は「RBAC を諦めた」のではなく、「RBAC の払い出しを Terraform の外に置いた」である。
 
-現時点の Terraform コードは (b) を仮置き（identity を data source 参照）している。(a)/(c) 採択時は該当箇所（`data "azurerm_user_assigned_identity"` / `identity` / `registry` ブロック）を差し替える。
+- (a) ACR の admin user を有効化し username/password で pull（**却下**）: ロール割当が不要になるため権限問題は消えるが、admin user は **ACR 単位の共有パスワードで、pull した主体を追跡できない**。パスワードのローテーションが運用負荷として残り、資格情報が tfstate に平文で載る（state の sensitive 値の扱いは <https://developer.hashicorp.com/terraform/language/manage-sensitive-data> ）。3 案で唯一 RBAC を使わない選択であり、リポジトリ全体で積んできた最小権限の一貫性（ADR-0012）を壊す。Microsoft 自身も admin user を「主に単一ユーザーによるテスト用途」と位置づけ、複数ユーザーでの共有を非推奨としている（出典: <https://learn.microsoft.com/en-us/azure/container-registry/container-registry-authentication> の Admin account 節、2026-08-21 確認）
+- **(b) user-assigned managed identity `id-felisaichatbot-dev` + AcrPull を手動作成し、Terraform 管理外にする（採択）**: 手動作成は 1 回きり（`az identity create` + `az role assignment create`）。ADR-0012 の決定（SP のロールは 2 件のみ）は不変のまま成立する。管理外の代償（`terraform plan` による drift 検出なし）は、ADR-0014 と同じ枠組みで[管理外リソース台帳](../operations/terraform-unmanaged-resources.md)（#8 / #9）の読み取り確認コマンドが代替する
+- (c) CI 用 SP に条件付き・スコープ限定の RBAC 権限を追加（**却下**）: ロール割当も Terraform 管理下に置けるため、コードと実物の一致という意味での一貫性は 3 案で最も高い。しかし CI の SP に「権限を与える権限」（`roleAssignments/write`）を持たせることになり、condition で付与可能ロールを AcrPull に絞っても**権限昇格の経路そのものを新設する**ことに変わりはない。ADR-0012 で RBAC Administrator を意図的に外した決定を一部覆すことにもなる（覆すなら上書き ADR が必要）。5 日間の制約下で得られる利得（ロール割当 1 件の宣言的管理）に見合わない
+
+採択理由:
+
+- **職務分掌（separation of duties）**: アイデンティティと権限の払い出し（人が・承認を経て・まれに行う操作）を、ワークロードの払い出し（CI が・毎日・自動で行う操作）から分離する。CI の自動実行主体には権限を配る力を持たせない。ADR-0012（CI の権限を Terraform 管理リソースの RG に限定）と一貫し、ADR-0014（Azure OpenAI を管理外に据え置く）と同型の「管理対象・破壊経路にそもそも入れない」判断
+- **寿命が違うものを同じ層に置かない**: ID と AcrPull 割当は据え置き（1 回作れば残り続ける）、ACR / Container Apps は毎日 destroy / apply で作り直す。寿命の違うものを ephemeral 層に混ぜると、毎朝の再構築のたびに権限の再払い出しが発生する。ID と権限を層の外に出せば、ephemeral 層は「毎日全部消して全部作る」を純粋に保てる
+
+付随する 2 つの設計値:
+
+- **ロール割当のスコープは ACR 個体ではなく RG `rg-felisaichatbot-dev-tf`**: ACR は毎日 destroy / 再作成される。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝手動で作り直すことになる（= 手動作成 1 回きりの利点が消える）。RG スコープなら **ACR を作り直してもロール割当が生き残る**。スコープを広げる代償は小さい: AcrPull の権限は `Microsoft.ContainerRegistry/registries/pull/read` の 1 action のみ（`az role definition list --name AcrPull` 実測 2026-08-21。定義: <https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#acrpull> ）で、RG スコープにしても届く先は RG 内の ACR（現状 1 個）からの pull だけ
+- **ID の置き場も RG `rg-felisaichatbot-dev-tf`**: CI 用 SP はこの RG への Contributor しか持たない（ADR-0012）。Terraform が ID を data source で読み、Container App へ紐付ける操作には `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` が必要で（この action を持つ組み込みロールの定義: <https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/identity#managed-identity-operator> ）、Contributor は RG 内でこれを含む。**ID を SP の権限が届かない別 RG に置くと、CI の plan / apply が ID の読み取り・紐付けの時点で失敗する**ため、置き場は権限スコープ内の一択である。この RG は手動作成・Terraform 管理外（台帳 #3）で ephemeral 層の destroy では消えないため、据え置きリソースの置き場として寿命も合う
 
 ### 7. Terraform 上の実装形（補足決定）
 
@@ -102,8 +112,8 @@ walking skeleton（[day3-5-execution-plan.md §3-2](../operations/day3-5-executi
 
 - `terraform/ephemeral/`: backend.tf / provider.tf / variables.tf / main.tf / outputs.tf を新設（state key は `ephemeral/terraform.tfstate`）
 - `.github/workflows/terraform-checks.yml`: fmt / validate の対象に `terraform/ephemeral` を追加
-- ACR 認証方式の確定後: (b) なら [terraform-unmanaged-resources.md](../operations/terraform-unmanaged-resources.md) に identity とロール割当を追記する PR を出す。(a)/(c) なら本 ADR を更新し、(c) の場合は ADR-0012 を上書きする ADR を別に書く
-- 本層の apply は認証方式確定まで行わない（CI のデプロイ workflow 整備も同様に保留）
+- [terraform-unmanaged-resources.md](../operations/terraform-unmanaged-resources.md) に #8（マネージド ID）/ #9（AcrPull ロール割当）を追記する（本 ADR と同じ PR で実施）。手動作成コマンドの正本は台帳の「作り直す手順」
+- 本層の apply は、ID とロール割当の手動作成（ユーザー承認のうえ実行）が済むまで行わない（CI のデプロイ workflow 整備も同様に保留）
 
 ## 関連
 

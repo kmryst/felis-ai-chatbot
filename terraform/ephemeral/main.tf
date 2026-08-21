@@ -35,9 +35,8 @@ resource "azurerm_container_registry" "main" {
   # （Retail Prices API 実測 2026-08-21。Standard 0.6666 USD/日 の 1/4）。
   sku = "Basic"
 
-  # admin user は無効のまま（既定値の明示）。ACR pull はマネージド ID + AcrPull で行う方針だが、
-  # ロール割当の作り方が未確定（ADR-0015 の保留事項）。admin user 案 (a) が採択された場合のみ
-  # ここを true にする。
+  # admin user は無効のまま（既定値の明示）。ACR pull はマネージド ID + AcrPull で行う
+  # （ADR-0015 選択肢 6-(b) で確定。admin user 案 (a) は主体を追跡できない共有パスワードのため却下）。
   admin_enabled = false
 }
 
@@ -78,10 +77,11 @@ resource "azurerm_container_app_environment" "main" {
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
 }
 
-# ACR pull 用 user-assigned managed identity。
-# 【未確定（ADR-0015）】identity 本体と AcrPull ロール割当の作成方法は保留中。
-# 手動作成（Terraform 管理外・台帳記載）案が採択されるまで、この data source は
-# 実体がなく plan / apply は通らない（validate は通る）。
+# ACR pull 用 user-assigned managed identity（ADR-0015 選択肢 6-(b) で確定）。
+# identity 本体と AcrPull ロール割当（RG スコープ）は Terraform 管理外・手動作成
+# （docs/operations/terraform-unmanaged-resources.md #8 / #9 が正本）。ID と権限は据え置き、
+# ACR / Container Apps は毎日 destroy / apply という寿命の分離のため、この層は読み取り参照のみ。
+# 手動作成が済むまでは実体がなく plan / apply は通らない（validate は通る）。
 data "azurerm_user_assigned_identity" "acr_pull" {
   name                = var.acr_pull_identity_name
   resource_group_name = data.azurerm_resource_group.dev.name

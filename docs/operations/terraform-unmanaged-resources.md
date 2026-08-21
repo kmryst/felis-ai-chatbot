@@ -23,6 +23,8 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | 5 | `felisaichatbottfstate` + container `tfstate` | Storage Account（tfstate backend） | RG `rg-felisaichatbot-tfstate` / japaneast | 鶏と卵（tfstate の置き場） |
 | 6 | `felis-ai-chatbot-github-actions` + federated credential 1 本 | Entra ID アプリ登録 + service principal | Entra ID（リージョン概念なし） | 鶏と卵（Terraform 実行主体の認証基盤） |
 | 7 | ロール割当 2 件（Contributor / Storage Blob Data Contributor） | Role assignment | #3 / #5 のスコープ | destroy すると CI の権限が壊れる |
+| 8 | `id-felisaichatbot-dev` | User-assigned managed identity | RG `rg-felisaichatbot-dev-tf` / japaneast | 据え置き判断（ADR-0015。寿命の分離 + 職務分掌） |
+| 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
 
 理由区分の意味:
 
@@ -162,6 +164,78 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 
 - **固有のリスク・注意**: 2 件より**多い**のは権限昇格の兆候、**少ない**のは CI の apply / state アクセスが壊れる予兆。どちらも即調査する。付与しないと決めたもの（サブスクリプション Contributor / RBAC Administrator）は [bootstrap.md §11-3](./bootstrap.md#11-3-ロール割当least-privilege) と ADR-0012 に記録済み
 
+## 8. User-assigned managed identity `id-felisaichatbot-dev`
+
+| 項目 | あるべき値 |
+| --- | --- |
+| 名前 / 種類 | `id-felisaichatbot-dev` / Microsoft.ManagedIdentity/userAssignedIdentities |
+| 場所 | RG `rg-felisaichatbot-dev-tf` / japaneast |
+| 用途 | Container App `ca-felisaichatbot-dev` が ACR `felisaichatbotacrdev` から pull する際の認証主体（#9 の AcrPull を保持） |
+
+> **状態注記（2026-08-21）**: 本エントリの起票時点で Azure 上には**未作成**（作成コマンドはユーザー承認待ち）。作成後、確認コマンドの実測をもってこの注記を削除する。
+
+- **なぜ管理外か**: 据え置き判断（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6-(b)）。理由は 2 つ。(1) **寿命の分離**: ACR / Container Apps は毎日 destroy / apply される ephemeral 層だが、この ID と #9 の権限は 1 回作れば据え置く。寿命の違うものを同じ層に置くと毎朝の権限再払い出しが発生する。(2) **職務分掌**: アイデンティティと権限の払い出しは人が承認を経て行い、CI の自動実行主体（SP）には権限を配る力を持たせない（ADR-0012 と一貫）。なお Terraform 管理にしても、対になる #9 のロール割当は SP の権限では作れないため片手落ちになる
+- **置き場が `rg-felisaichatbot-dev-tf` である理由**: CI 用 SP はこの RG への Contributor しか持たない（ADR-0012）。Terraform（ephemeral 層）が `data "azurerm_user_assigned_identity"` で ID を読み、Container App へ紐付ける（`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` が必要）には、ID が SP の権限スコープ内にあることが必須。別 RG に置くと CI の plan / apply が失敗する（ADR-0015 選択肢 6 の「付随する 2 つの設計値」）
+- **作り直す手順**:
+
+  ```bash
+  az identity create \
+    --name id-felisaichatbot-dev \
+    --resource-group rg-felisaichatbot-dev-tf \
+    --location japaneast
+  ```
+
+  再作成すると `principalId` が変わるため、**#9 のロール割当も必ず作り直す**（旧 principalId 宛ての割当は Unknown 主体の孤児になる。見つけたら削除する）
+
+- **確認コマンド**:
+
+  ```bash
+  az identity show --name id-felisaichatbot-dev --resource-group rg-felisaichatbot-dev-tf \
+    --query '{name:name, location:location, principalId:principalId, clientId:clientId}' -o json
+  ```
+
+- **固有のリスク・注意**:
+  - `terraform destroy`（ephemeral 層）では消えない（state にないものは destroy の対象外）。ただし **`az group delete -n rg-felisaichatbot-dev-tf` は ID ごと消す**。また CI 用 SP は RG Contributor として技術的にはこの ID を削除**できてしまう**（Terraform の管理外なのでコード起因では起きないが、workflow の暴走・誤操作は構造上防げない。消えたら pull 失敗で検知し、上記手順で作り直す）
+  - `principalId` / `clientId` は識別子であり秘密ではない。ID にはシークレットが存在しない（マネージド ID の利点そのもの）
+
+## 9. AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`）
+
+| 項目 | あるべき値 |
+| --- | --- |
+| ロール | `AcrPull`（actions は `Microsoft.ContainerRegistry/registries/pull/read` の 1 件のみ。`az role definition list --name AcrPull` 実測 2026-08-21） |
+| assignee | #8 の `principalId`（principal type: ServicePrincipal） |
+| スコープ | RG `rg-felisaichatbot-dev-tf`（#3。**ACR 個体ではない**） |
+
+> **状態注記（2026-08-21）**: #8 と同じく未作成（作成コマンドはユーザー承認待ち）。作成後、確認コマンドの実測をもってこの注記を削除する。
+
+- **なぜ管理外か**: CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（[ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) で RBAC Administrator を意図的に不付与）。Terraform に書くと CI からの apply が必ず権限エラーで失敗する。SP に権限を足す案（ADR-0015 選択肢 6-(c)）は権限昇格経路の新設として却下した。#7 と同じ「権限が壊れる」区分でもある: この割当が消えると Container App のイメージ pull が全部止まる
+- **スコープが RG である理由**: ACR `felisaichatbotacrdev` は ephemeral 層で毎日 destroy / 再作成される。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
+- **作り直す手順**（#8 が存在する前提。`--assignee-object-id` + `--assignee-principal-type` は Microsoft Graph への問い合わせと伝搬遅延起因のエラーを避けるため）:
+
+  ```bash
+  PRINCIPAL_ID=$(az identity show --name id-felisaichatbot-dev \
+    --resource-group rg-felisaichatbot-dev-tf --query principalId -o tsv)
+  SCOPE=$(az group show --name rg-felisaichatbot-dev-tf --query id -o tsv)
+  az role assignment create \
+    --role AcrPull \
+    --assignee-object-id "$PRINCIPAL_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --scope "$SCOPE"
+  ```
+
+- **確認コマンド**:
+
+  ```bash
+  PRINCIPAL_ID=$(az identity show --name id-felisaichatbot-dev \
+    --resource-group rg-felisaichatbot-dev-tf --query principalId -o tsv)
+  az role assignment list --assignee "$PRINCIPAL_ID" --all \
+    --query "[].{role:roleDefinitionName, scope:scope}" -o json   # AcrPull / RG rg-felisaichatbot-dev-tf の 1 件のみのはず
+  ```
+
+- **固有のリスク・注意**:
+  - 確認結果が 1 件より**多い**のは「誰かがこの ID に権限を足した」兆候（この ID の職務は ACR pull だけ）。**少ない（0 件）** なら Container App の pull が壊れる予兆。どちらも即調査する
+  - #8 を再作成した場合、この割当は旧 principalId 宛てのまま残り**効かない**（assignee が Unknown と表示される）。#8 の手順どおり割当も作り直し、孤児の割当は削除する
+
 ---
 
 ## 関連
@@ -170,5 +244,6 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 - [ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — SP 最小権限・RG 分離（#3 / #6 / #7 の設計判断）
 - [ADR-0013](../adr/0013-azure-resource-naming-convention.md) — 命名規則と Azure OpenAI の改名しない例外
 - [ADR-0014](../adr/0014-keep-azure-openai-out-of-terraform.md) — Azure OpenAI を Terraform 管理外に据え置く判断（#1 の正本）
+- [ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) — ACR pull 認証方式（#8 / #9 の正本。選択肢 6）
 - [bootstrap.md](./bootstrap.md) §2 / §11 / §12 — 各リソースの作成手順の正本
 - [day3-5-execution-plan.md](./day3-5-execution-plan.md) §8 — 全消し手順（3 RG の削除順と保留判断）

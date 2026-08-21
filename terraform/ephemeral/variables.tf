@@ -66,8 +66,9 @@ variable "database_url" {
 variable "acr_pull_identity_name" {
   description = <<-DESC
     Container App が ACR pull に使う user-assigned managed identity 名（ADR-0013 の予約名）。
-    【注意】AcrPull ロール割当を誰がどう作るかは ADR-0015 の未確定事項。identity と
-    ロール割当が手動作成されるまで、この層の apply は通らない前提（ADR-0015 参照）。
+    identity 本体と AcrPull ロール割当（RG スコープ）は Terraform 管理外・手動作成
+    （ADR-0015 選択肢 6-(b)。台帳 terraform-unmanaged-resources.md #8 / #9 が正本）。
+    手動作成が済むまで、この層の apply は通らない前提。
   DESC
   type        = string
   default     = "id-felisaichatbot-dev"
