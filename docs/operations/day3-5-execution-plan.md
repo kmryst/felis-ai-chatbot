@@ -359,11 +359,11 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（A
 
 ## 8. コスト見張り
 
-- **クレジット残の確認**（Day 3 に実測して確立した手段。2026-08-21）: CLI では Microsoft.Consumption の credits/balanceSummary API を billing profile 経由で叩く。以下をそのまま実行する（billing account / profile 名は読み取り系の `az billing account list` / `az billing profile list` で取得できる。本サブスクリプションの実値）:
+- **クレジット残の確認**（Day 3 に実測して確立した手段。2026-08-21）: CLI では Microsoft.Consumption の credits/balanceSummary API を billing profile 経由で叩く。以下をそのまま実行する（billing account / profile 名は ARM の識別子だが、public リポジトリにはハードコードせず毎回 CLI で取得する）:
 
   ```bash
-  BA='8ff7a209-5bc8-55fc-86ed-39aec6eccdf6:55f5a985-bfc2-45fb-893f-72caa72a45e3_2019-05-31'
-  BP='TRET-DAOV-BG7-PGB'
+  BA=$(az billing account list --query "[0].name" -o tsv)
+  BP=$(az billing profile list --account-name "$BA" --query "[0].name" -o tsv)
   az rest --method get --url "https://management.azure.com/providers/Microsoft.Billing/billingAccounts/$BA/billingProfiles/$BP/providers/Microsoft.Consumption/credits/balanceSummary?api-version=2023-05-01" \
     --query "properties.balanceSummary.{current: currentBalance, estimated: estimatedBalance}" -o json
   ```
