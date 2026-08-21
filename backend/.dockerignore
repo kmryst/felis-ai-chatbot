@@ -1,0 +1,30 @@
+# ビルドコンテキストから除外するもの。
+# secret（.env）は絶対にイメージへ入れない。万一 COPY 対象が広がっても
+# ここで止まるよう、コンテキスト直下に存在しないものも防御的に列挙する
+
+# secret
+.env
+.env.*
+*.pem
+*.key
+
+# VCS
+.git
+.gitignore
+
+# Python ローカル生成物（イメージ内の依存は uv sync で作る）
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.python-version
+
+# テスト（実行イメージに不要）
+tests
+
+# コンテキストが誤ってリポジトリルートになった場合の防御
+frontend
+node_modules
+terraform
+docs
+.github
