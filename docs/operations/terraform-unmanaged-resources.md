@@ -171,8 +171,8 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | 名前 / 種類 | `id-felisaichatbot-dev` / Microsoft.ManagedIdentity/userAssignedIdentities |
 | 場所 | RG `rg-felisaichatbot-dev-tf` / japaneast |
 | 用途 | Container App `ca-felisaichatbot-dev` が ACR `felisaichatbotacrdev` から pull する際の認証主体（#9 の AcrPull を保持） |
-
-> **状態注記（2026-08-21）**: 本エントリの起票時点で Azure 上には**未作成**（作成コマンドはユーザー承認待ち）。作成後、確認コマンドの実測をもってこの注記を削除する。
+| `principalId` | `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`（2026-08-21 作成時に実測。識別子であり秘密ではない） |
+| `clientId` | `6d8d587a-4dcd-4cec-8121-1928ad2a440d`（同上） |
 
 - **なぜ管理外か**: 据え置き判断（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6-(b)）。理由は 2 つ。(1) **寿命の分離**: ACR / Container Apps は毎日 destroy / apply される ephemeral 層だが、この ID と #9 の権限は 1 回作れば据え置く。寿命の違うものを同じ層に置くと毎朝の権限再払い出しが発生する。(2) **職務分掌**: アイデンティティと権限の払い出しは人が承認を経て行い、CI の自動実行主体（SP）には権限を配る力を持たせない（ADR-0012 と一貫）。なお Terraform 管理にしても、対になる #9 のロール割当は SP の権限では作れないため片手落ちになる
 - **置き場が `rg-felisaichatbot-dev-tf` である理由**: CI 用 SP はこの RG への Contributor しか持たない（ADR-0012）。Terraform（ephemeral 層）が `data "azurerm_user_assigned_identity"` で ID を読み、Container App へ紐付ける（`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` が必要）には、ID が SP の権限スコープ内にあることが必須。別 RG に置くと CI の plan / apply が失敗する（ADR-0015 選択肢 6 の「付随する 2 つの設計値」）
@@ -203,10 +203,10 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | 項目 | あるべき値 |
 | --- | --- |
 | ロール | `AcrPull`（actions は `Microsoft.ContainerRegistry/registries/pull/read` の 1 件のみ。`az role definition list --name AcrPull` 実測 2026-08-21） |
-| assignee | #8 の `principalId`（principal type: ServicePrincipal） |
+| assignee | #8 の `principalId` = `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`（principal type: ServicePrincipal） |
 | スコープ | RG `rg-felisaichatbot-dev-tf`（#3。**ACR 個体ではない**） |
 
-> **状態注記（2026-08-21）**: #8 と同じく未作成（作成コマンドはユーザー承認待ち）。作成後、確認コマンドの実測をもってこの注記を削除する。
+2026-08-21 作成。作成直後に確認コマンドを実測し、**この ID への割当が AcrPull（RG スコープ）の 1 件のみ**であることを確認済み。
 
 - **なぜ管理外か**: CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（[ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) で RBAC Administrator を意図的に不付与）。Terraform に書くと CI からの apply が必ず権限エラーで失敗する。SP に権限を足す案（ADR-0015 選択肢 6-(c)）は権限昇格経路の新設として却下した。#7 と同じ「権限が壊れる」区分でもある: この割当が消えると Container App のイメージ pull が全部止まる
 - **スコープが RG である理由**: ACR `felisaichatbotacrdev` は ephemeral 層で毎日 destroy / 再作成される。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
