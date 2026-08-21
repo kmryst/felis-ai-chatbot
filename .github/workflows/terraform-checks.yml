@@ -48,7 +48,7 @@ jobs:
       - name: Terraform Init & Validate (all root modules)
         run: |
           set -e
-          for dir in terraform/persistent; do
+          for dir in terraform/persistent terraform/ephemeral; do
             echo "--- $dir ---"
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate
