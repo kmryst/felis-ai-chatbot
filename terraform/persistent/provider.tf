@@ -30,6 +30,17 @@ provider "azurerm" {
       # ではなく「気をつけなくても安全」にしておく（ADR-0012 の権限分離と同じ考え方。ADR-0014）。
       purge_soft_delete_on_destroy = false
     }
+
+    log_analytics_workspace {
+      # destroy 時に soft delete を飛ばして完全削除する（既定は false = soft delete）。
+      # soft delete は workspace 名を 14 日間予約し、その間は同名の新規作成ができない（出典:
+      # https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace ）。
+      # revive runbook（azure-resource-inventory.md「再現手順」）は「destroy 後に
+      # terraform apply だけでデモ用へ戻す」前提であり、名前予約が残ると persistent 層の
+      # apply が同名 workspace を作れず成立しない。誤 destroy 時の 14 日間の復旧の窓
+      # （ADR-0016 起案時の判断）より runbook の成立を優先する（改訂の経緯は ADR-0016 追記）。
+      permanently_delete_on_destroy = true
+    }
   }
   # subscription_id はコードに書かず ARM_SUBSCRIPTION_ID 環境変数
   # （CI では azure/login が設定する環境変数）から解決する。

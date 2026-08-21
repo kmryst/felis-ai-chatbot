@@ -140,3 +140,149 @@ ca-felisaichatbot-dev     rg-felisaichatbot-dev-tf  japaneast   Microsoft.App/co
 
 - **達成扱いにしてよいと考えるもの**: ACR pull 認証（ADR-0015 選択肢 6-(b) の実地検証）/ ingress 公開 / egress IP→firewall の Terraform 結線 / 段階 apply 手順の確立 / 全体 plan 差分ゼロ
 - **次のタスク（これが通って初めて §3-5 の 1 点目が達成）**: backend の Dockerfile 作成 → SHA タグで ACR へ push → `container_image` / `container_target_port`（8000）/ `database_url` を差し替えて apply → `https://<FQDN>/readyz` の 200 を実測。CI（OIDC）経由のデプロイ整備（§3-2 の 3 点目）も未着手
+
+---
+
+## backend 段階 + Log Analytics 層移設の実測記録（2026-08-21 追記）
+
+hello-world 段階（上記）に続く **backend 段階**（backend イメージへの差し替え → `/readyz` の外部実測）と、
+**ADR-0016 の移設実操作（destroy → apply → apply）** の記録。時刻はすべて UTC。
+
+### 前提
+
+- main = `7c81be0`（ADR-0016/0017 と Terraform 両層のコード変更 #78、backend Dockerfile #77 マージ済み）
+- 移設手順の正本は [ADR-0016](../../adr/0016-log-analytics-workspace-in-persistent-layer.md)。実操作は本記録が初回
+
+### タイムライン（2026-08-21）
+
+| 操作 | 結果 / 所要 |
+| --- | --- |
+| `terraform -chdir=terraform/ephemeral destroy` | **5 destroyed / 8m05s**（うち CAE 削除 7m31s。旧 Log Analytics は features の `permanently_delete_on_destroy = true` により完全削除） |
+| `terraform -chdir=terraform/persistent plan` | **1 to add, 0 to change, 0 to destroy**（追加は Log Analytics のみ。PostgreSQL に差分なしを確認してから apply） |
+| `terraform -chdir=terraform/persistent apply` | **1 added / 51s**（workspace 作成 48s。名前 conflict なし = 完全削除が効き、ADR-0016 のフォールバック手順は不要だった） |
+| ephemeral 第1段 `apply -target=ACR,CAE` | **2 added / 1m02s** |
+| `docker build`（backend、タグ `sha-7c81be0`） | 2.8s（ローカルキャッシュ利用） |
+| `az acr login` + `docker push` | 2.9s |
+| 第2段 `apply -target=azurerm_container_app.main` | **1 added / 41s**（Container App 本体 36s） |
+| 第3段 `apply`（全体） | **1 added / 1m17s**（firewall rule 作成 1m07s） |
+| `/readyz` へ外部から `curl -i`（07:58:21Z） | **HTTP/2 200**・本文 `{"status":"ok","db":"ok"}`（下記） |
+| `terraform plan -detailed-exitcode`（ephemeral 全体） | **exitcode 0（差分ゼロ）** |
+
+### デプロイした backend イメージ
+
+| 項目 | 値 |
+| --- | --- |
+| イメージ | `felisaichatbotacrdev.azurecr.io/backend:sha-7c81be0`（ビルド時点の main = `7c81be0` の short SHA 由来の不変タグ。ADR-0015） |
+| digest | `sha256:33a771f6a31393ca62fd51f5cea240a30cde11a02388c12a790e6dc494a2c0be` |
+| `container_target_port` | 8000（uvicorn。hello-world 段階の 80 から変更） |
+
+Container App に渡した環境変数（値は記載しない）:
+
+- `DATABASE_URL`（Container App の secret 経由。Azure PostgreSQL への libpq DSN、DB は既定の `postgres`、`sslmode=require`）
+
+`LLM_PROVIDER` は**未設定（= 既定の `stub`）のまま**とした。判断根拠:
+
+- Day 3 のゴールは `/readyz` の 200（= DB への `SELECT 1`）であり、`/readyz` の実装（`app/main.py` / `app/db.py`）は LLM を一切使わない
+- `app/config.py` は `LLM_PROVIDER=azure-openai` のときだけ `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_KEY` を必須にする（ADR-0004 のスタブ既定）。stub のままなら必須環境変数は `DATABASE_URL` のみで、API キーを Container Apps へ渡す経路（secret 追加）を今日は作らずに済む
+- 実 LLM の結線検証は `/chat` の検証であり Day 3 のスコープ外
+
+マイグレーション / データ投入は**実施していない**。判断根拠: `/readyz` は `SELECT 1` のみでテーブルを参照しない（`app/db.py` 実読で確認）。Alembic 適用・seed 投入は Day 4 のドリル準備で別途行う（計画書 §3-5 の 2 点目は本日時点で未達のまま）。
+
+### 検証の生出力（2026-08-21）
+
+#### 1. `/readyz` の外部実測（07:58:21Z）
+
+```console
+$ curl -si https://ca-felisaichatbot-dev--ent1yog.gentleforest-75fced2c.japaneast.azurecontainerapps.io/readyz
+HTTP/2 200
+date: Fri, 21 Aug 2026 07:58:21 GMT
+server: uvicorn
+content-length: 25
+content-type: application/json
+x-request-id: e423b82b-553f-46c9-97b9-11ed97d95f61
+
+{"status":"ok","db":"ok"}
+```
+
+（time_total 0.102s。`db: "ok"` は `app/db.py` の `check_database_ready` が Azure PostgreSQL へ psycopg で接続し
+`SELECT 1` を実行できた場合にのみ返る。DB へ到達できない場合は 503 `{"status":"unavailable","db":"unreachable"}` になる実装）
+
+#### 2. revision の状態（= ACR pull 成功の判定。hello-world 段階と同じ判定基準）
+
+```console
+$ az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev \
+    --query '[].{name:name,active:properties.active,state:properties.runningState,health:properties.healthState,replicas:properties.replicas}' -o table
+Name                            Active    State              Health    Replicas
+------------------------------  --------  -----------------  --------  ----------
+ca-felisaichatbot-dev--ent1yog  True      RunningAtMaxScale  Healthy   1
+```
+
+#### 3. egress IP と PostgreSQL firewall rule（IP は前回から変わった）
+
+```console
+$ az postgres flexible-server firewall-rule list -g rg-felisaichatbot-dev-tf -s pgsql-felisaichatbot-dev -o table
+EndIpAddress    Name                      ResourceGroup             StartIpAddress
+--------------  ------------------------  ------------------------  ----------------
+74.176.38.216   aca-egress-74-176-38-216  rg-felisaichatbot-dev-tf  74.176.38.216
+<WORKSTATION_IP>  allow-workstation         rg-felisaichatbot-dev-tf  <WORKSTATION_IP>
+```
+
+- egress IP は hello-world 段階の `20.18.200.55` から `74.176.38.216` に**変わった**（「Outbound IPs might change over time」の実例。ADR-0015 選択肢 4-(a) の既知の不確実性が destroy / 再作成で実際に発現）。旧 IP の rule は層の destroy で消え、新 IP の rule が第3段 apply で作られた。設計どおり「毎回その時点の実 IP で作り直す」が機能している
+
+#### 4. Log Analytics 移設の成立
+
+```console
+$ az monitor log-analytics workspace show -g rg-felisaichatbot-dev-tf -n log-felisaichatbot-dev \
+    --query '{name:name,state:provisioningState,sku:sku.name,retention:retentionInDays,quota:workspaceCapping.dailyQuotaGb,created:createdDate}' -o json
+{
+  "created": "2026-08-21T07:53:43.2230554Z",
+  "name": "log-felisaichatbot-dev",
+  "quota": 1.0,
+  "retention": 30,
+  "sku": "PerGB2018",
+  "state": "Succeeded"
+}
+```
+
+- `created` が移設当日の persistent apply 時刻 = 新規作成された workspace であることの証拠（設定値 PerGB2018 / 30 日 / 1 GB は ADR-0016 どおり据え置き）
+- state の所属（`terraform state list` 実測）: `azurerm_log_analytics_workspace.main` は **persistent 層の state のみ**にあり、ephemeral 層の state は `data.azurerm_log_analytics_workspace.main`（読み取り参照）のみ。**以後 ephemeral の destroy で workspace は消えない**
+- ephemeral destroy（上記タイムライン 1 行目）の後も workspace を作り直せた（= 旧 workspace の完全削除で名前が即時解放された）ことが、移設手順の soft delete 対処の実測になっている
+
+#### 5. PostgreSQL が無傷であることの確認（destroy / stop を行っていない）
+
+```console
+$ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
+    --query '{state:state,earliestRestore:backup.earliestRestoreDate,retention:backup.backupRetentionDays}' -o json
+{
+  "earliestRestore": "2026-08-21T05:59:00.967587+00:00",
+  "retention": 7,
+  "state": "Ready"
+}
+```
+
+（state Ready・`earliestRestoreDate` が保持されており、バックアップチェーンは継続。Day 4 の PITR ドリルの前提を壊していない）
+
+#### 6. クレジット残（§8 の手順で再取得）
+
+```json
+{
+  "current":   { "currency": "USD", "value": 200.0 },
+  "estimated": { "currency": "USD", "value": 199.99 }
+}
+```
+
+（hello-world 段階の実測と同値。当日分の課金反映遅延は前回と同様）
+
+### provider features の整理（移設完了に伴う同日変更）
+
+- `terraform/persistent/provider.tf` に `log_analytics_workspace { permanently_delete_on_destroy = true }` を**追加**（revive runbook の成立要件。経緯は ADR-0016 追記）
+- `terraform/ephemeral/provider.tf` から同ブロックを**削除**（移設のためだけに必要だった設定で、完了後は無効果。ADR-0016 追記）
+- どちらも変更後に `terraform plan -detailed-exitcode` を実測し **exitcode 0（差分ゼロ）** = features 変更は既存リソースに影響しないことを確認済み
+
+### Day 3 のゴール判定
+
+計画書 §3-5 の 1 点目「`/readyz` が 200（= Azure 上の PostgreSQL へ `SELECT 1` が通り、Container Apps からの接続経路が開通している）」は、
+上記 1.（HTTP 200 + `db: "ok"`）と 2.（revision Healthy = ACR pull 成功）をもって**達成**と判定する。
+
+- hello-world 段階で「実証できていない」と明記した「Container Apps から PostgreSQL へ `SELECT 1` が通ること」が、本記録で実証された
+- 未達のまま残るもの（正直な線引き）: §3-2 の 3 点目「CI（GitHub Actions）経由のデプロイ」（本記録のデプロイはローカル実行。CI 経由は未整備）、§3-5 の 2 点目「psql 接続 + Alembic 適用」（Day 4 準備で実施）

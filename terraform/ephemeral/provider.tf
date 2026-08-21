@@ -20,20 +20,11 @@ terraform {
 
 provider "azurerm" {
   features {
-    # cognitive_account の purge 抑止（persistent 層 provider.tf 参照）は、
-    # この層が Cognitive Services を一切管理しないため書かない。
-
-    log_analytics_workspace {
-      # destroy 時に soft delete を飛ばして完全削除する（既定は false = soft delete。
-      # 出典: azurerm 5.1.0 features-block ガイド）。soft delete は workspace 名を
-      # 14 日間予約し、その間は同名の新規作成ができない（出典:
-      # https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace ）。
-      # 毎日 destroy / apply するこの層に 14 日の名前予約は成立しないため true にする。
-      # ADR-0016 の移設手順（この層の state に残る旧 workspace を destroy で完全削除し、
-      # persistent 層での同名作成を確実にする）もこの設定が前提。移設後にこの層が
-      # workspace を管理することはないが、上記理由により設定は残す。
-      permanently_delete_on_destroy = true
-    }
+    # 空ブロックだが azurerm では features {} 自体が必須。
+    # 旧 log_analytics_workspace { permanently_delete_on_destroy = true } は
+    # ADR-0016 の移設（この層の state に残っていた旧 workspace を destroy で完全削除し、
+    # persistent 層での同名即時再作成を保証する）のためだけに必要だった設定で、
+    # 移設完了（2026-08-21 実施）に伴い削除した。この層は Log Analytics を管理しない。
   }
   # subscription_id はコードに書かず ARM_SUBSCRIPTION_ID 環境変数
   # （CI では azure/login が設定する環境変数）から解決する。

@@ -65,6 +65,13 @@ Accepted
 - 移設時点で workspace 内のログはリセットされる。以後は ephemeral の毎日 destroy でログが消えない
 - [bootstrap.md](../operations/bootstrap.md) §5-4 の層分割ツリーを実装後の姿に更新（ACR の配置変更・Key Vault 不採用の注記を含む）
 
+## 追記（2026-08-21: 移設実施後の provider features の改訂）
+
+移設の実操作（destroy → apply → apply）は 2026-08-21 に実施済み（実測は [walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）。あわせて provider `features` の `log_analytics_workspace { permanently_delete_on_destroy = true }` の配置を、本 ADR 起案時の決定から次のとおり改める。
+
+- **ephemeral 層からは削除**: この設定は移設手順（この層の state に残っていた旧 workspace を destroy で完全削除し、persistent 層での同名即時再作成を保証する）のためだけに必要だった。移設完了後、この層は Log Analytics を管理せず設定は無効果になる。無効果な設定を残すと「この層は Log Analytics の削除に対処済み」という誤読を招くため削除した
+- **persistent 層には追加**（起案時の「設定しない」判断を上書き）: revive runbook（[azure-resource-inventory.md](../operations/azure-resource-inventory.md) の「再現手順」）は「destroy 後に `terraform apply` だけでデモ用へ戻す」前提であり、soft delete の 14 日間の名前予約が残ると persistent 層の apply が同名 workspace を作れず runbook が成立しない。誤 destroy 時の復旧の窓（起案時の判断根拠）と引き換えに、runbook の成立を優先する。誤 destroy への備えは「証跡を `docs/verification/` にコミットしてから destroy する」運用（台帳「プロジェクト終了時の後片付け」節の前提）に委ねる
+
 ## 関連
 
 - [ADR-0015](./0015-ephemeral-layer-acr-container-apps-design.md) — 本 ADR が配置のみ supersede する元の設計（設定値・参照方針はそのまま引き継ぐ）
