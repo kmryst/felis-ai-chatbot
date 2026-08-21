@@ -30,8 +30,10 @@ variable "container_image" {
   type        = string
 
   validation {
-    condition     = !endswith(var.container_image, ":latest") && strcontains(var.container_image, ":")
-    error_message = "container_image はタグ付きの完全参照を指定し、latest タグは使わないでください（ADR-0015 のイメージタグ方針）。"
+    # タグ部が空（"image:"）や空白入り（"image:bad tag"）の参照を弾き、latest を禁止する。
+    # digest 併記（image@sha256:<hex>）も末尾が ":<hex>" のためこの regex を満たす。
+    condition     = can(regex(":[a-zA-Z0-9._-]+$", var.container_image)) && !endswith(var.container_image, ":latest")
+    error_message = "container_image はタグ付きの完全参照（タグは英数字と . _ - のみ）を指定し、latest タグは使わないでください（ADR-0015 のイメージタグ方針）。"
   }
 }
 
@@ -43,13 +45,22 @@ variable "container_target_port" {
 
 variable "database_url" {
   description = <<-DESC
-    backend が読む DATABASE_URL（postgresql+asyncpg://...）。Container App の secret として渡す。
+    backend が読む DATABASE_URL（postgresql://... 形式。backend/app/db.py は psycopg で
+    素の libpq DSN を受ける）。Container App の secret として渡す。
     hello-world 段階（DB 接続なし）では空のままでよく、その場合 secret / 環境変数自体を作らない。
     実値はコミットせず TF_VAR_database_url 環境変数（CI では GitHub Secrets）で渡す。
   DESC
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    # 形式誤りをコンテナ実行時ではなく plan 時に弾く。backend/app/db.py（psycopg）が受けるのは
+    # 素の libpq DSN（postgresql:// スキーム）。SQLAlchemy 方言付き（postgresql+asyncpg:// 等）は
+    # psycopg には渡せないため、ここでは受け付けない。
+    condition     = var.database_url == "" || can(regex("^postgresql://", var.database_url))
+    error_message = "database_url は空か postgresql:// で始まる libpq DSN を指定してください（backend/app/db.py は psycopg で接続する）。"
+  }
 }
 
 variable "acr_pull_identity_name" {
