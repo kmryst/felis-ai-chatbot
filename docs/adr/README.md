@@ -51,3 +51,4 @@
 | [0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) | Accepted | CI 用 service principal の最小権限化（PR credential / RBAC Administrator を見送り）と Terraform 管理リソース専用 RG の分離 |
 | [0013](./0013-azure-resource-naming-convention.md) | Accepted | Azure リソース命名規則（CAF 略語準拠）の制定と未作成リソース名の統一（稼働中の Azure OpenAI は例外として記録） |
 | [0014](./0014-keep-azure-openai-out-of-terraform.md) | Accepted | Azure OpenAI を Terraform 管理外に据え置く（import 却下。当初理由のクォータ喪失懸念は誤りと判明し、理由を引き直して確定） |
+| [0015](./0015-ephemeral-layer-acr-container-apps-design.md) | Accepted | ephemeral 層（ACR + Container Apps）の設計 — 最小 SKU・スケールゼロ・egress 経路・イメージタグ方針・ACR pull 認証（マネージド ID + AcrPull を管理外で手動払い出し） |
