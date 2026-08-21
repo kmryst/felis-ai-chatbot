@@ -100,7 +100,7 @@ $ az postgres flexible-server firewall-rule list -g rg-felisaichatbot-dev-tf -s 
 EndIpAddress    Name                     ResourceGroup             StartIpAddress
 --------------  -----------------------  ------------------------  ----------------
 20.18.200.55    aca-egress-20-18-200-55  rg-felisaichatbot-dev-tf  20.18.200.55
-147.192.0.45    allow-workstation        rg-felisaichatbot-dev-tf  147.192.0.45
+<WORKSTATION_IP>  allow-workstation        rg-felisaichatbot-dev-tf  <WORKSTATION_IP>
 ```
 
 - `outbound_ip_addresses` は 1 件だった（複数 IP を想定した for_each 設計だが、Consumption 環境の実測は 1 件）
