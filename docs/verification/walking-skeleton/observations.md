@@ -12,7 +12,7 @@
 ## 前提
 
 - main = `2ad1bc1`（ephemeral 層の Terraform 構成マージ済み）。persistent 層は apply 済み（`pgsql-felisaichatbot-dev` state Ready。[restore-drill/observations.md](../restore-drill/observations.md)）
-- マネージド ID `id-felisaichatbot-dev` + AcrPull（RG スコープ）は手動作成済み（[管理外リソース台帳](../../operations/terraform-unmanaged-resources.md) #8 / #9）
+- マネージド ID `id-felisaichatbot-dev` + AcrPull（RG スコープ）は手動作成済み（[管理外リソース台帳](../../operations/azure-resource-inventory.md) #8 / #9）
 - apply は ADR-0015「7. Terraform 上の実装形」の段階 apply。ACR が空のままでは Container App がイメージを pull できないため、実際には `-target` を 2 回に分け、間に `az acr import` を挟んだ（下記タイムライン）
 
 ## タイムライン（2026-08-21）

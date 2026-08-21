@@ -5,7 +5,7 @@
 # firewall rule の for_each は Container App の outbound_ip_addresses（apply 後にしか
 # 確定しない値）に依存するため、リソースが何もない状態からの一発 apply は
 # 「Invalid for_each argument」で失敗する。初回・destroy 後の再構築は次の 2 段階で行う:
-#   1. terraform apply -target=azurerm_container_app.main   # ACR / LAW / CAE / App まで作成
+#   1. terraform apply -target=azurerm_container_app.main   # ACR / CAE / App まで作成
 #   2. terraform apply                                      # outbound IP が確定し firewall rule を追加
 # （§3-1「Container Apps の egress IP は ephemeral 層が apply 後に自層の firewall rule で許可する」の実装）
 
@@ -41,25 +41,18 @@ resource "azurerm_container_registry" "main" {
 }
 
 # ---------------------------------------------------------------------------
-# Log Analytics Workspace（Container Apps Environment のログ出力先）
+# Log Analytics Workspace（persistent 層が管理。この層は読み取り参照のみ）
 # ---------------------------------------------------------------------------
 
-resource "azurerm_log_analytics_workspace" "main" {
-  name                = "log-felisaichatbot-dev"
+# workspace 本体は persistent 層が管理する（ADR-0016）。この層を毎日 destroy しても
+# 監視ログが消えないようにするため（Day 5 の閾値決定は Day 3〜4 の実測レンジが前提。計画書 §7）。
+# terraform_remote_state は使わず data source で参照する（ADR-0015 の 7 と同じ理由:
+# persistent の state には sensitive 値が入るため読み取り面を増やさない）。
+# azurerm 5.1.0 の data source は id を提供し、azurerm_container_app_environment が
+# 要求するのは log_analytics_workspace_id のみ（provider スキーマで確認済み 2026-08-21）。
+data "azurerm_log_analytics_workspace" "main" {
+  name                = var.log_analytics_workspace_name
   resource_group_name = data.azurerm_resource_group.dev.name
-  location            = data.azurerm_resource_group.dev.location
-
-  # PAYG（PerGB2018）。取込 3.34 USD/GB（japaneast、Retail Prices API 実測 2026-08-21）。
-  sku = "PerGB2018"
-
-  # 保持は最小の 30 日。Analytics テーブルの interactive retention は 31 日まで
-  # 取込料金に含まれ、保持コストは発生しない（出典:
-  # https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-retention-configure ）。
-  # この層自体が毎日 destroy されるため、長期保持に意味がない。
-  retention_in_days = 30
-
-  # 取込暴走時のコスト上限ガード（変数コメント参照）
-  daily_quota_gb = var.log_analytics_daily_quota_gb
 }
 
 # ---------------------------------------------------------------------------
@@ -74,12 +67,12 @@ resource "azurerm_container_app_environment" "main" {
   # VNet 統合はしない（day3-5-execution-plan.md §3-1 / §9。作業量とコストだけ増え、
   # 検証目的に寄与しない）。既定の Azure ネットワーク上の環境として作る。
   logs_destination           = "log-analytics"
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  log_analytics_workspace_id = data.azurerm_log_analytics_workspace.main.id
 }
 
 # ACR pull 用 user-assigned managed identity（ADR-0015 選択肢 6-(b) で確定）。
 # identity 本体と AcrPull ロール割当（RG スコープ）は Terraform 管理外・手動作成
-# （docs/operations/terraform-unmanaged-resources.md #8 / #9 が正本）。ID と権限は据え置き、
+# （docs/operations/azure-resource-inventory.md #8 / #9 が正本）。ID と権限は据え置き、
 # ACR / Container Apps は毎日 destroy / apply という寿命の分離のため、この層は読み取り参照のみ。
 # 手動作成が済むまでは実体がなく plan / apply は通らない（validate は通る）。
 data "azurerm_user_assigned_identity" "acr_pull" {

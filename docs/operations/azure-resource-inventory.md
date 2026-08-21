@@ -1,18 +1,101 @@
-# Terraform 管理外リソース台帳
+# Azure リソース台帳（全リソース一覧 + Terraform 管理外リソースの詳細）
 
-本書は、Azure 上に存在するが **Terraform の管理下にないリソースの正本台帳**です。
+本書は、このプロジェクトが Azure 上に持つ**全リソースの正本台帳**です。前半（§A）は Terraform 管理下も含めた全リソースの一覧と寿命・課金、後半（§B）は Terraform 管理外リソースの詳細（なぜ管理外か / 作り直す手順 / 確認コマンド）を扱います。
+
+（履歴: 本書は管理外 9 件のみの台帳 `terraform-unmanaged-resources.md` として作られ、#76 で全リソース一覧へ拡張・改名した。管理外の詳細節の内容は据え置き）
 
 ## この台帳の役割
 
-Terraform 管理下のリソースには `terraform plan` による差分検出（コードと実物のずれの機械的な検出）があるが、**管理外リソースにはそれがない**。本台帳と各節の読み取り確認コマンドがその代替であり、**この手順書が実質的な「コード」の役割を果たす**。
+Terraform 管理下のリソースには `terraform plan` による差分検出（コードと実物のずれの機械的な検出）があるが、**管理外リソースにはそれがない**。本台帳と §B 各節の読み取り確認コマンドがその代替であり、**この手順書が実質的な「コード」の役割を果たす**。
 
-- 管理外リソースを追加・変更・削除したときは、**同じ PR で本台帳を更新する**
-- 各節の「確認コマンド」はすべて**読み取り系**で、そのまま実行できる。実行結果が「あるべき値」列と食い違ったら、それが管理外リソースにおける「plan 差分」である
-- 本台帳の実測値は 2026-08-20 に各確認コマンドを実行して記録した
+- リソースを追加・変更・削除したときは、**同じ PR で本台帳（§A の一覧と、管理外なら §B の詳細節の両方）を更新する**
+- §B の「確認コマンド」はすべて**読み取り系**で、そのまま実行できる。実行結果が「あるべき値」列と食い違ったら、それが管理外リソースにおける「plan 差分」である
+- §B の実測値は 2026-08-20〜21 に各確認コマンドを実行して記録した
 
-現時点（2026-08-20、main = PR #64 マージ後）で **Terraform が管理しているリソースは 1 つもない**。`terraform/persistent/` の `terraform plan` は通っているが初回 apply 前であり、Azure 上の全リソースが本台帳の対象である。
+## §A. 全リソース一覧（誰の管理下で・いつ消えるか）
 
-## 一覧
+### 用語（読み違えるとこの表全体を誤読する）
+
+- **管理区分**: `管理外` = Terraform の管理下にない（詳細は §B）。`persistent` / `ephemeral` = それぞれ `terraform/persistent/` / `terraform/ephemeral/` の管理下
+- **persistent** は「**ephemeral を destroy しても残る層**」の意味であって「永続」ではない。プロジェクト終了時には destroy する（層分割の定義は [bootstrap.md §5-4](./bootstrap.md) が正本）
+- **「日々の運用」と「プロジェクト終了時」は別の時間軸**である。「日々は残す（stop もしない）が、終了時には destroy する」（persistent 層）のように、両者は独立に決まる
+
+### 一覧
+
+| リソース | 管理区分 | 日々の運用 | プロジェクト終了時 | 残した場合の課金 |
+| --- | --- | --- | --- | --- |
+| RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9） | 管理外 | 触らない | 残す | $0 |
+| Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
+| tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
+| PostgreSQL Flexible Server / `azure.extensions` / firewall rule（作業端末） | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節） |
+| Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
+| ACR / Container Apps Environment / Container App / firewall rule（ACA egress） | ephemeral | 毎日 destroy | destroy | ACR のみ約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価） |
+
+### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
+
+管理外にしたのは「Terraform で作ると自分の足を撃つ」もの（鶏と卵・destroy すると権限や認証が壊れる・据え置き判断。§B の理由区分）であり、いずれも寿命が長い。だから終了時の後片付けは **`terraform -chdir=terraform/ephemeral destroy` と `terraform -chdir=terraform/persistent destroy` の 2 本で済み、`az group delete` は不要**である（手順は「プロジェクト終了時の後片付け」節）。
+
+## 12か月無料枠（PostgreSQL Flexible Server）
+
+2026-08-19 サインアップの Azure 無料アカウントには、$200 クレジット（30 日）とは別に **12 か月の無料サービス枠**があり、PostgreSQL Flexible Server が含まれる。
+
+- 原文: 「750 hours of Flexible Server—Burstable B1MS Instance, 32 GB storage, and 32 GB backup storage」（出典: <https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account> ）
+- **$200 クレジット期間中も適用される**: 「As long as you have unexpired credit or you use only free services within the limits, you're not charged.」（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
+- 24 時間 × 31 日 = **744 時間 < 750 時間**。B1ms 1 台なら**常時稼働でも無料枠内**に収まる（PostgreSQL を夜間 stop しない判断の根拠のひとつ。ADR-0017）
+- 対象は **Burstable B1MS のみ**（上記原文）。Day 5 の General Purpose へのスケールと HA standby はこの枠の対象外で、クレジットからの控除になる（クレジットが残る限り実支出は $0）
+
+### 750 時間の消費状況の確認手段
+
+- Azure Portal の Subscription 画面にある free services grid（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/check-free-service-usage> ）
+- CLI では Microsoft.Consumption の usageDetails を `az rest` で叩く経路があるはずだが**未実測**（`az consumption usage list` は PretaxCost が None で使えないことを 2026-08-21 に実測済み。[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）。初回確認時に検証して本節を更新する
+- **課金データの反映には 1〜2 日程度の遅延がある**（2026-08-21 の実測でも当日分は未反映。同 §8）。日次の見張りではなく、数日おきの確認でよい
+
+### リスクと未確定事項（「確定」と書かない）
+
+- **Day 4 の PITR ドリルでは復元先としてもう 1 台の B1ms が一時的に立つ**。2 台分の稼働時間が 750 時間に合算されるなら当月分を超え得る。超えた場合も**超過分はクレジットから引かれるだけで実支出は $0**（クレジット失効 2026-09-18 まで）
+- **未確定**（公式に明文を確認できていない事項。確定として扱わない）:
+  - 複数台の B1ms を並行稼働させたとき 750 時間が**合算**されるのか
+  - **停止中**の時間が 750 時間を消費するか（停止中もストレージ・バックアップストレージの課金自体は継続する。計画書 §2-1 No.6）
+  - 原文の「32 GB」が GB / GiB のどちらの厳密解釈か
+- **無料枠の終了は 2027-08 頃**（サインアップ 2026-08-19 から 12 か月。「Your free services and quantities expire at the end of 12 months.」出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
+
+## 従量課金へのアップグレード（判断期限 2026-09-18）
+
+- **アップグレードしないと、クレジットの失効（2026-09-18。lots API 実測。計画書 §8）でサブスクリプションと全サービスが無効化される**: 「Your subscription and services are disabled when your credit runs out or expires at the end of 30 days. To continue using Azure services, you must upgrade your account.」（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
+- アップグレードそのものに料金はなく、**12 か月無料枠はアップグレード後も継続**し、枠を超えた利用分だけが従量課金になる: 「After you upgrade, you'll have continued access to free services for 12 months and you get charged only for usage beyond the free services and quantities.」（出典: 同上。手順: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/upgrade-azure-subscription> ）
+- つまり「アップグレードして §A の構成を無料枠内で残す」か「2026-09-18 までに全部畳む」かの二択で、**判断期限は 2026-09-18**
+
+## プロジェクト終了時の後片付け
+
+証跡（`docs/verification/`）がすべてコミット済みであることを確認してから実行する。
+
+```bash
+terraform -chdir=terraform/ephemeral destroy
+terraform -chdir=terraform/persistent destroy
+az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（マネージド ID を除く）
+```
+
+- **`az group delete` は使わない**。§A の一覧のとおり、RG と中の管理外リソース（マネージド ID 等）は意図して残す（残しても $0）。サブスクリプションごと解約する場合のみこの限りではない
+- persistent 層の destroy 後、Log Analytics workspace は **soft delete 状態で最大 14 日残り、その後 30 日以内に purge される**（「After the soft-delete period, the workspace resource and its data are non-recoverable and queued for purge completely within 30 days.」出典: <https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace> ）。誤 destroy 時はこの 14 日間が復旧の窓になる（意図した destroy なら放置してよい）
+
+## 再現手順（revive runbook: destroy 後にデモ用へ戻す）
+
+前提: 管理外リソース（§B）は残っている。作業端末のグローバル IP を `terraform.tfvars`（gitignore 対象）に設定してから実行する。
+
+| # | 手順 | 所要時間 |
+| --- | --- | --- |
+| 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
+| 2 | `az acr import` でイメージ投入 → `terraform -chdir=terraform/ephemeral apply`（2 段階。`terraform/ephemeral/main.tf` 冒頭コメントの手順） | 約 4〜5 分（2026-08-21 実測: 第1段 1m50s + import 12s + 第2段 44s + 第3段 1m17s。[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)） |
+| 3 | Alembic マイグレーション適用 | 未実測（数分見込み） |
+| 4 | seed（気象庁データ）投入 | 未実測（数分見込み） |
+| 5 | embedding 生成 | 所要は未実測。再生成の API コストは 0.1 円未満（実測済み） |
+
+- 合計見込み: **20〜30 分程度**（3〜5 の未実測分を含む概算。実施したら実測値でこの表を更新する）
+- backend イメージへの差し替え後は、`container_image` / `container_target_port` / `database_url` の変数指定も必要（`terraform/ephemeral/variables.tf`）
+
+## §B. Terraform 管理外リソースの詳細
+
+### 管理外の一覧（詳細節の目次。寿命・課金は §A が正本）
 
 | # | リソース | 種類 | 場所 | 管理外の理由区分 |
 | --- | --- | --- | --- | --- |
@@ -246,4 +329,6 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 - [ADR-0014](../adr/0014-keep-azure-openai-out-of-terraform.md) — Azure OpenAI を Terraform 管理外に据え置く判断（#1 の正本）
 - [ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) — ACR pull 認証方式（#8 / #9 の正本。選択肢 6）
 - [bootstrap.md](./bootstrap.md) §2 / §11 / §12 — 各リソースの作成手順の正本
-- [day3-5-execution-plan.md](./day3-5-execution-plan.md) §8 — 全消し手順（3 RG の削除順と保留判断）
+- [day3-5-execution-plan.md](./day3-5-execution-plan.md) §8 — コスト見張り（クレジット残の確認手段の実測）。全消し手順は本書「プロジェクト終了時の後片付け」節へ移した（`az group delete` ×3 は廃止）
+- [ADR-0016](../adr/0016-log-analytics-workspace-in-persistent-layer.md) — Log Analytics を persistent 層に置く判断
+- [ADR-0017](../adr/0017-no-nightly-stop-for-postgresql.md) — PostgreSQL を夜間 stop しない判断（無料枠の判明）

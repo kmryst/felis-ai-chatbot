@@ -35,7 +35,7 @@
 
 | Day | 構成 | 内容 |
 | --- | --- | --- |
-| 3 | Burstable B1ms | Flexible Server 構築 + walking skeleton + `SELECT 1` 疎通。STOP 時のバックアップ課金の観測開始。HA 有効化リスクの前倒し検証 |
+| 3 | Burstable B1ms | Flexible Server 構築 + walking skeleton + `SELECT 1` 疎通。バックアップ観測開始（サーバーは stop しない。ADR-0017）。HA 有効化リスクの前倒し検証 |
 | 4 | Burstable B1ms | **PITR ドリル（最優先）**。壊す → 特定時刻に復旧 → RTO / RPO 計測。後半に PostgreSQL 側メンテナンス（autovacuum / bloat） |
 | 5 | **General Purpose + ゾーン冗長 HA** | 階層変更（ダウンタイム実測）→ HA 有効化 → 計画 / 強制フェイルオーバー → 計測 → destroy |
 
@@ -102,7 +102,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | --- | --- | --- | --- |
 | 1 | PITR の RTO（restore 発行 → 接続可能まで） | 「数分〜数時間」とのみ記載 | Day 4 |
 | 2 | PITR の実 RPO（障害時点 `T1` からどれだけ直前のデータが失われるか。§4-3 の 6。指定時刻をどこまで正確に再現できたかの**復元点精度**は §4-3 の 7 で別に測る） | WAL 遅延「最大 5 分程度」の一般論のみ | Day 4 |
-| 3 | 停止中の `earliestRestoreDate` の動き（復元可能範囲が停止でどう狭まる / 進むか） | 明記なし | Day 3 停止前 → Day 4 起動後の差分で実測 |
+| 3 | 停止中の `earliestRestoreDate` の動き（復元可能範囲が停止でどう狭まる / 進むか） | 明記なし | **取りやめ**（夜間 stop の廃止により停止状態が発生しない。ADR-0017。代わりに連続稼働中の日次推移を §3-3 で記録） |
 | 4 | 階層変更（B1ms→GP）の実ダウンタイム | 「通常スケーリング 2〜10 分」の幅のみ | Day 5（1 秒間隔の疎通ループで実測） |
 | 5 | HA 有効化（standby 構築）の所要時間と、その間のアプリ影響 | 「オンライン操作」とのみ記載。所要時間の数値なし | Day 3（リスク潰し時）+ Day 5 |
 | 6 | 計画フェイルオーバーの実ダウンタイム | 「least downtime」とのみ記載 | Day 5 |
@@ -145,7 +145,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 
 ### 3-3. バックアップ観測の開始（Day 4 の宿題の仕込み）
 
-サーバー作成直後と停止直前に以下を記録する（読み取り系）。
+サーバー作成直後と毎日の終業時に以下を記録する（読み取り系）。
 
 ```bash
 az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
@@ -157,7 +157,7 @@ az monitor metrics list \
 ```
 
 - 記録先: `docs/verification/restore-drill/observations.md`（時刻は UTC で記録）
-- ドキュメント上は「停止中は新規バックアップなし・保持分課金は継続」（§2-1 No.6）。**これが実地でどう見えるか**（`earliestRestoreDate` の動き、Backup Storage Used の推移）を Day 4 起動後の同じコマンドとの差分で確かめる（§2-2 No.3）。
+- 「停止中は新規バックアップなし」（§2-1 No.6）は、夜間 stop を廃止した根拠のひとつ（ADR-0017）。stop しないため §2-2 No.3 の停止中差分の実測は取りやめ、代わりに**連続稼働中**の `earliestRestoreDate` / Backup Storage Used の日次推移を記録する（バックアップ蓄積が計画どおり進んでいることの確認）。
 
 ### 3-4. HA 有効化リスクの前倒し検証（Day 3 の終わり・タイムボックス 45 分）
 
@@ -180,27 +180,30 @@ az monitor metrics list \
 ### 3-6. teardown / stop（Day 3 終了時）
 
 ```bash
-# Container Apps（ephemeral）は destroy（時間課金を止める）
+# ephemeral（ACR / Container Apps）は destroy（時間課金を止める。Log Analytics は persistent 層のため消えない。ADR-0016）
 terraform -chdir=terraform/ephemeral destroy
-# PostgreSQL は削除せず stop（バックアップ蓄積と課金観測のため。§2-1 No.6/8）
-az postgres flexible-server stop -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev
+# PostgreSQL は stop しない（下記。ADR-0017）。稼働状態と残存リソースの確認だけ行う
+az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query state -o tsv   # Ready のはず
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存の目視確認
 ```
 
+- **PostgreSQL は夜間 stop しない**（ADR-0017。当初の「終業時に stop」から改訂）。理由:
+  - B1ms 1 台の常時稼働は 24 時間 × 31 日 = 744 時間 < **750 時間の 12 か月無料枠**（「750 hours of Flexible Server—Burstable B1MS Instance, 32 GB storage, and 32 GB backup storage」。出典: <https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account> ）に収まり、$200 クレジット期間中も適用される（「As long as you have unexpired credit or you use only free services within the limits, you're not charged.」出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）。stop の根拠だったコスト削減が消えた
+  - **停止中は新規バックアップが取得されない**（§2-1 No.6）。主成果物である Backup / PITR の材料（WAL・スナップショットの蓄積）を減らす運用は本末転倒
+  - 停止後 **7 日で自動起動する**（§2-1 No.8）ため、stop 前提の運用はもともと「放置してよい」状態を作れない
+  - 無料枠の詳細・750 時間の管理・未確定事項は [azure-resource-inventory.md](./azure-resource-inventory.md) の「12か月無料枠」節が正本
 - ローカルは `docker compose down`。**`-v` を付けない**（ローカル DB のデータ・検証素材が消える）。
 
 ---
 
 ## 4. Day 4: PITR ドリル（最優先）+ PostgreSQL 側メンテナンス
 
-### 4-1. 朝: 起動と停止中挙動の実測
+### 4-1. 朝: 状態確認（stop 運用は廃止。ADR-0017）
 
-```bash
-az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev
-```
+サーバーは夜間も稼働継続している（§3-6）。起動操作は不要で、状態確認から始める。
 
-- 起動所要時間を記録（保留メンテナンスが適用されると 5〜8 分延びる仕様。§2-1 No.17。適用有無も記録）
-- §3-3 と同じコマンドで `earliestRestoreDate` / Backup Storage Used を取り、停止前との差分を `observations.md` に記録（§2-2 No.3 の答え）
+- `az postgres flexible-server show` で `state: Ready` を確認する（Ready でなければ §2-1 No.8 の自動再起動等の想定外イベントを疑い、Activity Log を確認して記録する）
+- §3-3 と同じコマンドで `earliestRestoreDate` / Backup Storage Used を取り、前日終業時からの推移を `observations.md` に記録（連続稼働中のバックアップ蓄積の実測。PITR ドリルの復元可能範囲の確認を兼ねる）
 
 ### 4-2. ドリル準備: 復旧点を判定できるデータを作る
 
@@ -256,12 +259,12 @@ az postgres flexible-server start -g rg-felisaichatbot-dev-tf -n pgsql-felisaich
 ### 4-8. teardown / stop（Day 4 終了時）
 
 - 復元サーバー削除済みの再確認（`az postgres flexible-server list -g rg-felisaichatbot-dev-tf -o table`）
-- Container Apps を立てた場合は destroy、PostgreSQL は stop（Day 3 と同じ）
+- Container Apps を立てた場合は destroy、**PostgreSQL は stop しない**（Day 3 と同じ。§3-6 / ADR-0017）
 - ローカルは `docker compose down`（`-v` なし）
 
 ---
 
-## 5. Day 5: General Purpose + ゾーン冗長 HA（フェイルオーバー実測）→ 全消し
+## 5. Day 5: General Purpose + ゾーン冗長 HA（フェイルオーバー実測）→ destroy
 
 計測の共通道具として、別端末で 1 秒間隔の疎通ループを**読み取り・書き込みの 2 本**回し続ける。計画フェイルオーバーは書き込みブロックが DNS 切替より先に始まる（§2-1 No.28）ため、読み取りだけでは断の開始を見逃す。また `connect_timeout` 未指定の接続は**無期限に待つ**（"Zero, negative, or not specified means wait indefinitely"。[libpq](https://www.postgresql.org/docs/17/libpq-connect.html)）ため、障害中の 1 試行がハングするとその間の計測が空白になる。タイムアウトを明示し、**各試行の開始時刻・終了時刻・終了コード**を残す:
 
@@ -325,7 +328,7 @@ done | tee write-probe.log
 ```bash
 terraform -chdir=terraform/ephemeral destroy
 terraform -chdir=terraform/persistent destroy   # PostgreSQL 含む。証跡コミット済みを確認してから
-az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（Azure OpenAI は別 RG rg-felisaichatbot-dev。§8 の全消しで扱う）
+az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（マネージド ID は管理外のため残るのが正常。Azure OpenAI は別 RG rg-felisaichatbot-dev で意図して残す。§8 の後片付け参照）
 ```
 
 - HA は destroy 前に無効化する必要はない（サーバーごと消える）。destroy が何かで失敗した場合のみ、時間課金の大きい順（HA 無効化 → GP サーバー stop）に手で止血する
@@ -338,7 +341,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（A
 | --- | --- | --- | --- |
 | 1 | Backup | 保持 7 日・日次スナップショット + WAL・geo 冗長無効の**根拠**（§3-1 の表 + ADR） | Day 3 |
 | 2 | PITR ドリル | 破壊 → 特定時刻へ復旧。**RTO / RPO 実測** → `docs/verification/restore-drill/` | Day 4 |
-| 3 | Maintenance（Azure 側） | メンテナンスウィンドウ設定・マイナー更新の仕組み・**階層変更ダウンタイム実測**・**STOPPED 時のバックアップ挙動の実測**（ドキュメント確認済み事項の実地裏取り） | Day 3〜5 |
+| 3 | Maintenance（Azure 側） | メンテナンスウィンドウ設定・マイナー更新の仕組み・**階層変更ダウンタイム実測**・**夜間 stop を廃止した判断の記録**（「停止中は新規バックアップなし」（§2-1 No.6）を根拠に運用を変えた。ADR-0017） | Day 3〜5 |
 | 4 | Maintenance（PostgreSQL 側） | autovacuum 発火実測・bloat 計測・ANALYZE・長時間トランザクション阻害の観測 → `docs/verification/vacuum-maintenance/` | Day 4 |
 | 5 | Monitoring | 指標・アラートと**閾値の根拠**（§7）。時間不足なら実装を削り表を残す | Day 5 |
 
@@ -359,6 +362,8 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（A
 
 ## 8. コスト見張り
 
+- **全リソースの一覧（管理区分・寿命・課金）・12か月無料枠・プロジェクト終了時の後片付け・再現手順（revive runbook）の正本は [azure-resource-inventory.md](./azure-resource-inventory.md)**。本節は Day 3〜5 の毎日の見張り手順のみを持つ
+- **宿題（2026-08-23 頃）**: PostgreSQL 無料枠 **750 時間の消費状況を初回確認**する（手段は台帳の「750 時間の消費状況の確認手段」節。課金データの反映に 1〜2 日程度かかるため、常時稼働開始（8/21）から 2 日後の 8/23 頃に見る）
 - **クレジット残の確認**（Day 3 に実測して確立した手段。2026-08-21）: CLI では Microsoft.Consumption の credits/balanceSummary API を billing profile 経由で叩く。以下をそのまま実行する（billing account / profile 名は ARM の識別子だが、public リポジトリにはハードコードせず毎回 CLI で取得する）:
 
   ```bash
@@ -376,16 +381,8 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（A
   az resource list -g rg-felisaichatbot-dev-tf -o table
   ```
 
-- **停止中も課金は残る**: stop で止まるのはコンピュート課金のみ。ストレージ + バックアップストレージは継続（§2-1 No.6）。7 日で自動再起動する（§2-1 No.8）ため「stop したから放置してよい」は成立しない
-- **プロジェクト完了後の全消し**（クレジット失効 2026-09-18 より前に必ず実施）:
-
-  ```bash
-  az group delete -n rg-felisaichatbot-dev-tf --yes     # Terraform 管理リソース（アプリ・DB。ADR-0012 で分離）
-  az group delete -n rg-felisaichatbot-dev --yes        # Azure OpenAI（面談デモ用に残すなら、この行だけ実行を保留する）
-  az group delete -n rg-felisaichatbot-tfstate --yes    # tfstate Storage（bootstrap §12）
-  ```
-
-  実行前に、証跡（`docs/verification/`）がすべてコミット済みであることを確認する。
+- **PostgreSQL は stop しない**（§3-6 / ADR-0017）。stop で止まるのはコンピュート課金のみで、ストレージ + バックアップストレージは停止中も課金が継続し（§2-1 No.6）、B1ms 1 台の常時稼働は無料枠内のため、stop に得がない。7 日で自動再起動する仕様（§2-1 No.8）もあり、stop 前提の運用はもともと「放置してよい」状態を作れなかった
+- **プロジェクト完了後の後片付け**: 正本は [azure-resource-inventory.md](./azure-resource-inventory.md) の「プロジェクト終了時の後片付け」節（**`terraform destroy` 2 本で済み、`az group delete` は使わない**。当初の「3 RG 全消し」から改訂）。**従量課金へアップグレードしない場合はクレジット失効 2026-09-18 より前に必ず実施**する（アップグレードの判断期限も同日。台帳の「従量課金へのアップグレード」節）
 
 ---
 

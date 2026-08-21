@@ -12,8 +12,3 @@ output "container_app_outbound_ips" {
   description = "Container App の outbound IP（PostgreSQL firewall rule の許可対象。静的保証なし）"
   value       = azurerm_container_app.main.outbound_ip_addresses
 }
-
-output "log_analytics_workspace_id" {
-  description = "Log Analytics workspace のリソース ID（ログ確認クエリで使う）"
-  value       = azurerm_log_analytics_workspace.main.id
-}

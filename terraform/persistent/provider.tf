@@ -1,4 +1,5 @@
-# persistent 層: destroy しても残す・作り直さないリソース（PostgreSQL Flexible Server）。
+# persistent 層: ephemeral 層を destroy しても残るリソース（PostgreSQL Flexible Server /
+# Log Analytics workspace。ADR-0016）。「永続」の意味ではなく、プロジェクト終了時には destroy する。
 # ephemeral 層（ACR / Container Apps）とはディレクトリ・state を分離する
 # （day3-5-execution-plan.md §3-1 / bootstrap.md §12）。
 

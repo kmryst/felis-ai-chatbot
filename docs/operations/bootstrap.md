@@ -316,8 +316,8 @@ find frontend backend terraform docs/verification -type d -empty -exec touch {}/
 frontend/          Next.js
 backend/           FastAPI
 terraform/
-  persistent/      PostgreSQL, Key Vault, ACR, Log Analytics
-  ephemeral/       Container Apps, 周辺
+  persistent/      PostgreSQL, Log Analytics
+  ephemeral/       ACR, Container Apps, 周辺
 docs/
   adr/             (skeleton 由来)
   operations/      (skeleton 由来 + Runbook 追加予定)
@@ -328,8 +328,9 @@ scripts/github/    (skeleton 由来)
 
 **構成の妥当性について（検討結果）**: この案のまま採用してよい。根拠:
 
-- persistent / ephemeral の分割は「dev 環境は平常時 destroy 済みが正常」という既存運用（ticket-c2c-platform）と整合する。DB と tfstate・ACR を ephemeral から切り離すことで、Container Apps を destroy しても Day 4 の Backup / PITR 検証対象（PostgreSQL）が残る。**本プロジェクトの主役は PostgreSQL 運用なので、この分離自体が見せ場になる**。
+- persistent / ephemeral の分割は「dev 環境は平常時 destroy 済みが正常」という既存運用（ticket-c2c-platform）と整合する。DB と tfstate を ephemeral から切り離すことで、Container Apps を destroy しても Day 4 の Backup / PITR 検証対象（PostgreSQL）が残る。**本プロジェクトの主役は PostgreSQL 運用なので、この分離自体が見せ場になる**。
 - Log Analytics を persistent に置くのも正しい。ephemeral を destroy しても監視ログ・検証証跡が消えない。
+- 上記ツリーは Day 3 実装後の姿に更新済み。Day 0 当初案からの変更点: **ACR は persistent ではなく ephemeral に置いた**（イメージは `az acr import` / CI push で作り直せる資産であり、Basic SKU の固定費 0.1666 USD/日 を毎日 destroy で消せる。[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md)）。**Key Vault は作らなかった**（secret は Container App の secret + `TF_VAR` 環境変数で足り、Day 3〜5 のスコープに Key Vault を要する要件がない）。**Log Analytics の実装は当初 ephemeral に置かれ本説明と食い違っていたが、[ADR-0016](../adr/0016-log-analytics-workspace-in-persistent-layer.md) で本説明どおり persistent に移した**。
 - 唯一の改善提案: `docs/verification/` は restore-drill 以外の証跡（アラーム発火テスト等）も入るため、Day 4 で `docs/verification/alarm-drill/` 等を追加する余地を README に一言書いておくとよい（Day 0 ではディレクトリを増やさない）。
 
 ### 検証

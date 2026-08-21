@@ -67,19 +67,15 @@ variable "acr_pull_identity_name" {
   description = <<-DESC
     Container App が ACR pull に使う user-assigned managed identity 名（ADR-0013 の予約名）。
     identity 本体と AcrPull ロール割当（RG スコープ）は Terraform 管理外・手動作成
-    （ADR-0015 選択肢 6-(b)。台帳 terraform-unmanaged-resources.md #8 / #9 が正本）。
+    （ADR-0015 選択肢 6-(b)。台帳 azure-resource-inventory.md #8 / #9 が正本）。
     手動作成が済むまで、この層の apply は通らない前提。
   DESC
   type        = string
   default     = "id-felisaichatbot-dev"
 }
 
-variable "log_analytics_daily_quota_gb" {
-  description = <<-DESC
-    Log Analytics workspace の日次取込上限（GB）。取込単価は japaneast PAYG で 3.34 USD/GB
-    （Retail Prices API 実測 2026-08-21）のため、暴走時の 1 日あたり損失をこの値 × 3.34 USD に抑える。
-    walking skeleton のコンソールログは 1 GB/日 に達しない想定（実測は Day 3。ADR-0015）。
-  DESC
-  type        = number
-  default     = 1
+variable "log_analytics_workspace_name" {
+  description = "persistent 層が管理する Log Analytics workspace 名（ADR-0016。data source 参照のみ。この層では作成・変更しない）"
+  type        = string
+  default     = "log-felisaichatbot-dev"
 }
