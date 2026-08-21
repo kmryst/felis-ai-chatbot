@@ -82,6 +82,7 @@ Day 1: Bot 本体をローカルで動かす / Day 2: データ・RAG・PostgreS
 
 1. <https://azure.microsoft.com/ja-jp/free/> からアカウントを作成する（Microsoft アカウント新規作成を含む）。
 2. `az login` で CLI 認証し、以下で ID を控える。
+   - **WSL での注意（2026-08-21 実測）**: security defaults 有効のテナントではデバイスコード方式（`az login --use-device-code`）が `AADSTS530035` でブロックされ、トークン失効後のサイレント更新も拒否される。**ブラウザ方式（`az login --tenant <tenantId>`。`--use-device-code` なし）を使う**こと
 
 ```bash
 az account show --query "{subscriptionId: id, tenantId: tenantId, name: name}" -o table
