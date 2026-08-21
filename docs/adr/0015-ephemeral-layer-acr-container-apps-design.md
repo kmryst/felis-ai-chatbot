@@ -6,6 +6,8 @@ Accepted
 
 （起案時に未確定だった ACR pull の認証方式は、2026-08-21 のユーザー判断で選択肢 6-(b) に確定した）
 
+（**Log Analytics workspace の配置（ephemeral 層）のみ [ADR-0016](./0016-log-analytics-workspace-in-persistent-layer.md) により persistent 層へ変更された**。設定値（PerGB2018 / 保持 30 日 / 日次取込上限 1 GB）と他の決定はすべて引き続き有効）
+
 ## 日付
 
 2026-08-21
@@ -24,7 +26,7 @@ walking skeleton（[day3-5-execution-plan.md §3-2](../operations/day3-5-executi
 
 イメージは **hello-world から始めて backend に差し替える 2 段階**とし、タグは **git commit SHA 由来の不変タグ（`latest` 禁止）** を使う。
 
-Container App が ACR から pull する際の認証は、**user-assigned managed identity `id-felisaichatbot-dev` + AcrPull ロール割当（スコープは RG `rg-felisaichatbot-dev-tf`）** で行う。**ID とロール割当はどちらも Terraform 管理外（手動作成 + [管理外リソース台帳](../operations/terraform-unmanaged-resources.md) #8 / #9）**、ID を Container App に紐付ける記述は Terraform（data source 参照）が持つ。トレードオフと採択理由は「検討した選択肢 6」。ID とロール割当が手動作成されるまで、この層の apply は行わない。
+Container App が ACR から pull する際の認証は、**user-assigned managed identity `id-felisaichatbot-dev` + AcrPull ロール割当（スコープは RG `rg-felisaichatbot-dev-tf`）** で行う。**ID とロール割当はどちらも Terraform 管理外（手動作成 + [管理外リソース台帳](../operations/azure-resource-inventory.md) #8 / #9）**、ID を Container App に紐付ける記述は Terraform（data source 参照）が持つ。トレードオフと採択理由は「検討した選択肢 6」。ID とロール割当が手動作成されるまで、この層の apply は行わない。
 
 ## 背景
 
@@ -73,7 +75,7 @@ Container App が ACR から pull する際の認証は、**user-assigned manage
 誤読を防ぐための整理: **3 案のうち「RBAC を使わない」のは (a) だけ**である。(b) と (c) の認証はどちらも同じ「マネージド ID + AcrPull ロール割当」（= RBAC）であり、両者の違いは**そのロール割当を誰が・どの管理下で払い出すか**（手動・Terraform 管理外か、CI の Terraform 管理下か）でしかない。(b) の採択は「RBAC を諦めた」のではなく、「RBAC の払い出しを Terraform の外に置いた」である。
 
 - (a) ACR の admin user を有効化し username/password で pull（**却下**）: ロール割当が不要になるため権限問題は消えるが、admin user は **ACR 単位の共有パスワードで、pull した主体を追跡できない**。パスワードのローテーションが運用負荷として残り、資格情報が tfstate に平文で載る（state の sensitive 値の扱いは <https://developer.hashicorp.com/terraform/language/manage-sensitive-data> ）。3 案で唯一 RBAC を使わない選択であり、リポジトリ全体で積んできた最小権限の一貫性（ADR-0012）を壊す。Microsoft 自身も admin user を「主に単一ユーザーによるテスト用途」と位置づけ、複数ユーザーでの共有を非推奨としている（出典: <https://learn.microsoft.com/en-us/azure/container-registry/container-registry-authentication> の Admin account 節、2026-08-21 確認）
-- **(b) user-assigned managed identity `id-felisaichatbot-dev` + AcrPull を手動作成し、Terraform 管理外にする（採択）**: 手動作成は 1 回きり（`az identity create` + `az role assignment create`）。ADR-0012 の決定（SP のロールは 2 件のみ）は不変のまま成立する。管理外の代償（`terraform plan` による drift 検出なし）は、ADR-0014 と同じ枠組みで[管理外リソース台帳](../operations/terraform-unmanaged-resources.md)（#8 / #9）の読み取り確認コマンドが代替する
+- **(b) user-assigned managed identity `id-felisaichatbot-dev` + AcrPull を手動作成し、Terraform 管理外にする（採択）**: 手動作成は 1 回きり（`az identity create` + `az role assignment create`）。ADR-0012 の決定（SP のロールは 2 件のみ）は不変のまま成立する。管理外の代償（`terraform plan` による drift 検出なし）は、ADR-0014 と同じ枠組みで[管理外リソース台帳](../operations/azure-resource-inventory.md)（#8 / #9）の読み取り確認コマンドが代替する
 - (c) CI 用 SP に条件付き・スコープ限定の RBAC 権限を追加（**却下**）: ロール割当も Terraform 管理下に置けるため、コードと実物の一致という意味での一貫性は 3 案で最も高い。しかし CI の SP に「権限を与える権限」（`roleAssignments/write`）を持たせることになり、condition で付与可能ロールを AcrPull に絞っても**権限昇格の経路そのものを新設する**ことに変わりはない。ADR-0012 で RBAC Administrator を意図的に外した決定を一部覆すことにもなる（覆すなら上書き ADR が必要）。5 日間の制約下で得られる利得（ロール割当 1 件の宣言的管理）に見合わない
 
 採択理由:
@@ -112,7 +114,7 @@ Container App が ACR から pull する際の認証は、**user-assigned manage
 
 - `terraform/ephemeral/`: backend.tf / provider.tf / variables.tf / main.tf / outputs.tf を新設（state key は `ephemeral/terraform.tfstate`）
 - `.github/workflows/terraform-checks.yml`: fmt / validate の対象に `terraform/ephemeral` を追加
-- [terraform-unmanaged-resources.md](../operations/terraform-unmanaged-resources.md) に #8（マネージド ID）/ #9（AcrPull ロール割当）を追記する（本 ADR と同じ PR で実施）。手動作成コマンドの正本は台帳の「作り直す手順」
+- [azure-resource-inventory.md](../operations/azure-resource-inventory.md) に #8（マネージド ID）/ #9（AcrPull ロール割当）を追記する（本 ADR と同じ PR で実施）。手動作成コマンドの正本は台帳の「作り直す手順」
 - 本層の apply は、ID とロール割当の手動作成（ユーザー承認のうえ実行）が済むまで行わない（CI のデプロイ workflow 整備も同様に保留）
 
 ## 関連
@@ -122,4 +124,5 @@ Container App が ACR から pull する際の認証は、**user-assigned manage
 - [ADR-0014](./0014-keep-azure-openai-out-of-terraform.md) — 「管理外に置く」判断の先行例（選択肢 6-(b) と同型）
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-2（walking skeleton 正本）/ §3-6（毎日の destroy）/ §8（コスト見張り）/ §9（VNet 統合をやらない）
 - [bootstrap.md](../operations/bootstrap.md) 「Day 3 の方針」方針1（hello-world 先行の根拠）
+- [ADR-0016](./0016-log-analytics-workspace-in-persistent-layer.md) — Log Analytics workspace の配置のみ本 ADR から変更
 - Issue: #70

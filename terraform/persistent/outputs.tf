@@ -12,3 +12,8 @@ output "server_name" {
   description = "PostgreSQL Flexible Server 名"
   value       = azurerm_postgresql_flexible_server.main.name
 }
+
+output "log_analytics_workspace_id" {
+  description = "Log Analytics workspace のリソース ID（ログ確認クエリで使う）"
+  value       = azurerm_log_analytics_workspace.main.id
+}

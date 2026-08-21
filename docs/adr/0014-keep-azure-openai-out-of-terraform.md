@@ -11,7 +11,7 @@ Accepted
 ## 決定内容
 
 - Azure OpenAI `felisaichatbot-openai-dev`（RG `rg-felisaichatbot-dev` / japaneast）とそのデプロイ 2 件（`chat` / `embedding`）を、**Terraform 管理外に据え置く**（import しない）
-- 管理外リソースとしての差分検出の代替は、[Terraform 管理外リソース台帳](../operations/terraform-unmanaged-resources.md) の読み取り確認コマンドで担う
+- 管理外リソースとしての差分検出の代替は、[Terraform 管理外リソース台帳](../operations/azure-resource-inventory.md) の読み取り確認コマンドで担う
 - 将来 import する場合の前提条件と手順を本 ADR に固定しておく（下記「将来 import する場合」）
 
 ## 背景
@@ -39,7 +39,7 @@ Azure OpenAI は Day 0 フェーズBの可否判定で az CLI により手動作
 - **(b) `prevent_destroy` が層の destroy を丸ごと壊す**: 誤 destroy 対策に `lifecycle { prevent_destroy = true }` を付けると、**その層の `terraform destroy` は plan の時点でエラーになる**（出典: <https://developer.hashicorp.com/terraform/language/meta-arguments/lifecycle>）。Day 5 の全 destroy（day3-5-execution-plan.md §5-6 / §8）を成立させるには Azure OpenAI 専用の第 3 の state 層を切る必要があり、5 日制約下でレイヤ設計が 1 枚増える
 - **(c) 管理下に入れると新しい事故経路が生まれる**: このリポジトリが pin する azurerm 5.1.0 の既定は `cognitive_account { purge_soft_delete_on_destroy = true }` であり、Terraform 管理下では **destroy が論理削除を越えて purge まで実行し、復旧不能になる**。手動運用ならそもそも `terraform destroy` の射程外で、この経路自体が存在しない
 - **(d) destroy する動機がそもそもない**: Azure OpenAI の Standard / GlobalStandard デプロイは**トークン従量課金**で、呼ばなければアイドル課金は発生しない（capacity は予約ではなくレート制限。出典: <https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/concepts/deployment-types>）。「使わない時は消す」というコスト圧力が働かないため、Terraform のライフサイクル管理（作って消す）の恩恵がない
-- **(e) 失うものは差分検出だけであり、代替を用意した**: 管理外の代償は `terraform plan` による drift 検出がないこと。これは [Terraform 管理外リソース台帳](../operations/terraform-unmanaged-resources.md) の読み取り確認コマンドで代替する
+- **(e) 失うものは差分検出だけであり、代替を用意した**: 管理外の代償は `terraform plan` による drift 検出がないこと。これは [Terraform 管理外リソース台帳](../operations/azure-resource-inventory.md) の読み取り確認コマンドで代替する
 
 なお ADR-0012 が「Azure OpenAI を守る」手段として権限スコープからの分離（届かなくする）を選んだのと同型で、本 ADR も「気をつけて管理する」より「そもそも管理対象・破壊経路に入れない」を選んでいる。
 
@@ -68,7 +68,7 @@ import するか否かに関わらず、この構成には寿命がある: japan
 
 ## 影響
 
-- `docs/operations/terraform-unmanaged-resources.md`（台帳）を新設し、README からリンクする
+- `docs/operations/azure-resource-inventory.md`（台帳）を新設し、README からリンクする
 - `terraform/persistent/provider.tf` に `cognitive_account { purge_soft_delete_on_destroy = false }` を追加（上記のとおり現時点では無効果。コメントにもその旨を明記済み）
 - ADR-0012 / ADR-0013 の背景にある「クォータを再取得できる保証がない」という記述は、本 ADR により**根拠としては失効**する（各 ADR の決定内容そのもの—権限分離・改名しない—は別の根拠で引き続き成立するため、書き換えない）
 
@@ -77,5 +77,5 @@ import するか否かに関わらず、この構成には寿命がある: japan
 - [ADR-0009](./0009-azure-openai-as-llm-provider.md) — Azure OpenAI の採用と手動作成の経緯。本 ADR はその管理方式を確定させる
 - [ADR-0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — SP の権限スコープから Azure OpenAI を外した判断。「届かなくする」という同じ設計思想。背景中のクォータ喪失懸念は本 ADR で否定された（決定は不変）
 - [ADR-0013](./0013-azure-resource-naming-convention.md) — `felisaichatbot-openai-dev` を改名しない例外の記録。「改名には再作成しかない」は本 ADR の 48 時間予約・AccountCount 制約でさらに補強される（クォータ喪失懸念の部分のみ本 ADR で更新）
-- [terraform-unmanaged-resources.md](../operations/terraform-unmanaged-resources.md) — 管理外リソース台帳（本 ADR の運用面の正本）
+- [azure-resource-inventory.md](../operations/azure-resource-inventory.md) — 管理外リソース台帳（本 ADR の運用面の正本）
 - Issue: #67

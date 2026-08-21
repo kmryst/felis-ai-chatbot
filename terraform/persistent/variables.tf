@@ -67,3 +67,13 @@ variable "firewall_allowed_client_ips" {
     error_message = "firewall_allowed_client_ips の値は IPv4 アドレス（例: 203.0.113.10）で指定してください。"
   }
 }
+
+variable "log_analytics_daily_quota_gb" {
+  description = <<-DESC
+    Log Analytics workspace の日次取込上限（GB）。取込単価は japaneast PAYG で 3.34 USD/GB
+    （Retail Prices API 実測 2026-08-21）のため、暴走時の 1 日あたり損失をこの値 × 3.34 USD に抑える。
+    walking skeleton のコンソールログは 1 GB/日 に達しない想定（実測は Day 3。ADR-0015）。
+  DESC
+  type        = number
+  default     = 1
+}

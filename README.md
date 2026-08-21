@@ -138,7 +138,7 @@ Issue / PR 駆動開発を基本とします。詳細は [CONTRIBUTING.md](./CON
 - 設計判断: [docs/adr/](./docs/adr/README.md)
 - 利用データソース一覧（気象庁ホームページ）: [docs/data-sources.md](./docs/data-sources.md)
 - Day 0 bootstrap 手順書: [docs/operations/bootstrap.md](./docs/operations/bootstrap.md)
-- Terraform 管理外リソース台帳: [docs/operations/terraform-unmanaged-resources.md](./docs/operations/terraform-unmanaged-resources.md)
+- Azure リソース台帳（全リソース一覧 + Terraform 管理外リソースの詳細）: [docs/operations/azure-resource-inventory.md](./docs/operations/azure-resource-inventory.md)
 - Day 3〜5 実行計画書（PostgreSQL Backup / PITR / Maintenance / HA / Monitoring）: [docs/operations/day3-5-execution-plan.md](./docs/operations/day3-5-execution-plan.md)
 
 本リポジトリは skeleton の手動コピーで立ち上げたため、Backstage TechDocs / Software Catalog 用ファイル
