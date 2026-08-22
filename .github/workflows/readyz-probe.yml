@@ -31,8 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
+      # 停止スイッチ（外部レビュー指摘の反映）: teardown で ephemeral を destroy すると
+      # FQDN ごと消え、この workflow は 5 分ごとに永久に fail 通知を出し続ける。
+      # teardown 手順（credit-window-execution-plan.md §9）に
+      # `gh variable set PROBE_ENABLED --body false` を含めること。既定は有効
+      PROBE_ENABLED: ${{ vars.PROBE_ENABLED || 'true' }}
       # 安定 FQDN（アプリ URL。revision 固有 FQDN ではない — Issue #101 参照）。
-      # 変更時は repository variable READYZ_URL で上書きする
+      # **この既定値は現在の CAE のもの**。ephemeral を destroy → apply すると CAE の
+      # サフィックス（blackbush-… 部分）が変わり無効になるため、再作成後は必ず
+      # repository variable READYZ_URL で上書きする（terraform output から取得）
       READYZ_URL: ${{ vars.READYZ_URL || 'https://ca-felisaichatbot-dev.blackbush-a1db7f50.japaneast.azurecontainerapps.io/readyz' }}
       # 鮮度ゲートの系列別閾値（秒）。根拠は計画 §5-3（採取間隔の約 3 倍。
       # マーカーのみ probe 間隔 5 分の 2 倍 = 10 分）
@@ -43,6 +50,10 @@ jobs:
     steps:
       - name: Probe /readyz and evaluate per-series freshness
         run: |
+          if [ "$PROBE_ENABLED" != "true" ]; then
+            echo "PROBE disabled via repository variable PROBE_ENABLED; skipping."
+            exit 0
+          fi
           ts="$(date -u +%FT%T.%3NZ)"
           # SLI は 1 回の素の試行を記録する（リトライすると可用性の実測にならない）
           code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
