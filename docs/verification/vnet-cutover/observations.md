@@ -90,7 +90,7 @@ Log Analytics workspace は無変更。
 - `DATABASE_URL` のホスト部は従来どおり `pgsql-felisaichatbot-dev.postgres.database.azure.com`
   のままでよい（`.env` の `TF_VAR_database_url` は更新済み。値はここに書かない）
 
-### apply 後の残ドリフト（未対応。ステップ B 以降の判断材料）
+### apply 後の残ドリフト（**解消済み。対応は下の「ステップ A-2」**）
 
 apply 直後の `terraform plan -detailed-exitcode` は **exit 2（差分あり）**:
 
@@ -98,8 +98,9 @@ apply 直後の `terraform plan -detailed-exitcode` は **exit 2（差分あり�
   **Azure がサーバー作成時に `Microsoft.Storage` の service endpoint を委任サブネットへ自動付与**し、
   コード（`service_endpoints` 未記載）がそれを外そうとする
 - サーバー稼働（バックアップ等のストレージアクセス）への影響が否定できないため、この plan は
-  **apply していない**。恒久対応（コードに `service_endpoints = ["Microsoft.Storage"]` を追記して
-  ドリフト解消する等）は別途判断する
+  **apply していない**。恒久対応は「ステップ A-2」で実施した（なお、この時点で想定していた
+  `service_endpoints = ["Microsoft.Storage"]` という書き方は azurerm 5.1.0 には存在しない。
+  実際の記法はステップ A-2 を参照）
 
 ### リソース一覧（`az resource list -g rg-felisaichatbot-dev-tf`。apply 後）
 
@@ -128,3 +129,121 @@ ephemeral 層（ACR / CAE / Container Apps）には触れていない。
 3. イメージ build / push ×2（serving + ops。タグは §0-2 で確定する SHA）
 4. ephemeral full apply（CAE + app + ops app + migration Job）→ `/readyz` 検証
 5. その後ステップ C: §3 の ops 結線（migration Job 実行・psql 経路確認）
+
+---
+
+## ステップ A-2: 残ドリフトの解消（2026-08-22 実施。完了。#96）
+
+ステップ A の「apply 後の残ドリフト」1 件をコード側で解消した。**Azure への書き込みは行っていない**
+（`terraform apply` / `destroy` を実行せず、az も読み取り系のみ。ephemeral 層にも触れていない）。
+
+### 結果サマリ
+
+- **`terraform plan -detailed-exitcode` が exit 0（`No changes.`）になった**。ドリフト 0 件
+- 対応は `azurerm_subnet.pgsql` に `service_endpoint` ブロックを明記しただけで、**Azure 側の実物は
+  一切変更していない**（コードを実物に合わせた。実物をコードに合わせたのではない）
+
+### ドリフトの正確な内容（apply 前の plan 実測）
+
+```text
+  # azurerm_subnet.pgsql will be updated in-place
+  ~ resource "azurerm_subnet" "pgsql" {
+      - service_endpoint {
+          - service            = "Microsoft.Storage" -> null
+        }
+    }
+
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+| 項目 | 内容 |
+| --- | --- |
+| リソース | `azurerm_subnet.pgsql`（`snet-felisaichatbot-dev-pgsql`） |
+| 属性 | `service_endpoint` ブロックの `service` |
+| 変更前（実物） | `"Microsoft.Storage"` |
+| 変更後（コードが意図） | `null`（＝ブロックごと削除） |
+| 種別 | in-place update（add / destroy なし） |
+
+### 実物の service endpoint の実測（`az network vnet subnet show`。2026-08-22。読み取りのみ）
+
+| サブネット | `serviceEndpoints` | 委任 | ドリフト |
+| --- | --- | --- | --- |
+| `snet-felisaichatbot-dev-aca` | **`[]`（空）** | `Microsoft.App/environments` | **なし** |
+| `snet-felisaichatbot-dev-pgsql` | **`Microsoft.Storage`**（`locations: japaneast, japanwest` / `provisioningState: Succeeded`）の 1 件のみ | `Microsoft.DBforPostgreSQL/flexibleServers` | あり（上記） |
+
+- pgsql 側に付与されているのは **`Microsoft.Storage` の 1 件だけ**で、他の service endpoint はない
+- aca 側は空で、plan にも差分は出ていない。**ただしこれは CAE 未作成の状態での実測**であり、
+  ephemeral 層 apply 後に同種の自動付与が起きないかはステップ B で plan を取って確認する
+
+### 原因（公式ドキュメントの一次情報で確認）
+
+Azure は**委任サブネットに最初のサーバーをプロビジョンした時点で `Microsoft.Storage` の
+service endpoint を自動付与する**。用途は **WAL（Write-Ahead Log）ファイルを Azure Storage
+アカウントへアップロードする通信の経路確保**であり、削除は明確に警告されている。
+
+出典: <https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private>
+
+> The Microsoft.Storage service endpoint is automatically configured on the delegated subnet when
+> the first server is provisioned in that subnet. This configuration ensures reliable routing of
+> traffic to the Azure Storage accounts used for uploading Write-Ahead Log (WAL) files.
+> **Removing this endpoint may disrupt connectivity** and can lead to unintended consequences for
+> core service operations.
+
+同ページの「Unsupported virtual network scenarios」にも重ねて記載がある（原文に `Micosoft.Storage`
+という誤記があるが、文意は同じ）:
+
+> By default, the service adds a Micosoft.Storage service endpoint when the first server is
+> provisioned in the delegated subnet, which provides secure and direct connectivity to Azure
+> Storage over the Azure backbone network. Removing this endpoint can lead to unintended
+> consequences for core service operations.
+
+**この事実はステップ A の時点で本リポジトリのどのドキュメントにも記録されていなかった**
+（計画書 §2-1 の No.1〜28 にも ADR-0018 にもなし）。本対応で計画書 §2-1 に **No.29** として
+出典付きで追加した。
+
+### なぜ放置できなかったか
+
+- 主成果物は PostgreSQL の **Backup / PITR / Maintenance** であり、WAL アーカイブ経路はその土台である
+- 残った plan は「その経路を外す」内容だった。**内容を確認せずに apply した人（エージェント含む）が
+  実際に経路を壊せる状態**が残っていた
+- 直後に Day 4 の PITR ドリルが控えており、ドリル中の不用意な apply は実験そのものを破壊する
+
+### 対応
+
+`terraform/persistent/main.tf` の `azurerm_subnet.pgsql` に、実物と同じ値を明記した。
+
+```hcl
+  service_endpoint {
+    service = "Microsoft.Storage"
+  }
+```
+
+**azurerm 5.1.0 のスキーマ確認**（`terraform providers schema -json` の `azurerm_subnet`。2026-08-22 実測）:
+
+| 確認したこと | 結果 |
+| --- | --- |
+| `service_endpoints`（文字列リストの属性） | **存在しない**。ステップ A の記録で想定していた `service_endpoints = ["Microsoft.Storage"]` はこのバージョンでは書けない |
+| 正しい記法 | 繰り返し可能な**ブロック** `service_endpoint`（`nesting_mode: list`、`max_items` なし） |
+| ブロックの属性 | `service`（string・**必須**）/ `network_identifier`（string・任意） |
+| `locations` | プロバイダーのスキーマに**存在しない**（Azure は `japaneast` / `japanwest` を返すが Terraform 側では表現しないため記述しない） |
+
+削除防止のため、コードのコメントに「WAL アーカイブ経路であること」「Azure が自動付与すること」
+「外すと壊れること」「消すと plan が再び exit 2 に戻ること」と出典 URL を残した。
+
+### 検証（すべて実測。2026-08-22）
+
+| 検証 | 結果 |
+| --- | --- |
+| `terraform -chdir=terraform/persistent plan -detailed-exitcode` | **exit 0** / `No changes. Your infrastructure matches the configuration.` |
+| `terraform fmt -check -recursive terraform/` | pass |
+| persistent 層 `init -backend=false` + `validate` | pass |
+| ephemeral 層 `init -backend=false` + `validate` | pass |
+| `terraform apply` / `destroy` | **未実行**（plan がゼロになったため apply の必要がない） |
+| Azure への書き込み | **なし**（az は `show` のみ） |
+
+### 併せて更新したドキュメント
+
+- 計画書 §2-1 に **No.29**（Microsoft.Storage service endpoint の自動付与と削除の危険）を追加
+- 計画書 Day 4（§4-1）/ Day 5（§5-1 の前段）に「**apply の前に `plan -detailed-exitcode` が
+  exit 0 であることを確認する**」というゲートを追加。ドリル最中の不用意な apply を防ぐため
+- ADR-0018 に追記（新規 ADR は起こさない。判断根拠は当該追記に記載）

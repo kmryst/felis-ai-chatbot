@@ -40,6 +40,12 @@ resource "azurerm_subnet" "aca" {
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = ["10.10.0.0/26"]
 
+  # service endpoint は付けない。Azure が自動付与するのは PostgreSQL の委任サブネット側だけで
+  # （下の snet-pgsql のコメント参照）、こちらは `serviceEndpoints` が `[]` であることを実測済み
+  # （`az network vnet subnet show`。2026-08-22。plan にも差分なし）。
+  # ただしこれは **CAE 未作成の状態での実測**である。ephemeral 層の apply で CAE を作った後に
+  # 同じ形のドリフト（Azure 側の自動付与）が現れないかは、ステップ B で plan を取って確認する
+  # （docs/verification/vnet-cutover/observations.md）。
   delegation {
     name = "aca-environments"
 
@@ -69,6 +75,36 @@ resource "azurerm_subnet" "pgsql" {
       name    = "Microsoft.DBforPostgreSQL/flexibleServers"
       actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
     }
+  }
+
+  # 【消さないこと】この service endpoint は WAL アーカイブの経路であり、外すとバックアップが壊れる。
+  #
+  # Azure は委任サブネットに最初のサーバーをプロビジョンした時点で Microsoft.Storage の
+  # service endpoint を**自動で付与する**。用途は WAL（Write-Ahead Log）ファイルを
+  # Azure Storage アカウントへアップロードする通信の経路確保である（出典:
+  # https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private ）。
+  #
+  #   "The Microsoft.Storage service endpoint is automatically configured on the delegated
+  #    subnet when the first server is provisioned in that subnet. This configuration ensures
+  #    reliable routing of traffic to the Azure Storage accounts used for uploading
+  #    Write-Ahead Log (WAL) files. Removing this endpoint may disrupt connectivity and can
+  #    lead to unintended consequences for core service operations."
+  #
+  # ここに明記していないと、Terraform は「コードにない = 消すべきもの」と解釈し、
+  # 毎回この endpoint を削除する in-place update を plan に出し続ける（ステップ A の apply 直後に
+  # 実測。docs/verification/vnet-cutover/observations.md）。本プロジェクトの主成果物は
+  # PostgreSQL の Backup / PITR であり、その経路を Terraform が自動で剥がす状態を残さない。
+  #
+  # したがってこの記述は「不要な冗長」ではなく、**Azure 側の不変条件をコードに固定して
+  # 意図しない削除を防ぐためのもの**である。ドリフトが消えたからといって削除しないこと
+  # （消すと plan が再び exit 2 に戻り、apply すれば実際に endpoint が外れる）。
+  #
+  # azurerm 5.1.0 では `service_endpoints`（文字列リスト）という属性は存在せず、
+  # 繰り返し可能な `service_endpoint` ブロック（`service` 必須 / `network_identifier` 任意）
+  # で表現する（`terraform providers schema -json` で確認。2026-08-22）。
+  # Azure が返す `locations`（japaneast / japanwest）はプロバイダーのスキーマに存在せず、記述しない。
+  service_endpoint {
+    service = "Microsoft.Storage"
   }
 }
 

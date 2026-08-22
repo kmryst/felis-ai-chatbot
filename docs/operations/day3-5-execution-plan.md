@@ -95,6 +95,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | 26 | public access の既定接続可否 | firewall rule を作成するまで**すべての接続が拒否**される（"By default, the firewall blocks all access to the server"）。許可はサーバーレベル firewall rule に発信元 IP 範囲を登録する方式。**反映まで最大 5 分**（"Changes to the firewall configuration ... can take up to five minutes"） | [Firewall rules](https://learn.microsoft.com/en-us/azure/postgresql/security/security-firewall-rules) |
 | 27 | 拡張機能の事前許可 | `CREATE EXTENSION` の前にサーバーパラメータ `azure.extensions` への **allowlist 追加が必須**。CLI は `az postgres flexible-server parameter set --name azure.extensions --value "<ext>,<ext>"`。PG17 での提供バージョン: `vector` 0.8.2 / `pgstattuple` 1.5（いずれも `shared_preload_libraries` 不要） | [Allow extensions](https://learn.microsoft.com/en-us/azure/postgresql/extensions/how-to-allow-extensions) / [Extensions list](https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions-versions) |
 | 28 | 計画フェイルオーバーの断の順序 | 公式の手順表で、**書き込みブロック（Step 3 "Application writes are blocked when the standby server is close to the primary LSN"）が standby 昇格（Step 4）・DNS 切替（Step 5）より先に発生**する。アプリのダウンタイムは Step 3〜5（"Application downtime starts at step 3 and can resume operation after step 5"）。つまり読み取りの成否だけを見る probe では書き込み断の開始を見逃す | [High availability concepts](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability)（Planned failover の手順表） |
+| 29 | **委任サブネットの `Microsoft.Storage` service endpoint** | 委任サブネットに最初のサーバーがプロビジョンされた時点で、Azure が `Microsoft.Storage` の service endpoint を**自動付与する**。用途は **WAL ファイルを Azure Storage へアップロードする通信の経路確保**（"This configuration ensures reliable routing of traffic to the Azure Storage accounts used for uploading Write-Ahead Log (WAL) files"）。**削除すると接続性を損ない得る**（"Removing this endpoint may disrupt connectivity and can lead to unintended consequences for core service operations"）。Terraform 側は `azurerm_subnet` に明記しておかないと毎回この endpoint を削除する plan を出し続ける（2026-08-22 実測・対応済み） | [Private access (VNet integration)](https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private) |
 
 ### 2-2. 出典が取れず「未実測」とする項目（Day 3〜5 で測る）
 
@@ -211,6 +212,19 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 ### 4-1. 朝: 状態確認（stop 運用は廃止。ADR-0017）
 
 サーバーは夜間も稼働継続している（§3-6）。起動操作は不要で、状態確認から始める。
+
+> **【ドリル前のゲート】`terraform apply` の前に、必ず `plan` が差分ゼロであることを確認する。**
+>
+> ```bash
+> terraform -chdir=terraform/persistent plan -detailed-exitcode   # exit 0 以外なら apply しない
+> ```
+>
+> exit 0 以外（= 差分あり）なら、**差分の中身を読むまで apply しない**。Azure 側が自動で付ける設定を
+> Terraform が「コードにないから消す」と判断しているケースがあり、実例として **PostgreSQL 委任サブネットの
+> `Microsoft.Storage` service endpoint（WAL アーカイブ経路。§2-1 No.29）を外す plan** が実際に出た
+> （[vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) ステップ A-2。対応済み）。
+> 中身を見ずに apply すると、**本命成果物である Backup / PITR の経路をドリルの最中に壊せてしまう**。
+> ephemeral 層（DSN 向け替えの再 apply。§4-3 の 8 / §4-5）でも同じゲートを踏む。
 
 - `az postgres flexible-server show` で `state: Ready` を確認する（Ready でなければ §2-1 No.8 の自動再起動等の想定外イベントを疑い、Activity Log を確認して記録する）
 - §3-3 と同じコマンドで `earliestRestoreDate` / Backup Storage Used を取り、前日終業時からの推移を `observations.md` に記録（連続稼働中のバックアップ蓄積の実測。PITR ドリルの復元可能範囲の確認を兼ねる）
@@ -345,6 +359,10 @@ done | tee write-probe.log
   - **上限** =「最後に成功した試行の終了時刻 → 最初に復帰した試行の開始時刻」。断はこの区間の内側で始まり内側で終わる
   - この上下限は**断が 1 回の連続した区間である**という仮定に依存する。失敗行の並びの途中に成功行が挟まる（断続的に切れる）場合は成立しないため、その場合は連続した失敗のかたまりごとに算出し、ログ全体を証跡に残す。両値とも試行間隔（1 秒）+ タイムアウト分の幅を含む値として書く
 - `timeout 5` は接続後のクエリ側ハング（TCP 切断が伝わらないケース）の保険。probe の追加コストは書き込み 1 行 / 秒で、実行時間は増やさない
+
+> **【ゲート再掲】Day 5 の各 apply の前にも `plan -detailed-exitcode` が exit 0 であることを確認する**
+> （§4-1 のゲートと同じ。差分があれば中身を読むまで apply しない）。Day 5 は階層変更・HA 有効化と
+> インフラ変更が続くため、意図しない差分が紛れ込んだまま apply されるリスクが最も高い。
 
 ### 5-1. 階層変更（Burstable → General Purpose）ダウンタイム実測
 
