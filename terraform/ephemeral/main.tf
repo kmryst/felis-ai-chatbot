@@ -133,12 +133,14 @@ resource "azurerm_container_app" "main" {
   template {
     # secret（database-url）の更新は既存 revision に自動反映されない（新しい revision の作成
     # または restart が必要。出典: https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets ）。
-    # DSN のハッシュを revision_suffix に埋め込み、database_url が変わる apply（Day 4 の PITR 後の
-    # 復元先への向け替え等）で template が必ず変化 = 新 revision が必ず作られるようにコードで担保する。
-    # ハッシュは sha256 の先頭 8 桁のみ（不可逆。DSN・パスワードは復元できない）。
-    # nonsensitive() は「sensitive な DSN から派生するが suffix 自体は秘匿情報でない」ことの明示
-    #（Azure 上の revision 名として公開される値であり、plan 出力を無用にマスクさせない）。
-    revision_suffix = var.database_url == "" ? null : "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
+    # DSN が変わる apply（Day 4 の PITR 後の復元先への向け替え等）で新 revision の作成をコードで
+    # 担保するため、DSN のハッシュを template 内の非 secret 環境変数（DSN_REVISION_MARKER。下の
+    # container ブロック）として持たせる。revision_suffix への埋め込みは使わない: revision 名は
+    # 一意必須（"Every revision in Container Apps is assigned a unique identifier."）で、非アクティブ
+    # revision は最大 100 件保持されるため、Day 4 の 元サーバー → 復元先 → 元サーバー の往復では
+    # 戻しの apply が過去に使った suffix を再利用して既存 revision と衝突する（詳細は ADR-0018 追記）。
+    # suffix を指定しなければ Azure が一意な名前を自動生成する。
+    # 出典: https://learn.microsoft.com/en-us/azure/container-apps/revisions
 
     # スケールゼロ（min_replicas = 0）: 無リクエスト時にレプリカ 0 まで縮退し、
     # コンピュート課金を止める（§8 のコスト方針。ADR-0015）。walking skeleton に
@@ -161,6 +163,27 @@ resource "azurerm_container_app" "main" {
         content {
           name        = "DATABASE_URL"
           secret_name = "database-url"
+        }
+      }
+
+      # 新 revision 作成のコード担保（アプリはこの変数を読まない）。環境変数は
+      # properties.template にあり revision-scope、secret は properties.configuration にあり
+      # application-scope のため、secret の更新だけでは新 revision が作られない。
+      # 出典（https://learn.microsoft.com/en-us/azure/container-apps/revisions ）:
+      #   "A revision-scope change is any change to the parameters in the
+      #    properties.template section of the container app resource template."
+      #   "Application-scope changes are defined as any change to the parameters in the
+      #    properties.configuration section of the container app resource template.
+      #    These parameters include: Secret values (revisions must be restarted before
+      #    a container recognizes new secret values)" — "A new revision isn't created."
+      # ハッシュは sha256 の先頭 8 桁のみで不可逆（DSN・パスワードは復元できない）。値自体は
+      # 秘匿情報ではなく（従来は revision 名として Azure 上に露出していた値）、nonsensitive() は
+      # その明示 + plan 出力を無用にマスクさせないため。
+      dynamic "env" {
+        for_each = var.database_url == "" ? [] : ["dsn-revision-marker"]
+        content {
+          name  = "DSN_REVISION_MARKER"
+          value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
         }
       }
     }
@@ -219,8 +242,9 @@ resource "azurerm_container_app" "ops" {
   template {
     # serving 側と同じ理由（secret 更新は既存 revision に自動反映されない）で、DSN 変更の apply が
     # 必ず新 revision を作るようにする。ops コンテナは Day 4 の RTO / RPO 計測経路そのもののため、
-    # 古い revision が元サーバーの DSN を見続けると計測が偽になる（ADR-0018 追記 2026-08-22）
-    revision_suffix = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
+    # 古い revision が元サーバーの DSN を見続けると計測が偽になる。担保は serving 側と同じく
+    # 非 secret 環境変数 DSN_REVISION_MARKER（revision-scope。下の container ブロック）で行い、
+    # revision_suffix 固定は往復 apply での名前衝突のため使わない（ADR-0018 追記）
 
     min_replicas = 0
     max_replicas = 1
@@ -238,6 +262,12 @@ resource "azurerm_container_app" "ops" {
         name        = "DATABASE_URL"
         secret_name = "database-url"
       }
+
+      # 新 revision 作成のコード担保（詳細コメントは serving 側の同名 env を参照）
+      env {
+        name  = "DSN_REVISION_MARKER"
+        value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
+      }
     }
   }
 
@@ -254,7 +284,7 @@ resource "azurerm_container_app" "ops" {
 # 課金は実行中のレプリカ分のみ（Manual トリガーで放置中はゼロ）。
 # Job には revision の概念がなく（azurerm 5.1.0 の実スキーマでも template に revision_suffix なし。
 # 2026-08-22 に providers schema で確認）、実行のたびに新しい execution が作られるため、
-# Container App 側のような revision_suffix によるコード担保は不要。secret 更新後の挙動
+# Container App 側のような DSN_REVISION_MARKER によるコード担保は不要。secret 更新後の挙動
 # （新 execution が更新後の値を読むか）は cutover 実測時に確認する（未実測）。
 resource "azurerm_container_app_job" "migrate" {
   count = var.ops_container_image == "" ? 0 : 1

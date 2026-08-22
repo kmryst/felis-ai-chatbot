@@ -261,6 +261,74 @@ service endpoint を自動付与する。** 用途は **WAL（Write-Ahead Log）
 - 実測記録: [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) ステップ A-2
   （`plan` が exit 0 になったことを実測。Azure への書き込みおよび `terraform apply` は未実施）
 
+## 追記（2026-08-22。#98: revision 作成の担保を `revision_suffix` 固定から template 環境変数へ変更）
+
+追記 #84 の 3 で導入した「`revision_suffix` = DSN の sha256 先頭 8 桁」は、ステップ B/C 実行前の
+外部レビューで **Day 4 の往復シナリオと両立しない**ことが判明したため、担保方式を変更する。
+ステータスは Accepted のまま。「secret 更新の revision 反映をコードで担保する」という目的自体は不変。
+
+### なぜ当初 `revision_suffix` 固定にしたのか（#84 追記 3 の意図）
+
+secret（database-url）の更新は既存 revision に反映されず、secret の変更だけでは新 revision も
+作られない（出典は #84 追記 3 の manage-secrets）。DSN が変わる apply で template を必ず変化させる
+値として、DSN から決定的に導ける sha256 ハッシュを `revision_suffix` に選んだ。suffix は revision 名に
+現れるため「いまどの DSN を向いた revision か」が名前から読める、という副次効果も期待した。
+
+### なぜ往復シナリオで破綻するのか
+
+Day 4 の PITR ドリルは DSN を **元サーバー → 復元先 → 元サーバー** と往復させる
+（[day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §4-3 の 8 / §4-5）。
+戻しの apply では DSN が元の値に戻るため、決定的ハッシュの suffix も**過去に使った値と同一**になる。
+一方 revision 名は一意で、非アクティブ revision は削除されず保持される
+（出典: <https://learn.microsoft.com/en-us/azure/container-apps/revisions> ）:
+
+> Every revision in Container Apps is assigned a unique identifier.
+>
+> **Historical record**: By default, you have access to 100 inactive revisions, but you can adjust
+> this threshold manually.
+>
+> （Single revision mode）Old revisions are automatically deprovisioned.
+
+つまり Single revision モードでも旧 revision は deprovision されるだけで一覧に残り、戻しの apply の
+suffix は既存の非アクティブ revision と名前が衝突する。**衝突時に ARM API がエラーを返すのか、
+黙って既存 revision を参照するのかは公式に記載がなく未実測**（ステップ C 内で意図的に衝突させて
+実測する予定。手順は [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §3-3、
+記録先は [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md)）だが、
+どちらでも Day 4 は壊れる:
+エラーなら切り戻し（§4-5）がブロックされ、無反応なら「元サーバーに戻したつもりで復元先を見続ける」
+ため RTO / RPO の計測値が偽になる。
+
+### 何に変えたか
+
+`revision_suffix` の指定をやめ（Azure に一意な revision 名を自動生成させる）、DSN の sha256 先頭
+8 桁を **template 内の非 secret 環境変数 `DSN_REVISION_MARKER`** として serving / ops 両 Container App
+に持たせる（`terraform/ephemeral/main.tf`。アプリはこの変数を読まない）。これが正しく「DSN 変更 =
+新 revision」を担保する根拠は、変更の scope の違いにある
+（出典: 同 revisions ドキュメントの Change types 節）:
+
+> A *revision-scope* change is any change to the parameters in the `properties.template` section
+> of the container app resource template.
+>
+> *Application-scope* changes are defined as any change to the parameters in the
+> `properties.configuration` section of the container app resource template. These parameters
+> include: Secret values (revisions must be restarted before a container recognizes new secret
+> values)
+
+secret は `properties.configuration` にあり新 revision を作らないが、環境変数は
+`properties.template` にあり revision-scope のため、DSN が変わる apply は必ず新 revision を作る。
+往復で環境変数の値が過去と同じに戻っても、revision 名は Azure が一意に自動生成するため衝突しない。
+
+- ハッシュ値自体は秘匿情報ではない（不可逆な truncated hash で、従来はまさに revision 名として
+  Azure 上に露出していた値。#84 追記 3 と同じ整理）。`nonsensitive()` はその明示
+- `azurerm_container_app_job.migrate` は revision の概念がなく従来どおり対象外（#84 追記 3）
+- 「revision 名から DSN ハッシュが読める」という副次効果は失われるが、同じ情報は revision の
+  環境変数 `DSN_REVISION_MARKER` を読めばよい
+- 検証: `terraform validate` / ダミー変数での `terraform plan` で、両 Container App の template に
+  `DSN_REVISION_MARKER` が入り `revision_suffix` が未指定（known after apply）になることを確認
+  （2026-08-22。ephemeral 層は destroy 済みのため実 apply での revision 生成挙動は未実測。
+  ステップ B/C と Day 4 の戻し apply で実測する。suffix 衝突時の ARM API の挙動そのものは
+  ステップ C の意図的衝突実測 — vnet-integration-cutover.md §3-3 — で確かめる）
+
 ## 関連
 
 - [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日の決定は不変（geo 冗長は本 ADR 起案時は無効のままの予定だったが、その後 [ADR-0019](./0019-enable-geo-redundant-backup.md) が本 ADR の再作成タイミングを利用して有効へ変更した）

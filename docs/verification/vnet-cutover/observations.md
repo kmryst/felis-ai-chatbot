@@ -247,3 +247,53 @@ service endpoint を自動付与する**。用途は **WAL（Write-Ahead Log）�
 - 計画書 Day 4（§4-1）/ Day 5（§5-1 の前段）に「**apply の前に `plan -detailed-exitcode` が
   exit 0 であることを確認する**」というゲートを追加。ドリル最中の不用意な apply を防ぐため
 - ADR-0018 に追記（新規 ADR は起こさない。判断根拠は当該追記に記載）
+
+## revision 名衝突の意図的実測（**未実施**。手順: [vnet-integration-cutover.md](../../operations/vnet-integration-cutover.md) §3-3。#98）
+
+ADR-0018 追記 #98 の未実測項目「過去に使った revision suffix の再指定を ARM API がエラーにするのか
+黙認するのか」を、ステップ C（§3-2 の psql 疎通成功直後）に ops Container App で意図的に衝突させて
+実測する。**以下はすべて記入欄であり、値が入っていない間は未実施**。実施はユーザーの明示承認後。
+
+### タイムライン（実施時に記入）
+
+| 時刻 (UTC) | ステップ | コマンド exit code | メモ |
+| --- | --- | --- | --- |
+| | 0) 基準の revision list | | |
+| | 1) suffix probe1 + env=1 | | |
+| | 1-b) 既存 env 生存確認（ガード） | | |
+| | 2) suffix probe2 + env=2 | | |
+| | 3) suffix probe1 再指定 + env=3（本番） | | |
+
+### 1-b) ガードの結果（実施時に記入。ここが NG なら 2) 3) は未実施のまま後始末へ）
+
+| 項目 | 記録 |
+| --- | --- |
+| probe1 revision の env 一覧（`revision show` の実出力。secret 値は含めない） | |
+| `DATABASE_URL`（secretRef = database-url）が残っているか | |
+| `DSN_REVISION_MARKER` が残っているか | |
+| ヘルプ記述（"Existing environment variables are not modified."）と実挙動の一致 / 食い違い | |
+
+### 3) の結果（実施時に記入。§3-3 の「記録すべきこと」参照）
+
+| 項目 | 記録 |
+| --- | --- |
+| exit code | |
+| エラー全文（メッセージ・ARM エラーコード） | |
+| CLI 側バリデーションで ARM 到達前に弾かれたか（`--debug` の PUT/PATCH と HTTP status） | |
+| 成功時: probe1 の `REVISION_COLLISION_PROBE` の値（3 = 新内容 / 1 = 旧内容の再利用） | |
+| 成功時: probe1 の `createdTime`（1) の時刻のままか 3) の時刻か） | |
+| 各ステップの revision list（active / inactive / Replicas 列） | |
+
+### 判定（実施時に記入）
+
+- 観測された挙動が §3-3 判定表のどの行に当たるか:
+- Day 4 への含意（旧方式ならどう壊れていたか）:
+- ADR-0018 追記 #98 の「未実測」記述の更新要否:
+
+### 後始末とゲート（実施時に記入）
+
+| 検証 | 結果 |
+| --- | --- |
+| probe 差分に対する `terraform plan -detailed-exitcode`（apply 前。exit 2 想定） | |
+| `terraform apply` 後の `plan -detailed-exitcode`（**exit 0 必須ゲート**） | |
+| psql 疎通の再確認（§3-2 と同じ手順） | |
