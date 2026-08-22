@@ -106,3 +106,20 @@ variable "ops_container_image" {
     error_message = "ops_container_image は空か、タグ付きの完全参照（タグは英数字と . _ - のみ）を指定し、latest タグは使わないでください（ADR-0015 のイメージタグ方針）。"
   }
 }
+
+variable "chat_api_key" {
+  description = <<-DESC
+    /chat 保護用の API キー（Issue #107。ADR-0020 の常時稼働の先行ゲート）。
+    secret のため tfvars に書かず TF_VAR_chat_api_key で渡す（.env 管理。コミット禁止）。
+    空のままなら backend は fail-closed（/chat が 404）で起動する。
+  DESC
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "chat_disabled" {
+  description = "/chat の緊急遮断フラグ（消費超過時の打ち切りスイッチ。credit-window-execution-plan.md §9）。true で /chat が 404 になる。/readyz は影響を受けない"
+  type        = bool
+  default     = false
+}

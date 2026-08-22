@@ -130,6 +130,16 @@ resource "azurerm_container_app" "main" {
     }
   }
 
+  # /chat 保護の API キー（#107）。未指定なら secret / env とも作らず、backend は
+  # fail-closed（/chat 404）で動く
+  dynamic "secret" {
+    for_each = var.chat_api_key == "" ? [] : ["chat-api-key"]
+    content {
+      name  = "chat-api-key"
+      value = var.chat_api_key
+    }
+  }
+
   template {
     # secret（database-url）の更新は既存 revision に自動反映されない（新しい revision の作成
     # または restart が必要。出典: https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets ）。
@@ -185,6 +195,22 @@ resource "azurerm_container_app" "main" {
           name  = "DSN_REVISION_MARKER"
           value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
         }
+      }
+
+      # /chat 保護（#107）
+      dynamic "env" {
+        for_each = var.chat_api_key == "" ? [] : ["chat-api-key"]
+        content {
+          name        = "CHAT_API_KEY"
+          secret_name = "chat-api-key"
+        }
+      }
+
+      # 緊急遮断フラグ（値の変更は revision-scope なので必ず新 revision が作られ、
+      # 反映漏れが起きない = DSN_REVISION_MARKER と同じ理屈）
+      env {
+        name  = "CHAT_DISABLED"
+        value = var.chat_disabled ? "true" : "false"
       }
     }
   }

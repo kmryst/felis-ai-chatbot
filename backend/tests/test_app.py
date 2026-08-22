@@ -24,7 +24,13 @@ async def _fake_properties(database_url, timeout):
 
 @pytest.fixture()
 def client():
-    with TestClient(main_module.app) as c:
+    # /chat は API キー必須（#107）。既存テストの主題は保護ではないため、
+    # 正しいキーを既定ヘッダで送る（保護自体のテストは test_chat_protection.py）
+    import os
+
+    with TestClient(
+        main_module.app, headers={"X-API-Key": os.environ["CHAT_API_KEY"]}
+    ) as c:
         yield c
 
 

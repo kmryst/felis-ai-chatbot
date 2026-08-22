@@ -4,9 +4,10 @@
 """
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -57,6 +58,9 @@ async def lifespan(app: FastAPI):
             else None
         ),
     )
+    if not settings.chat_api_key:
+        # fail-closed の可視化（値は出さない）。本番でこの警告が出ていたら設定漏れ
+        logger.warning("CHAT_API_KEY is not set; /chat is disabled (fail-closed)")
     logger.info("startup complete")
     yield
     # graceful shutdown の枠。DB プールのクローズ等は PR 2（DB 接続）で載せる
@@ -70,7 +74,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_allowed_origins),
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Request-ID"],
+    allow_headers=["Content-Type", "X-Request-ID", "X-API-Key"],
 )
 
 
@@ -111,8 +115,30 @@ class ChatResponse(BaseModel):
     reply: str
 
 
+def _enforce_chat_gate(x_api_key: str | None) -> None:
+    """/chat の保護ゲート（Issue #107。ADR-0020 の常時稼働の先行ゲート）。
+
+    - 緊急遮断フラグ（CHAT_DISABLED=true）: 404。消費超過時の打ち切りスイッチ
+      （credit-window-execution-plan.md §9 の 2）。エンドポイントの存在自体を隠す
+    - API キー未設定（CHAT_API_KEY 空）: 404（fail-closed）。キーを配らずにデプロイ
+      した場合に、無認証の LLM 課金経路が公開される事故を「/chat が無い」側に倒す
+    - キー不一致・未提示: 401。比較は secrets.compare_digest（タイミング攻撃対策の定石。
+      このアプリの脅威モデルでは過剰気味だが、コストゼロなので定石に従う）
+    - /readyz・/health はこのゲートの対象外（外形監視と両立させる。#106）
+    """
+    if settings.chat_disabled or not settings.chat_api_key:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if x_api_key is None or not secrets.compare_digest(
+        x_api_key.encode(), settings.chat_api_key.encode()
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.post("/chat")
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> ChatResponse:
     """RAG つきチャット応答（ADR-0010）。
 
     - ユーザー質問を embedding し、documents を cosine 類似度で検索する
@@ -123,6 +149,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     - システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
       必ず適用する
     """
+    _enforce_chat_gate(x_api_key)
     try:
         query_embedding = await app.state.llm.embed(req.message)
     except LLMError as exc:
