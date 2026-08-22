@@ -149,6 +149,17 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
    GitHub の失敗通知が届くことを確認し、復旧後に green へ戻ること
    （**アラートは鳴らしてみるまで鳴るか分からない**。この試験自体が成果物）
 
+**観測開始チェックリスト（全項目 yes になった時刻 = T_obs_start。1 つでも欠けたまま始めない）**:
+
+| # | 項目 | 確認方法 |
+| --- | --- | --- |
+| 1 | #107 デプロイ済み（/chat が外部から 401 / 404） | 外部から実測 |
+| 2 | #104 デプロイ済み・3 系列すべてが設計間隔で積まれている | obs テーブルの実データ |
+| 3 | 意図的欠落の通知試験に成功（上記 3） | GitHub 失敗通知の受信 → 復旧 green |
+| 4 | **repository variable `OBS_FRESHNESS_ENFORCE=true` を設定済み** | `gh variable list`。**既定は false で、設定するまで無音失敗検知は一切働かない**（手動ステップ。ここを飛ばすと 72h 観測が「3 日前から止まっていた」で終わり得る） |
+| 5 | `PROBE_ENABLED` が true（既定 true）のまま | `gh variable list` |
+| 6 | `obs.phase_config` が 'baseline' | SELECT で確認 |
+
 ## 5. 期間観測 (a)（フェーズ 1 = T_obs_start + 72h。目安 8/25〜8/28。定義は §2）
 
 ### 5-1. 観測項目
@@ -519,7 +530,9 @@ B_rem = teardown 9/4 まで 4 日 × 2.1 = 8.4 として:
 
 1. 9/3: 観測データの最終エクスポート（観測テーブルのダンプ → `docs/verification/` 証跡化、
    probe ログ集計、Azure Monitor メトリクスの必要範囲エクスポート — **CPU Credits Remaining を含む**）
-2. 9/4: ephemeral destroy → persistent destroy（旧計画 §5-6 の手順） → 残存リソースゼロ確認
+2. 9/4: **外形監視の停止**（`gh variable set PROBE_ENABLED --body false` — FQDN が消えた後に
+   5 分ごとの fail 通知が永久に出続けるのを防ぐ）→ ephemeral destroy → persistent destroy
+   （旧計画 §5-6 の手順） → 残存リソースゼロ確認
 3. 9/5 以降: 課金反映ラグの分を待って最終コスト実測を記録（これも FinOps 証跡）
 
 - 失効 9/18 06:59Z まで**約 14 日のマージン**（72h 化の副産物）。teardown 失敗時の調査・再実行、
