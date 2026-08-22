@@ -16,6 +16,8 @@
 # - secret（DATABASE_URL / AZURE_OPENAI_API_KEY 等）は一切焼き込まない。
 #   すべて実行時の環境変数で渡す（app/config.py が起動時に検証する）
 # - イメージタグは git commit SHA 由来の不変タグを使う。latest 禁止（ADR-0015）
+# - serving イメージ（既定ターゲット）には運用ツールを混ぜない。psql / migrations が要る
+#   運用コンテナは ops ターゲット（--target ops）として分離する（ADR-0018）
 
 FROM python:3.13.14-slim AS builder
 
@@ -62,3 +64,39 @@ USER app
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ---------------------------------------------------------------------------
+# ops ターゲット（VNet 内運用コンテナ用。ADR-0018）
+# ---------------------------------------------------------------------------
+# private access 化後、DB への対話経路（psql / alembic）は VNet 内の運用コンテナに限る。
+# runtime を基に、serving イメージから意図的に除外しているもの（postgresql-client /
+# migrations/ / alembic.ini）だけを足す。serving（既定ターゲット）には混ぜない。
+# alembic 本体は本体依存として .venv に入っている（pyproject.toml）。
+#
+# ビルド: docker build --target ops -t felis-backend-ops:sha-$(git rev-parse --short HEAD) .
+FROM runtime AS ops
+
+# apt は root が要る（runtime 末尾で USER app 済みのため戻す）
+USER root
+
+# postgresql-client 17 系（trixie の postgresql-client は 17.x。+63MB 実測）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# alembic upgrade head が WORKDIR /app 直下の alembic.ini（script_location = %(here)s/migrations）を読む
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+
+USER app
+
+# 既定は待機のみ（uvicorn を継承しない）。実際の用途は Terraform 側の command 上書きで決める
+# （ops Container App: sleep infinity / migration Job: alembic upgrade head）
+CMD ["sleep", "infinity"]
+
+# ---------------------------------------------------------------------------
+# 既定ターゲットを serving に戻す（docker build は最後のステージを既定でビルドするため、
+# ops を上に置いたままだと素の docker build が運用ツール入りイメージを作ってしまう）。
+# このステージは runtime と同一内容で、BuildKit は既定ビルドで ops ステージをスキップする
+# ---------------------------------------------------------------------------
+FROM runtime AS serve

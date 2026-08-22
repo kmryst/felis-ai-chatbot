@@ -27,9 +27,10 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9） | 管理外 | 触らない | 残す | $0 |
 | Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
 | tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
-| PostgreSQL Flexible Server / `azure.extensions` / firewall rule（作業端末） | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節） |
+| PostgreSQL Flexible Server（**private access**。ADR-0018） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018） |
+| VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（/27・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（/28・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment / Container App / firewall rule（ACA egress） | ephemeral | 毎日 destroy | destroy | ACR のみ約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018） | ephemeral | 毎日 destroy | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
@@ -85,13 +86,13 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（�
 | # | 手順 | 所要時間 |
 | --- | --- | --- |
 | 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
-| 2 | `az acr import` でイメージ投入 → `terraform -chdir=terraform/ephemeral apply`（2 段階。`terraform/ephemeral/main.tf` 冒頭コメントの手順） | 約 4〜5 分（2026-08-21 実測: 第1段 1m50s + import 12s + 第2段 44s + 第3段 1m17s。[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)） |
-| 3 | Alembic マイグレーション適用 | 未実測（数分見込み） |
+| 2 | ephemeral apply（2 段階: ACR を `-target` で先行 → serving / ops イメージ push → 全体 apply。`terraform/ephemeral/main.tf` 冒頭コメントと [vnet-integration-cutover.md](./vnet-integration-cutover.md) §2） | 旧構成実測 約 4〜5 分（2026-08-21。[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）。VNet 統合 CAE の作成時間は未実測（ADR-0018 後に更新） |
+| 3 | Alembic マイグレーション適用（`az containerapp job start` で `caj-felisaichatbot-dev-migrate` を起動。[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3） | 未実測（数分見込み） |
 | 4 | seed（気象庁データ）投入 | 未実測（数分見込み） |
 | 5 | embedding 生成 | 所要は未実測。再生成の API コストは 0.1 円未満（実測済み） |
 
 - 合計見込み: **20〜30 分程度**（3〜5 の未実測分を含む概算。実施したら実測値でこの表を更新する）
-- backend イメージへの差し替え後は、`container_image` / `container_target_port` / `database_url` の変数指定も必要（`terraform/ephemeral/variables.tf`）
+- backend イメージへの差し替え後は、`container_image` / `container_target_port` / `database_url` / `ops_container_image` の変数指定も必要（`terraform/ephemeral/variables.tf`）。DATABASE_URL のホスト部は private DNS zone 配下の FQDN（`terraform -chdir=terraform/persistent output server_fqdn`）
 
 ## §B. Terraform 管理外リソースの詳細
 

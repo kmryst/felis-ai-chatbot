@@ -1,9 +1,88 @@
 # 設計値の正本は docs/operations/day3-5-execution-plan.md §3-1（PostgreSQL）と ADR-0016（Log Analytics）。
-# 保持期間 7 日・geo 冗長無効の判断は docs/adr/0011 に記録。
+# 保持期間 7 日・geo 冗長無効の判断は docs/adr/0011、ネットワーク境界（VNet 統合 / private access）は
+# docs/adr/0018 に記録。
 
 data "azurerm_resource_group" "dev" {
   name = var.resource_group_name
 }
+
+# ---------------------------------------------------------------------------
+# ネットワーク（VNet / 委任サブネット / private DNS zone。ADR-0018）
+# ---------------------------------------------------------------------------
+
+# VNet・委任サブネット・private DNS zone は persistent 層に置く（ADR-0018）。
+# CAE（ephemeral 層）は毎日 destroy されるが、PostgreSQL の委任サブネットはサーバーが
+# 生きている限り手放せず、ネットワークの寿命は PostgreSQL（persistent）に一致するため。
+# ephemeral 層は snet-aca を data source で参照する（terraform_remote_state は使わない。ADR-0015 の 7）。
+resource "azurerm_virtual_network" "main" {
+  name                = "vnet-felisaichatbot-dev"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  location            = data.azurerm_resource_group.dev.location
+
+  # /24 で足りる: 使うのは snet-aca /27（32）+ snet-pgsql /28（16）の計 48 アドレスのみ。
+  # 他 VNet とのピアリング予定はなく、広い空間を予約する理由がない
+  address_space = ["10.10.0.0/24"]
+}
+
+# Container Apps Environment（workload profiles 環境）用サブネット。
+# 最小 /27・`Microsoft.App/environments` への委任が必須で、インフラ用に 12 IP が予約される
+# （出典: https://learn.microsoft.com/en-us/azure/container-apps/networking ）。
+# CAE のネットワーク種別・サブネットサイズは作成後に変更できない（同出典）ため、
+# 将来広げる場合もサブネットの作り直し + CAE の作り直しになる（ephemeral 層なので毎日やっている操作）。
+resource "azurerm_subnet" "aca" {
+  name                 = "snet-felisaichatbot-dev-aca"
+  resource_group_name  = data.azurerm_resource_group.dev.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.10.0.0/27"]
+
+  delegation {
+    name = "aca-environments"
+
+    service_delegation {
+      name    = "Microsoft.App/environments"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
+}
+
+# PostgreSQL Flexible Server（private access）用の委任サブネット。最小 /28
+# （出典: https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private ）。
+resource "azurerm_subnet" "pgsql" {
+  name                 = "snet-felisaichatbot-dev-pgsql"
+  resource_group_name  = data.azurerm_resource_group.dev.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.10.0.32/28"]
+
+  delegation {
+    name = "pgsql-flexible-servers"
+
+    service_delegation {
+      name    = "Microsoft.DBforPostgreSQL/flexibleServers"
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
+    }
+  }
+}
+
+# private access の名前解決用 private DNS zone。名前は `[name].postgres.database.azure.com`
+# 形式が必須で、サーバー名と同名にはできない（出典: 上記 concepts-networking-private）。
+# CAF の略語表では DNS zone の「略語」は DNS ドメイン名そのもの（ADR-0013 の規則表を参照）。
+resource "azurerm_private_dns_zone" "pgsql" {
+  name                = "felisaichatbot-dev.private.postgres.database.azure.com"
+  resource_group_name = data.azurerm_resource_group.dev.name
+}
+
+# zone を VNet に解決可能にする link。PostgreSQL の作成は「zone が対象 VNet にリンク済み」で
+# あることが前提（上記 concepts-networking-private）。サーバーは zone の id しか参照しないため
+# link への暗黙依存が作れず、サーバー側に明示 depends_on を張る（下記）。
+resource "azurerm_private_dns_zone_virtual_network_link" "pgsql" {
+  name                = "vnet-felisaichatbot-dev-link"
+  private_dns_zone_id = azurerm_private_dns_zone.pgsql.id
+  virtual_network_id  = azurerm_virtual_network.main.id
+}
+
+# ---------------------------------------------------------------------------
+# PostgreSQL Flexible Server
+# ---------------------------------------------------------------------------
 
 resource "azurerm_postgresql_flexible_server" "main" {
   name                = var.server_name
@@ -26,8 +105,13 @@ resource "azurerm_postgresql_flexible_server" "main" {
   # geo 冗長は作成時にしか決められない。無効の判断根拠は ADR-0011
   geo_redundant_backup_enabled = false
 
-  # public access + サーバーレベル firewall rule（§3-1。VNet 統合は採らない）
-  public_network_access_enabled = true
+  # private access（VNet 統合）。ネットワーク方式は作成時にしか決められず、
+  # public からの変更はサーバーの再作成（ForceNew）になる（ADR-0018）。
+  # 委任サブネット + private DNS zone は上のネットワーク節。firewall rule は廃止
+  # （private access では VNet 内からのみ到達可能で、IP 単位の許可リスト自体が存在しない）。
+  delegated_subnet_id           = azurerm_subnet.pgsql.id
+  private_dns_zone_id           = azurerm_private_dns_zone.pgsql.id
+  public_network_access_enabled = false
 
   # カスタムメンテナンスウィンドウ: 水曜 17:00 UTC 開始（木曜 02:00 JST。検証作業と重ならない深夜帯）
   maintenance_window {
@@ -43,6 +127,10 @@ resource "azurerm_postgresql_flexible_server" "main" {
     # 入れ替わっても Terraform が元の zone へ戻そうとしないよう ignore する（provider docs 推奨）。
     ignore_changes = [zone]
   }
+
+  # VNet link が完成する前にサーバー作成を始めると名前解決の結線ができず失敗し得るため、
+  # 依存を明示する（link はサーバーから属性参照されず、暗黙依存が発生しない）
+  depends_on = [azurerm_private_dns_zone_virtual_network_link.pgsql]
 }
 
 # CREATE EXTENSION は azure.extensions への allowlist 追加が前提（§2-1 No.27）。
@@ -52,16 +140,6 @@ resource "azurerm_postgresql_flexible_server_configuration" "azure_extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.main.id
   value     = "VECTOR,PGSTATTUPLE"
-}
-
-# firewall rule を作るまで全接続拒否（§2-1 No.26）。作業端末の IP は変数で渡す。
-resource "azurerm_postgresql_flexible_server_firewall_rule" "client" {
-  for_each = var.firewall_allowed_client_ips
-
-  name             = each.key
-  server_id        = azurerm_postgresql_flexible_server.main.id
-  start_ip_address = each.value
-  end_ip_address   = each.value
 }
 
 # ---------------------------------------------------------------------------

@@ -131,7 +131,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | バックアップ保持期間 | **7 日（既定のまま）** | 検証期間は 3 日で、復旧ウィンドウ 7 日で十分に覆う。延長はバックアップストレージ消費（=無料枠超過リスク）を増やすだけで、このプロジェクトでは得るものがない（§2-1 No.1）。「既定だから」ではなく「要件（3 日）< 窓（7 日）だから」と ADR に書く |
 | geo 冗長バックアップ | **無効** | (a) 有効化は作成時のみで後から変更不可（§2-1 No.5）なので今決める必要がある。(b) 有効時はバックアップサイズ 2 倍課金。(c) geo リストアは PITR 不可・RPO 最大 1 時間で、本プロジェクトの本命である PITR ドリルには寄与しない。(d) リージョン災害対策は本プロジェクトの要件にない。「無効にした」という判断と根拠を残すこと自体が成果物 1 になる |
 | HA | 無効（Day 5 に有効化） | Burstable は HA 非対応（§2-1 No.10） |
-| ネットワーク | **public access + サーバーレベル firewall rule**。許可対象は (a) 作業端末のグローバル IP（`curl -s ifconfig.me` で当日確認）、(b) Container Apps の egress IP（apply 後に判明するため Terraform で参照して許可） | firewall rule を作るまで全接続拒否（§2-1 No.26）。これがないと `/readyz`（アプリ→DB）も Day 4〜5 の `psql`（作業端末→DB）も開始できない。VNet 統合は本プロジェクトの検証目的に寄与せず作業量だけ増えるため採らない |
+| ネットワーク | **private access（VNet 統合）**: 委任サブネット `snet-felisaichatbot-dev-pgsql`（/28）+ private DNS zone。`public_network_access_enabled = false`・firewall rule なし（**2026-08-22 改訂。ADR-0018**） | 当初の「public access + firewall rule」は walking skeleton 開通までの暫定構成（Issue #81）。egress IP の変動が実測で確認され（[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）、IP 許可は本質的な制御にならないため、テーブル 0 件・バックアップ 1 件の再作成コスト最小のうちに private access へ確定した。`psql` / Alembic は VNet 内の ops コンテナ経由（[vnet-integration-cutover.md](./vnet-integration-cutover.md)） |
 | `azure.extensions` | **`VECTOR,PGSTATTUPLE`**（Terraform のサーバーパラメータで設定） | `CREATE EXTENSION` は事前 allowlist 必須（§2-1 No.27）。`vector` は既存 migration `backend/migrations/versions/0001_initial_schema.py` が `CREATE EXTENSION IF NOT EXISTS vector` を実行するため Alembic 適用の前提。`pgstattuple` は Day 4 の bloat 実測（§4-6）で使う。PG17 で両方提供済み（§2-1 No.27） |
 | メンテナンスウィンドウ | カスタム: 水曜 17:00 UTC 開始（木曜 02:00 JST） | 検証作業（日中〜夜）と重ならない深夜帯。カスタム設定の実物を持つこと自体が成果物 3 の一部。ただし実メンテは月次（§2-1 No.16）で Day 3〜5 中の遭遇は期待しない、と証跡に正直に書く |
 
@@ -173,7 +173,7 @@ az monitor metrics list \
 ### 3-5. 検証（これが通れば Day 4 へ）
 
 - CI（GitHub Actions）経由で Container Apps がデプロイされ、`/readyz` が 200 を返す（= Azure 上の PostgreSQL へ `SELECT 1` が通っている = Container Apps からの接続経路が開通している）
-- 作業端末から `psql` で接続でき、Alembic migration（`CREATE EXTENSION IF NOT EXISTS vector` を含む）が適用済み（= firewall と `azure.extensions` の設定が効いている。§3-1）。ここが通らないと Day 4 の `psql` 作業・pgstattuple・seed 投入がすべて開始できない
+- `psql` で接続でき、Alembic migration（`CREATE EXTENSION IF NOT EXISTS vector` を含む）が適用済み（= `azure.extensions` の設定が効いている。§3-1）。**private access 化（ADR-0018）後の psql / alembic は作業端末からではなく VNet 内の ops コンテナ / migration Job から行う**（[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3）。ここが通らないと Day 4 の `psql` 作業・pgstattuple・seed 投入がすべて開始できない
 - `az postgres flexible-server show` で `backup.backupRetentionDays: 7` / geo 冗長無効 / `earliestRestoreDate` の値が記録済み
 - §3-4 の結果（HA 可否）が確定し、Day 5 の経路（変更 or 新規作成）が決まっている
 
@@ -218,18 +218,23 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 4. 復元を発行し、発行時刻を記録:
 
    ```bash
+   # private access のサーバーは同一 or 別 VNet へのみ復元できる（public とは跨げない）。
+   # 復元サーバーは同じ VNet に入れる（--vnet / --subnet / --private-dns-zone。ADR-0018）
    az postgres flexible-server restore \
      -g rg-felisaichatbot-dev-tf \
      --name pgsql-felisaichatbot-dev-restored \
      --source-server pgsql-felisaichatbot-dev \
-     --restore-time "<T_target (ISO8601 UTC)>"
+     --restore-time "<T_target (ISO8601 UTC)>" \
+     --vnet vnet-felisaichatbot-dev \
+     --subnet snet-felisaichatbot-dev-pgsql \
+     --private-dns-zone felisaichatbot-dev.private.postgres.database.azure.com
    ```
 
-5. **RTO 実測**: restore 発行 → 復元サーバーへ `psql` で `SELECT 1` が通るまでの経過時間（1 分間隔でポーリングし、`state` 遷移もログする）
+5. **RTO 実測**: restore 発行 → 復元サーバーへ `psql` で `SELECT 1` が通るまでの経過時間（1 分間隔でポーリングし、`state` 遷移もログする）。**psql は VNet 内の ops コンテナ（`az containerapp exec`）から打つ**（private access のため作業端末から届かない。ADR-0018 / [vnet-integration-cutover.md](./vnet-integration-cutover.md) §3-2）
 6. **RPO 実測（実損失）**: `T1 −（復元サーバーに残っている最新マーカー時刻）`。RPO は「障害時点（T1）からどれだけのデータが失われたか」なので、意図的に 1 分手前を指定した分も含めて T1 起点で計算する（RPO の定義: [Business continuity concepts](https://learn.microsoft.com/en-us/azure/reliability/concept-business-continuity-high-availability-disaster-recovery)）。破壊したテーブルが `T_target` 時点の内容で存在することを行数で確認
 7. **復元点精度（RPO とは別に記録）**: `T_target −（復元サーバーの最新マーカー時刻）`。指定した時刻をどこまで正確に再現できたかの値であり、RPO と混ぜない。マーカーは 1 分間隔のため、両値とも最大 1 分の標本化誤差を含む（この注記ごと証跡に書く）
 8. アプリの向け替え: 接続文字列を復元サーバーに変えて `/readyz` → `/chat` を確認（「復旧した」の判定はアプリが動くことまで）
-9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**であり、ファイアウォール規則は引き継がれない。復元後に接続規則を再設定する手順まで込みで計測する
+9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**である。private access（ADR-0018）では firewall 規則は存在せず、代わりに (a) 復元サーバーが同一 VNet・委任サブネットに入ること、(b) private DNS zone に復元サーバーの名前が登録され ops コンテナから解決できること、を接続回復の確認手順に含めて計測する。委任サブネットは /28（実質 11 アドレス）で、復元中は一時的に 2 台が同居する（[vnet-integration-cutover.md](./vnet-integration-cutover.md) 末尾の注意）
 
 ### 4-4. ドリル証跡（`docs/verification/restore-drill/`）
 
