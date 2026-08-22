@@ -211,6 +211,24 @@ echo "exit=$?"
 az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
 # → probe1 側の revision の実名をここで控える（suffix と実名の区切り文字も実出力で確認して記録する）
 
+# 1-b) ガード: 既存 env が生き残ったことの実測確認（確認できるまで 2) へ進まない）。
+#    --set-env-vars のヘルプは "Existing environment variables are not modified." と言うが、
+#    それはヘルプの記述であってまだ実挙動ではない。本節の前提（ドキュメントと実挙動が
+#    食い違った前例がある）は --set-env-vars 自身にも適用する。万一 secretref の env が
+#    落ちていると ops の DB 接続が壊れ、しかも気づかず 3) に進むと「壊れたアプリで衝突を測る」
+#    ことになり、provision 失敗など衝突と無関係な理由のエラーと区別できなくなる
+az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+  --revision <REV_PROBE1> --query "properties.template.containers[0].env"
+# → 確認して記録すること（クエリのパスは想定であり、実行時に実出力で確かめて必要なら直す）:
+#   - DATABASE_URL（secretRef が database-url を指す形）と DSN_REVISION_MARKER と
+#     REVISION_COLLISION_PROBE=1 の 3 つが並んでいること
+#   - secret の値そのものは絶対に出力しない。secretRef は参照名しか出ないはずだが、
+#     まず上記クエリの実出力で形式を確認し、値が展開される形のクエリは使わないこと
+# → DATABASE_URL / DSN_REVISION_MARKER のどちらかが消えていた場合は**ここで中止**し、
+#   2) 3) に進まない。ヘルプの記述と実挙動が食い違ったこと自体が記録に値する発見なので、
+#   observations.md に記録してから「後始末とゲート」（terraform apply で収束 →
+#   plan -detailed-exitcode exit 0）へ飛ぶ
+
 # 2) suffix probe2 でもう 1 回。Single revision モードで probe1 をアクティブから外すための
 #    中間ステップ。これが無いと「非アクティブな既存 revision との名前衝突」のテストにならない
 #    （アクティブな revision と同名にするのとは別の話）

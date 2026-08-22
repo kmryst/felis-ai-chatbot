@@ -260,8 +260,18 @@ ADR-0018 追記 #98 の未実測項目「過去に使った revision suffix の�
 | --- | --- | --- | --- |
 | | 0) 基準の revision list | | |
 | | 1) suffix probe1 + env=1 | | |
+| | 1-b) 既存 env 生存確認（ガード） | | |
 | | 2) suffix probe2 + env=2 | | |
 | | 3) suffix probe1 再指定 + env=3（本番） | | |
+
+### 1-b) ガードの結果（実施時に記入。ここが NG なら 2) 3) は未実施のまま後始末へ）
+
+| 項目 | 記録 |
+| --- | --- |
+| probe1 revision の env 一覧（`revision show` の実出力。secret 値は含めない） | |
+| `DATABASE_URL`（secretRef = database-url）が残っているか | |
+| `DSN_REVISION_MARKER` が残っているか | |
+| ヘルプ記述（"Existing environment variables are not modified."）と実挙動の一致 / 食い違い | |
 
 ### 3) の結果（実施時に記入。§3-3 の「記録すべきこと」参照）
 
