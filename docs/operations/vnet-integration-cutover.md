@@ -175,17 +175,21 @@ az containerapp job execution list -g rg-felisaichatbot-dev-tf -n caj-felisaicha
 # → Status: Succeeded を確認。失敗時はログを見る（Log Analytics: ContainerAppConsoleLogs_CL）
 
 # 3-2. psql 対話経路（ops コンテナ）
-# レプリカが 1 本も Running でない場合のみ、まずレプリカを起こす（Running レプリカが既に
-# あれば exec は直接つながる。2026-08-22 実測: apply 直後は初期プロビジョニングのレプリカが
-# Running のままで、min-replicas を触らずに exec できた。**レプリカ 0 の状態で exec できるか
-# は未実測のまま**。レプリカ有無は az containerapp replica list で確認する）
-az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
-az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 1  # レプリカ 0 の場合のみ
+# ops は min_replicas = 1 の常駐構成（2026-08-22 是正。ADR-0015 追記）。exec は Running
+# レプリカに直接つながる（実測）ため、min-replicas の一時変更は不要
+az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table  # Running 1 本を確認
 az containerapp exec  -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --command bash
 #   コンテナ内で: psql "$DATABASE_URL" -c 'SELECT 1;' / \dt でマイグレーション結果を確認
-# min-replicas を 1 に上げた場合、使い終わったら必ず 0 へ戻す（常駐課金を残さない）
-az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 0
 ```
+
+- **旧手順（使うたびに min-replicas を 1 に上げ、終わったら 0 に戻す）の訂正（2026-08-22）**:
+  この操作は目的（常駐課金を残さない）を**達成していなかった**。ingress なしの ops には
+  スケールインを駆動する仕組みが無く、min-replicas を 0 に戻してもレプリカ 1 が常駐し続ける
+  （Replicas メトリクスで実測。[observations.md](../verification/vnet-cutover/observations.md)
+  の「G4 の訂正」節が正本）。さらに 0 宣言は idle 課金の適格条件（"Configured with a minimum
+  replica count greater than zero"。出典:
+  <https://learn.microsoft.com/en-us/azure/container-apps/billing> ）を外すため、常駐レプリカが
+  **active 単価で課金される**構成だった。宣言を実態に合わせた min_replicas = 1 へ是正済み
 
 - **`az containerapp exec` の非対話実行の癖（2026-08-22 実測）**: `--command` の文字列は
   コンテナ内シェルを介さず実行されるため **`$DATABASE_URL` 等は展開されない**（psql が
@@ -311,9 +315,10 @@ removed.**" とされており、これを使うと ops の DB 接続が壊れ�
 - probe で revision が最大 3 本増えるが、非アクティブ revision に課金は無い
   （"Container Apps doesn't charge for inactive revisions."
   出典: <https://learn.microsoft.com/en-us/azure/container-apps/revisions> ）
-- ops は `min_replicas` 0 のまま実施する。新 revision の provision 中に一時的にレプリカが
-  立つ場合（立つかどうかは未実測）は、その稼働分だけ active vCPU / memory の課金が発生する。
-  各ステップの revision list で `Replicas` 列も記録しておく
+- ops は min_replicas = 1 の常駐構成（2026-08-22 是正。実施当時は 0 宣言だったが 1 レプリカが
+  常駐し active 単価で課金されていた — 経緯は observations.md「G4 の訂正」節）。probe 中も
+  レプリカ 1 が維持され、その稼働分の課金が発生する。各ステップの revision list で
+  `Replicas` 列も記録しておく
 
 **後始末とゲート（すべて Azure への書き込み = 要ユーザー承認）**:
 
@@ -355,7 +360,11 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 - 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources を含めて
   約 0.84 USD/日（いずれも Retail Prices API 実測単価。ADR-0018）。ドリル前の朝に不確実な
   再構築作業（apply + イメージ push）を積むより安い、という判断（ADR-0018 追記）
-- スケールゼロ（min_replicas 0）のため、夜間のコンピュート課金は serving / ops とも発生しない
+- 夜間のコンピュート課金（2026-08-22 是正）: **serving は** min_replicas 0 + ingress の暗黙
+  HTTP スケールルールで Replicas 0 まで縮退し課金ゼロ（実測）。**ops は** min_replicas 1 の
+  常駐で、公式の idle 適格条件（min > 0 / 最小数で稼働 / 全コンテナ起動済み / HTTP 処理なし /
+  0.01 vCPU 未満 / 1,000 bytes/s 未満）を満たすことを実測済み — ただし **idle 単価が請求に
+  実際に適用されたかは課金データでは未確認**（詳細は ADR-0015 追記と observations.md）
 
 ## 5. 巻き戻し（万一 private access で B1ms が作れない場合）
 

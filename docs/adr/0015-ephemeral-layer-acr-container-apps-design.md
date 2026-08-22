@@ -123,16 +123,61 @@ Container App が ACR から pull する際の認証は、**user-assigned manage
 - [azure-resource-inventory.md](../operations/azure-resource-inventory.md) に #8（マネージド ID）/ #9（AcrPull ロール割当）を追記する（本 ADR と同じ PR で実施）。手動作成コマンドの正本は台帳の「作り直す手順」
 - 本層の apply は、ID とロール割当の手動作成（ユーザー承認のうえ実行）が済むまで行わない（CI のデプロイ workflow 整備も同様に保留）
 
-## 追記（2026-08-22。#100: スケールゼロとイメージ運用の実測裏付け）
+## 追記（2026-08-22。#100: スケールインの実挙動と ops の min_replicas 是正）
 
 VNet 統合カットオーバーのステップ B/C（[実測記録](../verification/vnet-cutover/observations.md)）で、
-本 ADR の以下の想定が実測で裏付けられた。判断の変更はない。
+本 ADR のスケールゼロ前提が **serving には成り立ち、ops には成り立たない**ことが実測で判明した。
+ops のみ `min_replicas` を 0 から 1 へ是正する（ユーザー判断 2026-08-22）。
 
-- **スケールゼロは実際に効く**: serving Container App（min_replicas 0）が無リクエスト時に
-  `ScaledToZero` へ縮退することを実測。その状態で `/readyz` を叩くと cold start 後に 200 が返る
-  （コスト §8 の「スケールゼロが効けばさらに下がる」想定の裏付け）
-- **イメージタグの不変タグ運用**（latest 不使用）は、push 済み SHA を `.env` の `DEPLOY_SHA` に
-  固定する運用として具体化された（PR #99。タグ決定の正本は
+### 当初どう考えていたか
+
+serving / ops とも `min_replicas = 0` とし、「平常時はレプリカ 0 で課金ゼロ、コールドスタートは
+許容」（本文 §8 のコスト方針）。ops は「使うときだけ min-replicas を一時的に 1 へ上げる」運用とした。
+
+### 実測で何が判明したか（すべて 2026-08-22。Replicas メトリクス 1 分粒度・end-time 明示）
+
+- **serving（ingress あり）は想定どおり縮退する**: Replicas 0↔1 を往復
+  （12:11→1 / 12:20→0 / 12:27→1 / 12:32→0 / 12:37→1。cooldown 300 秒と整合）。
+  `ScaledToZero` 状態から /readyz を叩くと cold start（実測 22.7 秒）後に 200
+- **ops（ingress なし・scale rule なし）は縮退しない**: template の scale 設定は serving と
+  完全に同一（minReplicas null / rules null）にもかかわらず、プロビジョン時のレプリカ 1 が
+  **12:11 から一度も 0 にならず常駐**（cooldown 300 秒を大幅超過）。スケールインを駆動する
+  仕組み（ingress の暗黙 HTTP スケールルール）が無いことが原因
+- 公式 scale-app ドキュメントの Important（"If ingress is disabled and you don't define a
+  `minReplicas` or a custom scale rule, your container app **scales to zero and has no way of
+  starting back up**."）は**実挙動と逆**（実測では「1 のまま落ちない」）。実測を正とする
+- さらに `min_replicas = 0` の宣言は idle 課金の適格条件を**外していた**。公式 billing
+  （<https://learn.microsoft.com/en-us/azure/container-apps/billing> ）の逐語:
+
+  > To be eligible for idle charges, a revision must be:
+  > - Configured with a minimum replica count greater than zero
+  > - Scaled to the minimum replica count
+
+  つまり常駐レプリカは active 単価で課金される。単価（Retail Prices API japaneast、2026-08-22
+  実測）: active vCPU 0.000024 USD/秒・active memory 0.000003 USD/GiB 秒 →
+  0.25 vCPU / 0.5 GiB で **0.648 USD/日**
+
+### 何に変えたか
+
+- **ops のみ `min_replicas = 1`**（serving は 0 のまま。縮退が実測で確認できているため）。
+  **主目的は「min_replicas = 0 と宣言しながら 1 レプリカが常駐し、その宣言のせいで idle 適格を
+  外している」という宣言と実態の食い違いの解消**であり、コスト削減は副次効果
+- 「使うたびに min-replicas を上下させる」運用は廃止（exec は Running レプリカに直接つながる
+  ことを実測済み。0 に戻す操作は常駐を止められておらず、目的を達成していなかった）
+- 是正後は idle 適格条件（min > 0 / 最小数で稼働 / 全コンテナ起動済み / HTTP 処理なし /
+  0.01 vCPU 未満 / 1,000 bytes/s 未満）を**満たすことを実測で確認**した。ops の CPU 実測は
+  約 0.0017 vCPU（`sleep infinity`）。**ただし idle 単価が請求に実際に適用されたかは課金
+  データの反映ラグにより未確認**。適用された場合の計算値は idle vCPU 0.000003 USD/秒 +
+  memory 0.000003 USD/GiB 秒 → **0.194 USD/日**（いずれも Retail Prices API 実測単価からの机上計算）
+- Consumption の月次無料枠（"The first 180,000 vCPU-seconds / The first 360,000 GiB-seconds"
+  per subscription・月）が先に吸収するため、請求実額はさらに小さい可能性がある（本文 §8 の
+  無料枠の記述と整合。今月の既往消費は未確認のため断定しない）
+
+### 実測で裏付けられた既存想定（判断変更なし）
+
+- serving のスケールゼロは実際に効く（上記）
+- イメージタグの不変タグ運用（latest 不使用）は、push 済み SHA を `.env` の `DEPLOY_SHA` に
+  固定する運用として具体化（PR #99。正本は
   [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §0-2 / §2）
 - ACR Basic のまま serving / ops 2 リポジトリの push / pull が問題なく動作
   （委任サブネットからの pull 到達性は ADR-0018 追記 #100）

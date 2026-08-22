@@ -368,10 +368,11 @@ G3（Succeeded を鵜呑みにしない検証。ops コンテナから exec で�
   - `sh -c "…"` の入れ子引用は az 側の分割で**壊れる**（Syntax error を実測）
   - 動いた方式: `--command bash` で対話セッションを張り、**標準入力からコマンドを流し込む**
     （接続確立まで約 10 秒待ってから入力。`script -qec` で pty を割り当て）
-- G4: scale 設定は serving / ops とも minReplicas=null（=0）/ maxReplicas=1 を `az containerapp show` で
-  確認（今回 min-replicas は一度も変更していない）。serving は夜間放置前に **ScaledToZero を実測**
-  （その状態で /readyz を叩くと cold start 後に 200）
-- 合否: **合格**
+- G4 の当時の判定: 「scale 設定は serving / ops とも minReplicas=null（=0）/ maxReplicas=1 を
+  `az containerapp show` で確認。serving は ScaledToZero を実測」→ 合格と報告
+- **【訂正 2026-08-22】この G4 判定は誤り**。ops は 1 レプリカが常駐し続けており（課金継続）、
+  ゲートの趣旨（常駐課金を残さない）に対して不合格だった。誤判定の内訳と是正は本ファイル末尾の
+  「**G4 の訂正と ops 常駐レプリカの是正**」節が正本
 
 ### §3-3 の実測結果は次節の記入欄に記載（実施済み）
 
@@ -439,3 +440,101 @@ ADR-0018 追記 #98 の未実測項目「過去に使った revision suffix の�
 | probe 差分に対する `terraform plan -detailed-exitcode`（apply 前。exit 2 想定） | **exit 2**。差分は ops の in-place update 1 件（`REVISION_COLLISION_PROBE` env の削除のみ）。**provider の refresh は env 差分を拾う**（手順書の未実測注記を実測で解消。`--remove-env-vars` の代替経路は不要だった）。なお config が suffix 未指定のため、probe2 という suffix の残存自体は **drift として検出されない**ことも観測 |
 | `terraform apply` 後の `plan -detailed-exitcode`（**exit 0 必須ゲート**） | apply は in-place 18 秒で完了し、Azure が自動生成名 `…ops--0000001` の新 revision を作成（自動 suffix の実形式）。plan → **exit 0**（12:25:07Z）。**合格** |
 | psql 疎通の再確認（§3-2 と同じ手順） | 新 revision `…ops--0000001` のレプリカへ exec し `SELECT 1` → **1**。**合格** |
+
+## G4 の訂正と ops 常駐レプリカの是正（2026-08-22 実施。完了。#100）
+
+coordinator の独立実測により、ステップ C 完了報告後の 12:37 時点で **ops Container App が
+1 レプリカのまま常駐している（課金継続中）**ことが判明した。G4 を「合格」とした報告は誤り。
+本節は (1) 誤判定の内訳、(2) 原因調査（読み取りのみ）、(3) 是正（`min_replicas = 1`）と検証、
+(4) 副産物として得た独立知見、を記録する。
+
+### 1. G4 誤判定の内訳（取り繕わない記録）
+
+- **何を見て合格としたか**: `az containerapp show --query properties.template.scale` の
+  **設定値**（minReplicas: null / maxReplicas: 1）のみ。null を「= 0 だから良し」と解釈し、
+  serving が `ScaledToZero` になったのを見て「ops も追って縮退する」と**推測で補完**した
+- **なぜ不十分だったか**: ゲートの趣旨は「常駐課金を残さない」であり、確認すべきは設定値では
+  なく**実レプリカ数を cooldown（300 秒）経過後に経時で見る**ことだった。ops の実レプリカは
+  一度も確認していない
+- **ゲート設計側の要因**（coordinator 自認。隠さず記録）: ゲート文言が「min-replicas を 0 に
+  戻したことを実測で確認」であり、「設定値が 0 に戻っていること」の確認とも読める曖昧さがあった。
+  実レプリカ数の経時確認を明示すべきだった
+- **正しい確認方法**: `az containerapp replica list` と Replicas メトリクス
+  （`az monitor metrics list --metric Replicas`、**end-time 明示**）を cooldown 経過後に読む
+
+### 2. 原因調査（読み取りのみ。12:38〜12:44 実測）
+
+- **設定は serving / ops で完全に同一**（minReplicas: null / rules: null / cooldown 300）なのに
+  挙動が分かれた。差分は ingress の有無のみ:
+  - serving（ingress あり）: Replicas 0↔1 を往復（12:11→1 / 12:20→0 / 12:27→1 / 12:32→0 /
+    12:37→1。cooldown 300 秒と整合。1 への遷移はいずれも /readyz probe と対応）
+  - ops（ingress なし・rule なし）: **12:11 から 12:39 まで連続 1.0、一度も 0 なし**
+    （revision が snnzgc3 → 0000001 と替わっても常駐は継続）
+- 結論: **ingress の暗黙 HTTP スケールルールだけがゼロへの scale-in を駆動しており、
+  ingress なし + rule なしにはスケールインの仕組みが存在しない**（プロビジョン時のレプリカ数の
+  まま常駐）
+- **公式 scale-app の Important 記述と実挙動が逆**（coordinator 取得の逐語: "If ingress is
+  disabled and you don't define a `minReplicas` or a custom scale rule, your container app
+  **scales to zero and has no way of starting back up**."）。実測では「0 に落ちる」のではなく
+  「1 のまま落ちない」。実測を正とする
+- **課金上の帰結**（公式 billing <https://learn.microsoft.com/en-us/azure/container-apps/billing>
+  の逐語）:
+
+  > To be eligible for idle charges, a revision must be:
+  > - Configured with a minimum replica count greater than zero
+  > - Scaled to the minimum replica count
+
+  min 0 宣言のままでは常駐レプリカが idle 適格にならず **active 単価**（Retail Prices API
+  japaneast 実測: vCPU 0.000024 USD/秒・memory 0.000003 USD/GiB 秒）で課金される
+  = 0.25 vCPU / 0.5 GiB で **0.648 USD/日**。CPU 実測は約 0.0017 vCPU（sleep infinity）で
+  0.01 vCPU 閾値を大きく下回っていたにもかかわらず、である
+- terraform state は `min_replicas = 0`、ARM 実値は `minReplicas: null`、plan は exit 0
+  → provider は 0 と null を読み書き双方向で同一視（0 を省略したのが provider か ARM かは
+  リクエストトレースが無く**未確定**）
+
+### 3. 是正（ユーザー判断: 選択肢 1 = `min_replicas = 1` の明示。ops のみ）
+
+**主目的は「`min_replicas = 0` と宣言しながら 1 レプリカが常駐し、その宣言のせいで idle 適格を
+外していた」という宣言と実態の食い違いの解消**（コスト効果は副次）。判断の背景として、
+サブスクリプションは FreeTrial / spendingLimit: On（coordinator 実測）でクレジット枯渇は当面の
+制約にならないことも確認済み。serving は縮退が実測で確認できているため 0 のまま触らない。
+
+- 12:55:08Z `terraform plan`: 差分は ops の `min_replicas = 0 -> 1` の in-place 1 件のみ
+  （熟読してから apply）
+- 12:55:25Z apply 完了（17 秒）。scale 変更は revision-scope のため新 revision
+  `…ops--0000002`（自動生成連番の 2 号）が作成された
+- **ARM 実値が `minReplicas: 1` になったことを確認**（0 のときは null 化していたため、
+  1 が実際に送られ保持されることを実値で確認する必要があった → 保持された）
+- `terraform plan -detailed-exitcode` → **exit 0**（12:55:35Z）
+
+### 4. 是正後の検証（cooldown 300 秒超を待ってから実測）
+
+すべて 13:03:38Z に計測（新レプリカ作成 12:55:21Z から **8 分超 = cooldown 300 秒の 1.6 倍経過後**。
+G4 と同じ轍を踏まないため、設定値でなく実レプリカ・実メトリクスを見る）。
+
+| 検証 | 実測 | 合否 |
+| --- | --- | --- |
+| 実レプリカ（`az containerapp replica list`） | `…ops--0000002-…-7pcgb` 1 本 Running（12:55:21Z 作成のまま） | 合格（宣言 min=1 と実態 1 が一致） |
+| Replicas メトリクス（1 分粒度・end-time 明示） | 12:55〜13:02 の全点で 1.0（増減なし） | 合格 |
+| idle 適格: min replica count > 0 | ARM 実値 `minReplicas: 1` | 満たす |
+| idle 適格: 最小数で稼働 | レプリカ数 1 = minReplicas 1 | 満たす |
+| idle 適格: 全コンテナ起動済み | replica runningState = Running | 満たす |
+| idle 適格: HTTP 処理なし | ingress なし（HTTP 経路が存在しない） | 満たす |
+| idle 適格: 0.01 vCPU 未満 | UsageNanoCores 平均 0.75〜4.76M・最大 7.04M nanocores = **最大 0.0070 vCPU** | 満たす |
+| idle 適格: 1,000 bytes/s 未満 | RxBytes 12.6〜15.6 KB/分（≈ 210〜260 B/s）+ TxBytes 8.0〜10.3 KB/分（≈ 133〜171 B/s）、合算最大 ≈ 431 B/s | 満たす |
+| psql 疎通（§3-2 と同じ経路） | `…ops--0000002` へ exec、`SELECT 1` → 1 | 合格 |
+
+**公式の idle 適格条件 6 点をすべて満たすことを実測で確認した。ただし idle 単価が請求に実際に
+適用されたかは課金データの反映ラグにより未確認**（「idle になった」とは断定しない。適用時の
+机上計算は 0.194 USD/日 = ADR-0015 追記）。
+
+### 5. 独立した知見（Day 4 / Day 5 の計測でも使う）
+
+1. **ingress の有無でスケールイン挙動が分かれる**（上記 2）。ingress なしアプリに
+   「min_replicas = 0 でコスト最小化」は成立しない
+2. **公式 scale-app の Important 記述は実挙動と逆**（上記 2。ドキュメントと実挙動が食い違った
+   実例がまた 1 件増えた。--high-availability / service_endpoint に続き 3 例目）
+3. **Azure Monitor メトリクス API は end-time 未指定だと未来時刻に 0.0 のフィラー値を返す**。
+   「12:40 に Replicas が 0 になった」ように見える偽データを実際に踏んだ（実際は 1 のまま）。
+   **Day 4 の RTO / RPO 計測・Day 5 の疎通計測でメトリクスを読むときは必ず end-time を明示**し、
+   末尾の値は replica list 等の実体と突き合わせること

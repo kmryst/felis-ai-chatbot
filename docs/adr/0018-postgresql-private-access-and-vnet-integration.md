@@ -360,6 +360,21 @@ secret は `properties.configuration` にあり新 revision を作らないが�
 - **azurerm provider の refresh は az で加えた env 差分を drift として検出する**（plan exit 2 →
   apply で収束 → exit 0）。config が suffix 未指定の場合、suffix の残存は drift にならない
 
+### コスト前提の訂正（追記 #84 の 4 の「約 0.84 USD/日」について）
+
+追記 #84 の「ephemeral 層を残す追加コストは ACR + CAE managed resources 込みで約 0.84 USD/日」は、
+**ops Container App の常駐レプリカ分を含んでいなかった**。ステップ B/C 後の実測で、ops
+（ingress なし・scale rule なし）は `min_replicas = 0` の宣言でもレプリカ 1 が常駐し続け、
+かつ 0 宣言は idle 課金の適格条件を外すため **active 単価 0.648 USD/日**（0.25 vCPU / 0.5 GiB、
+Retail Prices API 実測単価）が加わることが判明した（当時の実態は合計約 1.5 USD/日）。
+是正として ops を `min_replicas = 1` へ変更済み（**主目的は宣言と実態の食い違いの解消**。
+経緯と実測は [ADR-0015 追記](./0015-ephemeral-layer-acr-container-apps-design.md) と
+[observations.md](../verification/vnet-cutover/observations.md) の「G4 の訂正」節が正本）。
+是正後は idle 適格条件を満たすことを実測確認済み（適用時の机上計算 0.194 USD/日。**単価の実適用は
+課金データ未反映のため未確認**）。なお Consumption の月次無料枠が先に吸収するため請求実額は
+さらに小さい可能性があり、サブスクリプションは FreeTrial / spendingLimit: On（2026-08-22 実測）で
+クレジット枯渇が当面の制約にならないことも確認済み。「destroy を後ろへ移す」判断自体は変えない。
+
 ### 未実測のまま残る事項
 
 - migration Job の新 execution が更新後の secret を読むか（追記 #84 の項目）: 今回は secret を

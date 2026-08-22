@@ -209,8 +209,16 @@ resource "azurerm_container_app" "main" {
 # private access 化後、DB へは VNet 内からしか到達できない。手元の psql / alembic の代わりに、
 # VNet 内の運用コンテナを唯一の対話経路とする（「本番 DB へ手元から直接繋がない」運用。ADR-0018）。
 # - ingress なし: 外に晒す必要が一切ない
-# - min_replicas 0: 平常時はレプリカ 0 で課金ゼロ。使うときだけ min_replicas を一時的に
-#   1 へ上げて `az containerapp exec` で入る（手順は docs/operations/vnet-integration-cutover.md）
+# - min_replicas 1（当初 0。2026-08-22 是正 = ADR-0015 追記）: ingress なしの Container App には
+#   スケールインを駆動する仕組みが無く、min_replicas = 0 を宣言してもプロビジョン時のレプリカ 1 が
+#   常駐し続けることを実測（同一設定の serving は ingress の暗黙 HTTP スケールルールで Replicas 0 まで
+#   縮退することを同日実測。公式 scale-app の「ingress 無し + rule 無しはゼロに落ちて起き上がれない」
+#   という Important 記述とは逆の実挙動）。さらに 0 宣言は idle 課金の適格条件
+#   "To be eligible for idle charges, a revision must be: Configured with a minimum replica count
+#    greater than zero / Scaled to the minimum replica count"
+#   （出典: https://learn.microsoft.com/en-us/azure/container-apps/billing ）を外し、常駐レプリカが
+#   active 単価で課金されていた。宣言を実態（常駐 1）に合わせて食い違いを解消する。exec は Running
+#   レプリカがあれば直接つながる（実測）ため、使うたびに min-replicas を上下させる運用も廃止
 # - イメージは backend の ops ターゲット（runtime + postgresql-client + migrations/ + alembic.ini）。
 #   serving イメージには運用ツールを混ぜない（backend/Dockerfile）
 # - ops_container_image が空の間は作らない（hello-world 段階や ops イメージ未 push の状態でも
@@ -246,7 +254,8 @@ resource "azurerm_container_app" "ops" {
     # 非 secret 環境変数 DSN_REVISION_MARKER（revision-scope。下の container ブロック）で行い、
     # revision_suffix 固定は往復 apply での名前衝突のため使わない（ADR-0018 追記）
 
-    min_replicas = 0
+    # 1 の理由は resource 冒頭のコメント（0 宣言は実態と食い違い、idle 適格も外していた）
+    min_replicas = 1
     max_replicas = 1
 
     container {
