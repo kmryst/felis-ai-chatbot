@@ -38,3 +38,28 @@ validate_required_labels() {
 		require_prefix "$area_label" "area:"
 	done
 }
+
+# Issue 本文のテンプレート検証（issue-template-check と同条件のローカル版）
+# 必須見出し（## または ###、完全一致）と中身が空でないことを検証する。
+# 検査ロジックの正本は idp-golden-path の reusable workflow（@v1）側。
+# 使い方: validate_issue_body_template path/to/body.md
+validate_issue_body_template() {
+	local body_file="$1"
+	local heading
+	local missing=""
+
+	for heading in "目的" "対象" "受け入れ条件"; do
+		if ! awk -v h="$heading" '
+			$0 ~ ("^##(#)?[ \t]+" h "[ \t]*$") { insec = 1; next }
+			insec && /^##(#)?[ \t]+/ { insec = 0 }
+			insec && NF > 0 { found = 1 }
+			END { exit found ? 0 : 1 }
+		' "$body_file"; then
+			missing="${missing} ${heading}"
+		fi
+	done
+
+	if [[ -n $missing ]]; then
+		die "Issue body is missing required non-empty headings:${missing} (## or ###). Template: docs/issue-templates/feature_request.md"
+	fi
+}
