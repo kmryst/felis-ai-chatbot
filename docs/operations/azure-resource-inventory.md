@@ -30,7 +30,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は Day 5 の最終 teardown のみ） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-16 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
@@ -67,7 +67,7 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 - 原文: 「750 hours of Flexible Server—Burstable B1MS Instance, 32 GB storage, and 32 GB backup storage」（出典: <https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account> ）
 - **$200 クレジット期間中も適用される**: 「As long as you have unexpired credit or you use only free services within the limits, you're not charged.」（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
 - 24 時間 × 31 日 = **744 時間 < 750 時間**。B1ms 1 台なら**常時稼働でも無料枠内**に収まる（PostgreSQL を夜間 stop しない判断の根拠のひとつ。ADR-0017）
-- 対象は **Burstable B1MS のみ**（上記原文）。Day 5 の General Purpose へのスケールと HA standby はこの枠の対象外で、クレジットからの控除になる（クレジットが残る限り実支出は $0）
+- 対象は **Burstable B1MS のみ**（上記原文）。General Purpose へのスケールと HA standby（[credit-window-execution-plan.md](./credit-window-execution-plan.md) §6）はこの枠の対象外で、クレジットからの控除になる（クレジットが残る限り実支出は $0）
 
 ### 750 時間の消費状況の確認手段
 
@@ -317,7 +317,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（�
 2026-08-21 作成。作成直後に確認コマンドを実測し、**この ID への割当が AcrPull（RG スコープ）の 1 件のみ**であることを確認済み。
 
 - **なぜ管理外か**: CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（[ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) で RBAC Administrator を意図的に不付与）。Terraform に書くと CI からの apply が必ず権限エラーで失敗する。SP に権限を足す案（ADR-0015 選択肢 6-(c)）は権限昇格経路の新設として却下した。#7 と同じ「権限が壊れる」区分でもある: この割当が消えると Container App のイメージ pull が全部止まる
-- **スコープが RG である理由**: ACR `felisaichatbotacrdev` は ephemeral 層で毎日 destroy / 再作成される。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
+- **スコープが RG である理由**: ACR `felisaichatbotacrdev` は ephemeral 層で destroy / 再作成を繰り返す（当初は毎日、現在は最終 teardown まで常時稼働 = ADR-0020。いずれにせよマネージド ID より寿命が短い）。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
 - **作り直す手順**（#8 が存在する前提。`--assignee-object-id` + `--assignee-principal-type` は Microsoft Graph への問い合わせと伝搬遅延起因のエラーを避けるため）:
 
   ```bash

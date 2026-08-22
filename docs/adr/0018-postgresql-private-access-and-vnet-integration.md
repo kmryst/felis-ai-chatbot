@@ -382,6 +382,14 @@ Retail Prices API 実測単価）が加わることが判明した（当時の�
 - レプリカ 0 の状態での `az containerapp exec` 可否（上記）
 - Day 4 の戻し apply（DSN 往復）そのもの
 
+## 追記（2026-08-22。#103: teardown 時期の変更への導線）
+
+追記 #84 の 4「destroy は Day 5 の最終 teardown のみ」の**時期**は、[ADR-0020](./0020-credit-window-resource-strategy.md)
+の方針転換により「クレジット失効前の最終 teardown（[credit-window-execution-plan.md](../operations/credit-window-execution-plan.md)
+§9 = 2026-09-16）」に置き換わった。「夜間に destroy しない」という判断自体は不変（むしろ常時稼働の
+前提として強化）。本文中の「CAE は毎日 destroy / 再作成する ephemeral 層」等の記述は起案時の前提の
+記録であり、書き換えない。
+
 ## 関連
 
 - [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日の決定は不変（geo 冗長は本 ADR 起案時は無効のままの予定だったが、その後 [ADR-0019](./0019-enable-geo-redundant-backup.md) が本 ADR の再作成タイミングを利用して有効へ変更した）
