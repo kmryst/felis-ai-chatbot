@@ -203,6 +203,64 @@ ephemeral を destroy すると翌朝の Day 4 ドリルも Day 5 の疎通 prob
   最終 teardown のみ」とする（[day3-5-execution-plan.md](../operations/day3-5-execution-plan.md)
   §3-6 / §4-8 / §5-6 を改訂）
 
+## 追記（2026-08-22。#96: 委任サブネットの `Microsoft.Storage` service endpoint を明記）
+
+本 ADR の apply（cutover ステップ A）後に `terraform plan` が exit 2 のまま残り、原因が本 ADR の
+決定範囲（委任サブネットの設計）にあったため、独立 ADR を起こさず本 ADR への追記として記録する。
+ステータスは Accepted のまま、決定内容の表も変更しない。
+
+### 事実（本 ADR 起案時に見落としていた仕様）
+
+**Azure は委任サブネットに最初のサーバーをプロビジョンした時点で、`Microsoft.Storage` の
+service endpoint を自動付与する。** 用途は **WAL（Write-Ahead Log）ファイルを Azure Storage
+アカウントへアップロードする通信の経路確保**であり、削除は公式に警告されている。
+
+出典: <https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private>
+
+> The Microsoft.Storage service endpoint is automatically configured on the delegated subnet when
+> the first server is provisioned in that subnet. This configuration ensures reliable routing of
+> traffic to the Azure Storage accounts used for uploading Write-Ahead Log (WAL) files.
+> **Removing this endpoint may disrupt connectivity** and can lead to unintended consequences for
+> core service operations.
+
+本 ADR は同じページを CIDR 最小値・PITR の VNet 制約の根拠として引用していたが、**この段落は
+読み落としていた**。計画書 §2-1 にも当初は入っておらず、本対応で **No.29** として追加した。
+
+### 決定
+
+`azurerm_subnet.pgsql` に `service_endpoint { service = "Microsoft.Storage" }` を**明記する**。
+
+- これは「Azure の自動付与を Terraform で再現する」冗長な記述ではなく、**Azure 側の不変条件を
+  コードに固定し、Terraform による意図しない削除を防ぐためのもの**である。書かない場合、plan は
+  恒久的に「この endpoint を外す in-place update」を提案し続け、**内容を読まずに apply した者が
+  WAL アーカイブ経路を壊せる状態**が残る
+- 本プロジェクトの主成果物は PostgreSQL の **Backup / PITR / Maintenance**（計画書 §0）であり、
+  その土台となる経路を Terraform が自動で剥がす状態を放置しない。とくに Day 4 の PITR ドリル中の
+  不用意な apply は、実験の前提ごと破壊する
+
+### なぜ独立 ADR にしなかったか
+
+- **トレードオフが存在しない。** 選択肢は「明記する」か「plan が恒久的に差分を出し続け、apply で
+  壊れる余地を残す」かの二択で、後者は選べない。ADR は本来「捨てた選択肢に理由がある判断」を残す
+  ためのもので、単一解しかない仕様追従を独立 ADR にすると、ADR 一覧の判断密度が下がる
+- **本 ADR の決定範囲の内側である。** 委任サブネットを定義したのは本 ADR であり、その属性に関する
+  仕様追従は本 ADR の「影響」の続きとして読まれるべきで、別番号に切ると発見しにくくなる
+- 一方で「なぜこのコードがあるのか」は**必ず残す必要がある**（消されると壊れるため）。そのため
+  ADR への追記 + コード上の削除防止コメント + 計画書 §2-1 の出典行 + 実測記録の 4 箇所に残す
+
+### 影響（本 ADR「影響」節への追加）
+
+- `terraform/persistent/main.tf`: `azurerm_subnet.pgsql` に `service_endpoint` ブロックを追加。
+  **azurerm 5.1.0 には `service_endpoints`（文字列リスト）属性は存在せず**、繰り返し可能な
+  `service_endpoint` ブロック（`service` 必須 / `network_identifier` 任意）で書く
+  （`terraform providers schema -json` で確認。2026-08-22）
+- `snet-...-aca` 側は `serviceEndpoints` が空で差分なし（実測。ただし CAE 未作成時点の観測であり、
+  ephemeral 層 apply 後にステップ B で再確認する）
+- 計画書 §2-1 に No.29 を追加、Day 4（§4-1）/ Day 5（§5-1 前段）に「apply 前に
+  `plan -detailed-exitcode` が exit 0 であることを確認する」ゲートを追加
+- 実測記録: [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) ステップ A-2
+  （`plan` が exit 0 になったことを実測。Azure への書き込みおよび `terraform apply` は未実施）
+
 ## 関連
 
 - [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日の決定は不変（geo 冗長は本 ADR 起案時は無効のままの予定だったが、その後 [ADR-0019](./0019-enable-geo-redundant-backup.md) が本 ADR の再作成タイミングを利用して有効へ変更した）
@@ -210,4 +268,4 @@ ephemeral を destroy すると翌朝の Day 4 ドリルも Day 5 の疎通 prob
 - [ADR-0015](./0015-ephemeral-layer-acr-container-apps-design.md) — 選択肢 4-(a) と 7 の 2 段階 apply を本 ADR が不要化（他は有効）
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-1 / §4
 - [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) — 移行手順の正本
-- Issue: #81
+- Issue: #81 / #96（委任サブネットの service endpoint ドリフト解消）
