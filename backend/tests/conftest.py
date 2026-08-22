@@ -20,7 +20,7 @@ os.environ.setdefault(
 )
 # /chat 保護（#107）: テストでは既知のダミーキーを与える（実キーではない）。
 # 既存の /chat テストは test_app.py の client フィクスチャが既定ヘッダで送る
-os.environ.setdefault("CHAT_API_KEY", "test-chat-key-local")
+os.environ.setdefault("CHAT_API_KEY", "test-chat-key-local-0123456789abcdef")
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 

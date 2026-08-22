@@ -55,6 +55,28 @@ def _float_env(name: str, default: float) -> float:
         raise InvalidEnvError(name, raw, "数値を指定してください") from exc
 
 
+# /chat API キーの最小長（#107。外部レビュー指摘の反映）。
+# strip 後にこれ未満のキーは「鍵」として成立させない — 検証しないと
+# 「空でなければ何でも鍵」になり、空白 1 個でも fail-closed をすり抜ける（実測で確認済み）
+CHAT_API_KEY_MIN_LENGTH = 32
+
+
+def _chat_api_key_env() -> str:
+    """CHAT_API_KEY を読む。空白は strip し、未設定・空白のみは ""（fail-closed）。
+
+    設定されているのに最小長未満なら起動時に即 fail する
+    （「弱い鍵で保護しているつもり」の潜伏を防ぐ。値はメッセージに含めない）。
+    """
+    raw = (os.environ.get("CHAT_API_KEY") or "").strip()
+    if raw and len(raw) < CHAT_API_KEY_MIN_LENGTH:
+        raise InvalidEnvError(
+            "CHAT_API_KEY",
+            "<redacted>",
+            f"{CHAT_API_KEY_MIN_LENGTH} 文字以上を指定してください",
+        )
+    return raw
+
+
 def _bool_env(name: str, default: bool) -> bool:
     """真偽値の環境変数を読む。true/false 以外は変数名を明示して即 fail する。
 
@@ -174,7 +196,7 @@ class Settings:
                 ).split(",")
                 if origin.strip()
             ),
-            chat_api_key=os.environ.get("CHAT_API_KEY") or "",
+            chat_api_key=_chat_api_key_env(),
             chat_disabled=_bool_env("CHAT_DISABLED", False),
         )
         if missing:

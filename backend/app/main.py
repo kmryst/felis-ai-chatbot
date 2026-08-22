@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.config import Settings
+from app.config import CHAT_API_KEY_MIN_LENGTH, Settings
 from app.db import check_database_ready
 from app.llm.client import (
     AzureOpenAIConfig,
@@ -120,13 +120,19 @@ def _enforce_chat_gate(x_api_key: str | None) -> None:
 
     - 緊急遮断フラグ（CHAT_DISABLED=true）: 404。消費超過時の打ち切りスイッチ
       （credit-window-execution-plan.md §9 の 2）。エンドポイントの存在自体を隠す
-    - API キー未設定（CHAT_API_KEY 空）: 404（fail-closed）。キーを配らずにデプロイ
-      した場合に、無認証の LLM 課金経路が公開される事故を「/chat が無い」側に倒す
+    - API キー未設定・空白のみ・最小長（32 文字）未満: 404（fail-closed）。キーを配らずに
+      デプロイした場合や弱い鍵の設定ミスで、無認証・弱認証の LLM 課金経路が公開される事故を
+      「/chat が無い」側に倒す
     - キー不一致・未提示: 401。比較は secrets.compare_digest（タイミング攻撃対策の定石。
       このアプリの脅威モデルでは過剰気味だが、コストゼロなので定石に従う）
     - /readyz・/health はこのゲートの対象外（外形監視と両立させる。#106）
     """
-    if settings.chat_disabled or not settings.chat_api_key:
+    # 最小長チェックは from_env（起動時）と二重に行う（防御の深さ。
+    # from_env を経ない経路で短い / 空白のみのキーが settings に入っても閉じたままにする）
+    if (
+        settings.chat_disabled
+        or len(settings.chat_api_key.strip()) < CHAT_API_KEY_MIN_LENGTH
+    ):
         raise HTTPException(status_code=404, detail="Not Found")
     if x_api_key is None or not secrets.compare_digest(
         x_api_key.encode(), settings.chat_api_key.encode()

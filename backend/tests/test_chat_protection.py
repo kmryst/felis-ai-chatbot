@@ -99,3 +99,59 @@ def test_readyz_and_health_not_gated_when_chat_disabled(
     res = raw_client.get("/readyz")
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "db": "ok"}
+
+
+# --- キー強度の境界（外部レビュー指摘: 空白のみ・短いキーが「鍵」として通る穴） ---
+
+
+def test_whitespace_only_key_is_fail_closed(raw_client, monkeypatch):
+    """空白のみのキーは「未設定」と同じ扱い（404）でなければならない。
+
+    修正前の実測: CHAT_API_KEY='   ' が truthy として通り、X-API-Key: '   ' で
+    /chat が LLM 呼び出しまで到達する。
+    """
+    ws = dataclasses.replace(main_module.settings, chat_api_key="   ")
+    monkeypatch.setattr(main_module, "settings", ws)
+    res = raw_client.post(
+        "/chat", json={"message": "台風とは"}, headers={"X-API-Key": "   "}
+    )
+    assert res.status_code == 404
+
+
+def test_short_key_is_fail_closed(raw_client, monkeypatch):
+    """最小長（32 文字）未満のキーは鍵として成立させない（404）。"""
+    short = dataclasses.replace(main_module.settings, chat_api_key="k" * 31)
+    monkeypatch.setattr(main_module, "settings", short)
+    res = raw_client.post(
+        "/chat", json={"message": "台風とは"}, headers={"X-API-Key": "k" * 31}
+    )
+    assert res.status_code == 404
+
+
+def test_min_length_key_is_accepted(raw_client, monkeypatch):
+    """最小長ちょうど（32 文字）は有効な鍵として機能する。"""
+    ok = dataclasses.replace(main_module.settings, chat_api_key="k" * 32)
+    monkeypatch.setattr(main_module, "settings", ok)
+    _patch_search_empty(monkeypatch)
+    res = raw_client.post(
+        "/chat", json={"message": "台風とは"}, headers={"X-API-Key": "k" * 32}
+    )
+    assert res.status_code == 200
+
+
+def test_from_env_rejects_short_key(monkeypatch):
+    """起動時検証: 32 文字未満の CHAT_API_KEY は InvalidEnvError で即 fail。"""
+    from app.config import InvalidEnvError, Settings
+
+    monkeypatch.setenv("CHAT_API_KEY", "short-key")
+    with pytest.raises(InvalidEnvError):
+        Settings.from_env()
+
+
+def test_from_env_strips_whitespace_key_to_fail_closed(monkeypatch):
+    """起動時検証: 空白のみは strip されて未設定（fail-closed）扱い。起動は失敗しない。"""
+    from app.config import Settings
+
+    monkeypatch.setenv("CHAT_API_KEY", "   ")
+    settings = Settings.from_env()
+    assert settings.chat_api_key == ""
