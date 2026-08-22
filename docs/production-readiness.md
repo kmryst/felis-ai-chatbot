@@ -43,7 +43,7 @@
 
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
-| HA / 冗長構成 | 常設では無し。イベント計測として 2 日間（2026-09-09〜10 予定）で検証し、測ったら B1ms へ戻す（[credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §6） | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [計画書 §5](./operations/day3-5-execution-plan.md) / ADR は Day 5 で作成予定 |
+| HA / 冗長構成 | 常設では無し。イベント計測として 2 日間（2026-09-09〜10 予定）で検証し、測ったら B1ms へ戻す（[credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §6） | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [credit-window-execution-plan.md §6](./operations/credit-window-execution-plan.md)（計測手法の正本は[旧計画 §5](./operations/day3-5-execution-plan.md)） / ADR はイベント計測の実施時に作成予定 |
 | geo 冗長バックアップ | 有効へ確定（コード反映済み。実機反映は cutover の apply 時）。ただし geo リストアの手順整備・演習は未実施 | 無料枠の判明で 2 倍課金の前提が崩れ、作成時のみ設定可の制約を cutover の再作成で解消した。geo リストアは PITR 不可・RPO 最大 1 時間で主成果物に寄与しないため演習はスコープ外 | DR 要件に基づく geo リストア手順（ペアリージョン側 VNet 含む）の整備と定期演習 | [ADR-0019](./adr/0019-enable-geo-redundant-backup.md) / [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md) |
 | 長期保持（LTR） | 未使用（保持は 7 日のみ） | 要件（検証 3 日）< 復旧ウィンドウ（7 日）で、延長は無料枠超過リスクを増やすだけ | 保持要件（監査・コンプライアンス）に応じた LTR | [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md)（選択肢 4 で却下） / [計画書 §9](./operations/day3-5-execution-plan.md) |
 | 読み取りレプリカ | 無し | 読み取り負荷分散・参照系分離の要件がない | 負荷・DR 要件に応じたレプリカ設計 | [計画書 §9](./operations/day3-5-execution-plan.md) |
