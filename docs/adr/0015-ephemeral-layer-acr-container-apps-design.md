@@ -123,6 +123,20 @@ Container App が ACR から pull する際の認証は、**user-assigned manage
 - [azure-resource-inventory.md](../operations/azure-resource-inventory.md) に #8（マネージド ID）/ #9（AcrPull ロール割当）を追記する（本 ADR と同じ PR で実施）。手動作成コマンドの正本は台帳の「作り直す手順」
 - 本層の apply は、ID とロール割当の手動作成（ユーザー承認のうえ実行）が済むまで行わない（CI のデプロイ workflow 整備も同様に保留）
 
+## 追記（2026-08-22。#100: スケールゼロとイメージ運用の実測裏付け）
+
+VNet 統合カットオーバーのステップ B/C（[実測記録](../verification/vnet-cutover/observations.md)）で、
+本 ADR の以下の想定が実測で裏付けられた。判断の変更はない。
+
+- **スケールゼロは実際に効く**: serving Container App（min_replicas 0）が無リクエスト時に
+  `ScaledToZero` へ縮退することを実測。その状態で `/readyz` を叩くと cold start 後に 200 が返る
+  （コスト §8 の「スケールゼロが効けばさらに下がる」想定の裏付け）
+- **イメージタグの不変タグ運用**（latest 不使用）は、push 済み SHA を `.env` の `DEPLOY_SHA` に
+  固定する運用として具体化された（PR #99。タグ決定の正本は
+  [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §0-2 / §2）
+- ACR Basic のまま serving / ops 2 リポジトリの push / pull が問題なく動作
+  （委任サブネットからの pull 到達性は ADR-0018 追記 #100）
+
 ## 関連
 
 - [ADR-0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — CI 用 SP の権限 2 件のみ（AcrPull 割当を Terraform で作れない制約の源）
