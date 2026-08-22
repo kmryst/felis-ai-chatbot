@@ -1,5 +1,7 @@
 # 設計値の正本は docs/operations/day3-5-execution-plan.md §3-2（walking skeleton）と ADR-0015 / ADR-0018。
-# この層は毎日 destroy / apply を繰り返す（§3-6 の teardown / §8 のコスト見張り）。
+# この層は使わない期間は destroy して時間課金を止める（当初は毎日 destroy。private access 化後は
+# ops 経路が唯一の DB アクセス経路のため夜間 destroy をやめ、destroy は Day 5 の最終 teardown のみ。
+# ADR-0018 追記 2026-08-22 / 計画書 §3-6）。
 #
 # 【apply 手順の注意（段階 apply）】
 # 旧構成にあった「firewall rule の for_each が outbound_ip_addresses に依存するための 2 段階 apply」は、
@@ -47,7 +49,7 @@ resource "azurerm_container_registry" "main" {
 # Log Analytics Workspace（persistent 層が管理。この層は読み取り参照のみ）
 # ---------------------------------------------------------------------------
 
-# workspace 本体は persistent 層が管理する（ADR-0016）。この層を毎日 destroy しても
+# workspace 本体は persistent 層が管理する（ADR-0016）。この層を destroy しても
 # 監視ログが消えないようにするため（Day 5 の閾値決定は Day 3〜4 の実測レンジが前提。計画書 §7）。
 # terraform_remote_state は使わず data source で参照する（ADR-0015 の 7 と同じ理由:
 # persistent の state には sensitive 値が入るため読み取り面を増やさない）。
@@ -68,7 +70,8 @@ data "azurerm_log_analytics_workspace" "main" {
 #   （出典: https://learn.microsoft.com/en-us/azure/container-apps/billing ）
 # - custom VNet では managed resources（Standard LB + Standard static public IP）が課金対象になる
 #   （出典: https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks 。
-#    単価と 24h 換算は ADR-0018）。この層を毎日 destroy する運用でこの課金も止まる
+#    単価と 24h 換算は ADR-0018）。この層の destroy でこの課金も止まる（destroy のタイミングは
+#    ADR-0018 追記のとおり Day 5 の最終 teardown）
 # - External のまま（internal_load_balancer_enabled = false）: /readyz を作業端末から叩く検証経路を維持する。
 #   DB 側は private access なので、DB の到達性はこの設定の影響を受けない
 # - ネットワーク種別は CAE 作成後に変更不可（同 networking 出典）。この層は毎日作り直すため制約にならない
@@ -128,6 +131,15 @@ resource "azurerm_container_app" "main" {
   }
 
   template {
+    # secret（database-url）の更新は既存 revision に自動反映されない（新しい revision の作成
+    # または restart が必要。出典: https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets ）。
+    # DSN のハッシュを revision_suffix に埋め込み、database_url が変わる apply（Day 4 の PITR 後の
+    # 復元先への向け替え等）で template が必ず変化 = 新 revision が必ず作られるようにコードで担保する。
+    # ハッシュは sha256 の先頭 8 桁のみ（不可逆。DSN・パスワードは復元できない）。
+    # nonsensitive() は「sensitive な DSN から派生するが suffix 自体は秘匿情報でない」ことの明示
+    #（Azure 上の revision 名として公開される値であり、plan 出力を無用にマスクさせない）。
+    revision_suffix = var.database_url == "" ? null : "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
+
     # スケールゼロ（min_replicas = 0）: 無リクエスト時にレプリカ 0 まで縮退し、
     # コンピュート課金を止める（§8 のコスト方針。ADR-0015）。walking skeleton に
     # 常駐は不要で、コールドスタートの遅延は許容する。
@@ -205,6 +217,11 @@ resource "azurerm_container_app" "ops" {
   }
 
   template {
+    # serving 側と同じ理由（secret 更新は既存 revision に自動反映されない）で、DSN 変更の apply が
+    # 必ず新 revision を作るようにする。ops コンテナは Day 4 の RTO / RPO 計測経路そのもののため、
+    # 古い revision が元サーバーの DSN を見続けると計測が偽になる（ADR-0018 追記 2026-08-22）
+    revision_suffix = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
+
     min_replicas = 0
     max_replicas = 1
 
@@ -235,6 +252,10 @@ resource "azurerm_container_app" "ops" {
 # Alembic マイグレーション実行用の Container Apps Job（Manual トリガー。ADR-0018）。
 # `az containerapp job start` で起動し、`alembic upgrade head` を 1 回実行して終了する。
 # 課金は実行中のレプリカ分のみ（Manual トリガーで放置中はゼロ）。
+# Job には revision の概念がなく（azurerm 5.1.0 の実スキーマでも template に revision_suffix なし。
+# 2026-08-22 に providers schema で確認）、実行のたびに新しい execution が作られるため、
+# Container App 側のような revision_suffix によるコード担保は不要。secret 更新後の挙動
+# （新 execution が更新後の値を読むか）は cutover 実測時に確認する（未実測）。
 resource "azurerm_container_app_job" "migrate" {
   count = var.ops_container_image == "" ? 0 : 1
 

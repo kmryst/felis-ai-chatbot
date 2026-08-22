@@ -180,12 +180,22 @@ az monitor metrics list \
 ### 3-6. teardown / stop（Day 3 終了時）
 
 ```bash
-# ephemeral（ACR / Container Apps）は destroy（時間課金を止める。Log Analytics は persistent 層のため消えない。ADR-0016）
-terraform -chdir=terraform/ephemeral destroy
+# ephemeral（ACR / CAE / Container Apps）は destroy しない（下記。ADR-0018 追記 2026-08-22。
+# 当初の「毎日 destroy」から改訂。最終 destroy は §5-6 のみ）
 # PostgreSQL は stop しない（下記。ADR-0017）。稼働状態と残存リソースの確認だけ行う
 az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query state -o tsv   # Ready のはず
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存の目視確認
 ```
+
+- **ephemeral 層は夜間 destroy しない**（ADR-0018 追記 2026-08-22。当初の「終業時に destroy」から改訂）。理由:
+  - private access 化（ADR-0018）後、ops Container App / migration Job が**唯一の DB アクセス経路**になる。
+    夜に destroy すると、翌朝の Day 4 ドリル（seed 投入・破壊・復元確認）も Day 5 の疎通 probe も
+    VNet 内から打つ手段がなく開始できない
+  - 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources 込みで
+    約 0.84 USD/日（Retail Prices API 実測単価。ADR-0018）。Container App はスケールゼロ
+    （min_replicas 0）のため夜間のコンピュート課金はない
+  - 対案（毎朝 ACR 再 push を含む 2 段階 apply で作り直す）は、ドリル本番の前に apply + イメージ push
+    という不確実な作業を毎朝積むことになり却下（判断の記録は ADR-0018 追記）
 
 - **PostgreSQL は夜間 stop しない**（ADR-0017。当初の「終業時に stop」から改訂）。理由:
   - B1ms 1 台の常時稼働は 24 時間 × 31 日 = 744 時間 < **750 時間の 12 か月無料枠**（「750 hours of Flexible Server—Burstable B1MS Instance, 32 GB storage, and 32 GB backup storage」。出典: <https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account> ）に収まり、$200 クレジット期間中も適用される（「As long as you have unexpired credit or you use only free services within the limits, you're not charged.」出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）。stop の根拠だったコスト削減が消えた
@@ -215,7 +225,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 1. `T0`: 正常状態を記録（各テーブルの行数・マーカー最新時刻）
 2. `T1`: 破壊を実行（例: `DROP TABLE documents;`）。実行時刻を記録
 3. 復旧目標時刻 `T_target = T1 の 1 分前` を決める
-4. 復元を発行し、発行時刻を記録:
+4. 復元を **`--no-wait` で非同期発行**し、発行時刻を記録する（同期実行だと CLI が完了までブロックし、1 分間隔の計測が成立しない）:
 
    ```bash
    # private access のサーバーは同一 or 別 VNet へのみ復元できる（public とは跨げない）。
@@ -225,16 +235,50 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
      --name pgsql-felisaichatbot-dev-restored \
      --source-server pgsql-felisaichatbot-dev \
      --restore-time "<T_target (ISO8601 UTC)>" \
+     --no-wait \
      --vnet vnet-felisaichatbot-dev \
      --subnet snet-felisaichatbot-dev-pgsql \
      --private-dns-zone felisaichatbot-dev.private.postgres.database.azure.com
+
+   # 作業端末側: プロビジョニング状態を 1 分間隔でポーリングし、state 遷移を時刻つきで記録する
+   while true; do
+     echo "$(date -u +%FT%T.%3NZ) state=$(az postgres flexible-server show \
+       -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-restored \
+       --query state -o tsv 2>&1)"
+     sleep 60
+   done | tee restore-state.log
    ```
 
-5. **RTO 実測**: restore 発行 → 復元サーバーへ `psql` で `SELECT 1` が通るまでの経過時間（1 分間隔でポーリングし、`state` 遷移もログする）。**psql は VNet 内の ops コンテナ（`az containerapp exec`）から打つ**（private access のため作業端末から届かない。ADR-0018 / [vnet-integration-cutover.md](./vnet-integration-cutover.md) §3-2）
+5. **RTO 実測**: restore 発行 → 復元サーバーへ `psql` で `SELECT 1` が通るまでの経過時間。**psql は VNet 内の ops コンテナ（`az containerapp exec`）から打つ**（private access のため作業端末から届かない。ADR-0018 / [vnet-integration-cutover.md](./vnet-integration-cutover.md) §3-2）。接続試行は**復元先の FQDN を指す専用 DSN** に対して行い、元サーバーの `DATABASE_URL` と明確に分ける（元サーバーは生きているので、元サーバーへの接続成功を拾うと RTO が偽になる）:
+
+   ```bash
+   # 作業端末側: 復元先の実 FQDN を取得する（private DNS zone 配下の名前）
+   az postgres flexible-server show -g rg-felisaichatbot-dev-tf \
+     -n pgsql-felisaichatbot-dev-restored --query fullyQualifiedDomainName -o tsv
+
+   # 以下は ops コンテナ内（az containerapp exec）で実行する。
+   # 元 DSN のホスト部だけを復元先 FQDN に置換して専用 DSN を作る（値を画面に出さない）
+   RESTORED_HOST="<↑で取得した FQDN>"
+   SRC_HOST="$(printf '%s' "$DATABASE_URL" | sed -E 's#^.*@([^/:?]+).*$#\1#')"
+   RESTORED_DATABASE_URL="${DATABASE_URL/"$SRC_HOST"/"$RESTORED_HOST"}"
+
+   # 接続タイムアウトを明示する（未指定は無期限待機。§5 の probe と同じ作法・同じ出典 libpq）。
+   # 各試行の開始時刻・終了時刻・終了コードを記録する
+   export PGCONNECT_TIMEOUT=3
+   while true; do
+     st=$(date -u +%FT%T.%3NZ)
+     out=$(timeout 5 psql "$RESTORED_DATABASE_URL" -qtAc 'SELECT 1' 2>&1); rc=$?
+     echo "$st $(date -u +%FT%T.%3NZ) rc=$rc ${out:0:40}"
+     [ "$rc" -eq 0 ] && break
+     sleep 60
+   done
+   # 出力（各行 = 1 試行）はターミナルログごと証跡（§4-4）に残す
+   ```
+
 6. **RPO 実測（実損失）**: `T1 −（復元サーバーに残っている最新マーカー時刻）`。RPO は「障害時点（T1）からどれだけのデータが失われたか」なので、意図的に 1 分手前を指定した分も含めて T1 起点で計算する（RPO の定義: [Business continuity concepts](https://learn.microsoft.com/en-us/azure/reliability/concept-business-continuity-high-availability-disaster-recovery)）。破壊したテーブルが `T_target` 時点の内容で存在することを行数で確認
 7. **復元点精度（RPO とは別に記録）**: `T_target −（復元サーバーの最新マーカー時刻）`。指定した時刻をどこまで正確に再現できたかの値であり、RPO と混ぜない。マーカーは 1 分間隔のため、両値とも最大 1 分の標本化誤差を含む（この注記ごと証跡に書く）
-8. アプリの向け替え: 接続文字列を復元サーバーに変えて `/readyz` → `/chat` を確認（「復旧した」の判定はアプリが動くことまで）
-9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**である。private access（ADR-0018）では firewall 規則は存在せず、代わりに (a) 復元サーバーが同一 VNet・委任サブネットに入ること、(b) private DNS zone に復元サーバーの名前が登録され ops コンテナから解決できること、を接続回復の確認手順に含めて計測する。委任サブネットは /28（実質 11 アドレス）で、復元中は一時的に 2 台が同居する（[vnet-integration-cutover.md](./vnet-integration-cutover.md) 末尾の注意）
+8. アプリの向け替え: `.env` の `TF_VAR_database_url` のホスト部を復元先 FQDN に変えて export し直し（[vnet-integration-cutover.md](./vnet-integration-cutover.md) §0-2）、`terraform -chdir=terraform/ephemeral apply` する。**Container Apps の secret 更新は既存 revision に自動反映されない**（"An updated or deleted secret doesn't automatically affect existing revisions in your app"。出典: <https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets> ）が、`revision_suffix`（DSN ハッシュ。`terraform/ephemeral/main.tf`）により DSN が変わる apply は serving / ops とも必ず新 revision を作る（コードで担保。ADR-0018 追記）。**新 revision が稼働してから** `/readyz` → `/chat` を確認し、その成功時刻をアプリ回復時刻として記録する（古い revision の応答を拾うと元サーバーへの接続成功を誤計測する）。migration Job は revision を持たず実行ごとに secret を読み直す想定（未実測。cutover 時に確認）
+9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**である。private access（ADR-0018）では firewall 規則は存在せず、代わりに (a) 復元サーバーが同一 VNet・委任サブネットに入ること、(b) private DNS zone に復元サーバーの名前が登録され ops コンテナから解決できること、を接続回復の確認手順に含めて計測する。委任サブネットは /27（32 − Azure 予約 5 = 実質 27 アドレス。ADR-0018 追記）で、復元中は一時的に 2 台が同居する（[vnet-integration-cutover.md](./vnet-integration-cutover.md) 末尾の注意）
 
 ### 4-4. ドリル証跡（`docs/verification/restore-drill/`）
 
@@ -243,6 +287,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 ### 4-5. ドリル後始末
 
 - 元サーバー `pgsql-felisaichatbot-dev` を正として継続する（破壊したテーブルは Alembic + seed スクリプトで再構築できることを確認済みのうえで破壊対象に選ぶ）
+- アプリ・ops の DSN を元サーバーへ戻す: `TF_VAR_database_url` を元の FQDN に戻して ephemeral 層を再 apply（§4-3 の 8 と同じ経路。`revision_suffix` により戻しの apply でも新 revision が作られる）
 - 復元サーバー `pgsql-felisaichatbot-dev-restored` は証跡取得後に**削除**（放置課金の芽を残さない）
 
 ### 4-6. 午後: PostgreSQL 側メンテナンス（成果物 4。落とさない）
@@ -264,14 +309,15 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 ### 4-8. teardown / stop（Day 4 終了時）
 
 - 復元サーバー削除済みの再確認（`az postgres flexible-server list -g rg-felisaichatbot-dev-tf -o table`）
-- Container Apps を立てた場合は destroy、**PostgreSQL は stop しない**（Day 3 と同じ。§3-6 / ADR-0017）
+- **ephemeral 層は destroy しない**（§3-6 と同じ。Day 5 の疎通 probe / psql も ops コンテナ経由のため、消すと翌朝また開始できない。最終 destroy は §5-6 のみ）。**PostgreSQL は stop しない**（ADR-0017）
+- ops コンテナの `min_replicas` を 0 に戻したか確認する（exec のために 1 へ上げたままだと常駐課金が残る。[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3-2）
 - ローカルは `docker compose down`（`-v` なし）
 
 ---
 
 ## 5. Day 5: General Purpose + ゾーン冗長 HA（フェイルオーバー実測）→ destroy
 
-計測の共通道具として、別端末で 1 秒間隔の疎通ループを**読み取り・書き込みの 2 本**回し続ける。計画フェイルオーバーは書き込みブロックが DNS 切替より先に始まる（§2-1 No.28）ため、読み取りだけでは断の開始を見逃す。また `connect_timeout` 未指定の接続は**無期限に待つ**（"Zero, negative, or not specified means wait indefinitely"。[libpq](https://www.postgresql.org/docs/17/libpq-connect.html)）ため、障害中の 1 試行がハングするとその間の計測が空白になる。タイムアウトを明示し、**各試行の開始時刻・終了時刻・終了コード**を残す:
+計測の共通道具として、1 秒間隔の疎通ループを**読み取り・書き込みの 2 本**回し続ける。private access（ADR-0018）のため、この 2 本は作業端末からではなく **ops コンテナ内の 2 つの exec セッション**（`az containerapp exec` を 2 端末から張る。psql / bash / timeout は ops イメージに同梱）で実行する。計画フェイルオーバーは書き込みブロックが DNS 切替より先に始まる（§2-1 No.28）ため、読み取りだけでは断の開始を見逃す。また `connect_timeout` 未指定の接続は**無期限に待つ**（"Zero, negative, or not specified means wait indefinitely"。[libpq](https://www.postgresql.org/docs/17/libpq-connect.html)）ため、障害中の 1 試行がハングするとその間の計測が空白になる。タイムアウトを明示し、**各試行の開始時刻・終了時刻・終了コード**を残す:
 
 ```bash
 export PGCONNECT_TIMEOUT=3   # libpq が読む接続タイムアウト（未指定は無期限待機）
@@ -331,7 +377,7 @@ done | tee write-probe.log
 ### 5-6. teardown（Day 5 終了時 = 検証完了後に全 destroy）
 
 ```bash
-terraform -chdir=terraform/ephemeral destroy
+terraform -chdir=terraform/ephemeral destroy    # ephemeral の destroy はここが唯一（§3-6。ADR-0018 追記）
 terraform -chdir=terraform/persistent destroy   # PostgreSQL 含む。証跡コミット済みを確認してから
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（マネージド ID は管理外のため残るのが正常。Azure OpenAI は別 RG rg-felisaichatbot-dev で意図して残す。§8 の後片付け参照）
 ```

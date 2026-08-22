@@ -11,7 +11,7 @@ Accepted
 ## 決定内容
 
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-6 / §4-8 の「Day 3 / Day 4 の終業時に `az postgres flexible-server stop`」をやめ、`pgsql-felisaichatbot-dev`（B1ms）を**常時稼働**させる
-- ephemeral 層の毎日 destroy（時間課金を止める運用）は変えない
+- ephemeral 層の毎日 destroy（時間課金を止める運用）は変えない（注記: この前提はその後の private access 化で変更された。夜間 destroy をやめ、destroy は Day 5 の最終 teardown のみ。[ADR-0018 追記](./0018-postgresql-private-access-and-vnet-integration.md)）
 - 750 時間の無料枠管理（消費状況の確認手段・リスク・未確定事項）は [azure-resource-inventory.md](../operations/azure-resource-inventory.md) の「12か月無料枠」節を正本とする
 
 ## 背景
