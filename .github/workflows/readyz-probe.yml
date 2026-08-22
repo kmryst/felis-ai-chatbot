@@ -1,0 +1,88 @@
+# /readyz 外形監視（Issue #106。設計の正本: docs/operations/credit-window-execution-plan.md §5-3 / §3 の 7）
+#
+# - 5 分間隔で /readyz を外部視点から probe し、稼働率・レイテンシの SLI を蓄積する
+# - 併せて観測 3 系列（マーカー / 統計 / pgstattuple）の鮮度を**系列別に**判定する
+#   （束ねた 1 値では「マーカーだけ新しくて統計が止まっている」を見逃すため）
+# - 鮮度ゲートの発動は repository variable OBS_FRESHNESS_ENFORCE = 'true' のときのみ
+#   （T_obs_start 前のデプロイ未完了期間に赤くならないように。E2E 通知試験で有効化する）
+# - 失敗（HTTP 非 200 / 鮮度超過）で workflow が fail し、GitHub の失敗通知が届く =
+#   probe の生存確認と採取の生存確認を 1 本に束ねる
+# - 集計: 各 run のログの "PROBE ..." 行が機械可読の 1 行レコード。
+#   例) gh run list -w readyz-probe.yml --json databaseId -q '.[].databaseId' |
+#       xargs -I{} gh run view {} --log | grep '^PROBE '
+# - GitHub Actions の schedule は起動遅延があり厳密な等間隔にならない（既知の仕様）。
+#   集計は必ずレコード内の実測タイムスタンプ ts= を基準にする
+name: readyz-probe
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readyz-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      # 安定 FQDN（アプリ URL。revision 固有 FQDN ではない — Issue #101 参照）。
+      # 変更時は repository variable READYZ_URL で上書きする
+      READYZ_URL: ${{ vars.READYZ_URL || 'https://ca-felisaichatbot-dev.blackbush-a1db7f50.japaneast.azurecontainerapps.io/readyz' }}
+      # 鮮度ゲートの系列別閾値（秒）。根拠は計画 §5-3（採取間隔の約 3 倍。
+      # マーカーのみ probe 間隔 5 分の 2 倍 = 10 分）
+      MARKER_MAX_AGE: "600"
+      STATS_MAX_AGE: "900"
+      PGSTATTUPLE_MAX_AGE: "10800"
+      ENFORCE: ${{ vars.OBS_FRESHNESS_ENFORCE || 'false' }}
+    steps:
+      - name: Probe /readyz and evaluate per-series freshness
+        run: |
+          ts="$(date -u +%FT%T.%3NZ)"
+          # SLI は 1 回の素の試行を記録する（リトライすると可用性の実測にならない）
+          code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
+            --max-time 30 "$READYZ_URL" || echo "000 30.000")
+          code="${code_time%% *}"
+          latency_s="${code_time##* }"
+          latency_ms=$(awk -v t="$latency_s" 'BEGIN { printf "%d", t * 1000 }')
+
+          obs_json="null"
+          if [ "$code" = "200" ]; then
+            obs_json=$(jq -c '.obs' /tmp/readyz-body.json 2>/dev/null || echo "null")
+          fi
+          marker_age=$(jq -r '.marker_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+          stats_age=$(jq -r '.stats_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+          pgst_age=$(jq -r '.pgstattuple_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+
+          # 機械可読レコード（集計はこの行を grep する。ts= が実測タイムスタンプ）
+          echo "PROBE ts=$ts code=$code latency_ms=$latency_ms marker_age=$marker_age stats_age=$stats_age pgstattuple_age=$pgst_age enforce=$ENFORCE"
+          {
+            echo "| ts | code | latency_ms | marker_age | stats_age | pgstattuple_age |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            echo "| $ts | $code | $latency_ms | $marker_age | $stats_age | $pgst_age |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          if [ "$code" != "200" ]; then
+            echo "::error::readyz probe failed: HTTP $code"
+            fail=1
+          elif [ "$ENFORCE" = "true" ]; then
+            # 系列別に判定する。値が null（未採取 / obs 未配備）も enforce 中は失敗
+            check() { # name age max
+              if [ "$2" = "null" ]; then
+                echo "::error::freshness[$1] is null (series missing)"; return 1
+              elif [ "$2" -gt "$3" ]; then
+                echo "::error::freshness[$1] stale: ${2}s > ${3}s"; return 1
+              fi
+              return 0
+            }
+            check marker "$marker_age" "$MARKER_MAX_AGE" || fail=1
+            check stats "$stats_age" "$STATS_MAX_AGE" || fail=1
+            check pgstattuple "$pgst_age" "$PGSTATTUPLE_MAX_AGE" || fail=1
+          fi
+          exit "$fail"
