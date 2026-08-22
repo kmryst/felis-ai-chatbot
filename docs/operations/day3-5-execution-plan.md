@@ -209,6 +209,12 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 
 ---
 
+> **【superseded 2026-08-22。#103】本節（Day 4）と §5（Day 5）は
+> [credit-window-execution-plan.md](./credit-window-execution-plan.md) に置き換えられた**
+> （方針転換は [ADR-0020](../adr/0020-credit-window-resource-strategy.md)）。
+> ただし §4-3（PITR ドリル手順）・§4-6（合成メンテナンステスト）・§5 の計測手法は
+> 新計画から**手順の正本として参照され続ける**。§2-1 / §2-2 の事実台帳も有効。
+
 ## 4. Day 4: PITR ドリル（最優先）+ PostgreSQL 側メンテナンス
 
 ### 4-1. 朝: 状態確認（stop 運用は廃止。ADR-0017）
@@ -331,6 +337,9 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 - ローカルは `docker compose down`（`-v` なし）
 
 ---
+
+> **【superseded 2026-08-22。#103】§4 冒頭の注記のとおり。実行順・時期は
+> [credit-window-execution-plan.md](./credit-window-execution-plan.md) §6 が正本**（本節の計測手法は有効）。
 
 ## 5. Day 5: General Purpose + ゾーン冗長 HA（フェイルオーバー実測）→ destroy
 
