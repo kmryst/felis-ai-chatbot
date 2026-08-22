@@ -11,7 +11,7 @@ data "azurerm_resource_group" "dev" {
 # ---------------------------------------------------------------------------
 
 # VNet・委任サブネット・private DNS zone は persistent 層に置く（ADR-0018）。
-# CAE（ephemeral 層）は毎日 destroy されるが、PostgreSQL の委任サブネットはサーバーが
+# CAE（ephemeral 層）は destroy / 再作成されるが、PostgreSQL の委任サブネットはサーバーが
 # 生きている限り手放せず、ネットワークの寿命は PostgreSQL（persistent）に一致するため。
 # ephemeral 層は snet-aca を data source で参照する（terraform_remote_state は使わない。ADR-0015 の 7）。
 resource "azurerm_virtual_network" "main" {
@@ -19,21 +19,25 @@ resource "azurerm_virtual_network" "main" {
   resource_group_name = data.azurerm_resource_group.dev.name
   location            = data.azurerm_resource_group.dev.location
 
-  # /24 で足りる: 使うのは snet-aca /27（32）+ snet-pgsql /28（16）の計 48 アドレスのみ。
-  # 他 VNet とのピアリング予定はなく、広い空間を予約する理由がない
+  # /24 で足りる: 使うのは snet-aca /26（10.10.0.0〜.63）+ snet-pgsql /27（10.10.0.64〜.95）の
+  # 計 96 アドレスのみで、残り 160 アドレスが将来の余白として残る。
+  # 他 VNet とのピアリング予定はなく、/24 より広い空間を予約する理由がない
   address_space = ["10.10.0.0/24"]
 }
 
 # Container Apps Environment（workload profiles 環境）用サブネット。
 # 最小 /27・`Microsoft.App/environments` への委任が必須で、インフラ用に 12 IP が予約される
 # （出典: https://learn.microsoft.com/en-us/azure/container-apps/networking ）。
-# CAE のネットワーク種別・サブネットサイズは作成後に変更できない（同出典）ため、
-# 将来広げる場合もサブネットの作り直し + CAE の作り直しになる（ephemeral 層なので毎日やっている操作）。
+# CAE のネットワーク種別・サブネットサイズは作成後に変更できない（同出典）ため、最小要件の /27
+# （32 − Azure 予約 5 − インフラ予約 12 = 実質 15）ではなく /26（実質 47）で確保する。
+# Azure 予約 5 IP の出典: https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-faq
+# （サブネットごとに先頭 4 + 末尾 1 を予約）。プライベート IP アドレス自体に課金はなく、
+# 広げるコストはゼロ。判断の記録は ADR-0018 の追記（2026-08-22）。
 resource "azurerm_subnet" "aca" {
   name                 = "snet-felisaichatbot-dev-aca"
   resource_group_name  = data.azurerm_resource_group.dev.name
   virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.10.0.0/27"]
+  address_prefixes     = ["10.10.0.0/26"]
 
   delegation {
     name = "aca-environments"
@@ -47,11 +51,15 @@ resource "azurerm_subnet" "aca" {
 
 # PostgreSQL Flexible Server（private access）用の委任サブネット。最小 /28
 # （出典: https://learn.microsoft.com/en-us/azure/postgresql/network/concepts-networking-private ）。
+# 最小の /28（16 − Azure 予約 5 = 実質 11）ではなく /27（実質 27）で確保する。このサブネットには
+# 本体に加えて Day 4 の PITR 復元先サーバー・Day 5 の HA standby が入り、かつ委任サブネットは
+# サーバーが生きている限りサイズ変更できない（作り直しは persistent 層＝サーバー再作成を意味する）。
+# 判断の記録は ADR-0018 の追記（2026-08-22）。
 resource "azurerm_subnet" "pgsql" {
   name                 = "snet-felisaichatbot-dev-pgsql"
   resource_group_name  = data.azurerm_resource_group.dev.name
   virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.10.0.32/28"]
+  address_prefixes     = ["10.10.0.64/27"]
 
   delegation {
     name = "pgsql-flexible-servers"
@@ -147,7 +155,7 @@ resource "azurerm_postgresql_flexible_server_configuration" "azure_extensions" {
 # ---------------------------------------------------------------------------
 
 # ephemeral 層ではなくこの層に置く（ADR-0016。bootstrap.md の層分割の説明と一致させる）。
-# ephemeral 層は毎日 destroy されるため、workspace を同居させると監視ログが毎日消える。
+# ephemeral 層は destroy / 再作成されるため、workspace を同居させると監視ログが destroy のたびに消える。
 # Day 5 の Monitoring は「閾値は Day 3〜4 の実測レンジを見て決める」（計画書 §7）ため、
 # 数日分のログの蓄積が前提になる。ephemeral 層の Container Apps Environment からは
 # data "azurerm_log_analytics_workspace" で参照する（terraform_remote_state は使わない。

@@ -1,8 +1,8 @@
 terraform {
   backend "azurerm" {
     # persistent 層と同じ tfstate Storage Account（bootstrap.md §12）を共有し、
-    # key で層を分ける。ephemeral 層は毎日 destroy / apply を繰り返すが
-    # （day3-5-execution-plan.md §3-6）、state 置き場自体は残る。
+    # key で層を分ける。ephemeral 層は destroy / apply を繰り返すが
+    # （day3-5-execution-plan.md §3-6 / §5-6）、state 置き場自体は残る。
     resource_group_name  = "rg-felisaichatbot-tfstate"
     storage_account_name = "felisaichatbottfstate"
     container_name       = "tfstate"

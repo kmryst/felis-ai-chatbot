@@ -16,7 +16,7 @@ Day 3 の暫定構成「public access + サーバーレベル firewall rule」�
 | --- | --- |
 | PostgreSQL | **private access で再作成**（`public_network_access_enabled = false`。委任サブネット + private DNS zone）。firewall rule と `firewall_allowed_client_ips` 変数は削除 |
 | VNet | `vnet-felisaichatbot-dev`（`10.10.0.0/24`）。**persistent 層** |
-| サブネット | `snet-felisaichatbot-dev-aca` **/27**（`Microsoft.App/environments` 委任）/ `snet-felisaichatbot-dev-pgsql` **/28**（`Microsoft.DBforPostgreSQL/flexibleServers` 委任）。どちらも persistent 層 |
+| サブネット | `snet-felisaichatbot-dev-aca` **`10.10.0.0/26`**（`Microsoft.App/environments` 委任）/ `snet-felisaichatbot-dev-pgsql` **`10.10.0.64/27`**（`Microsoft.DBforPostgreSQL/flexibleServers` 委任）。どちらも persistent 層（当初 /27・/28 → 追記 2026-08-22 で拡大） |
 | private DNS zone | `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link。persistent 層 |
 | CAE | **workload profiles 環境（Consumption プロファイルのみ）+ custom VNet + External ingress**。ephemeral 層のまま |
 | 運用経路 | backend Dockerfile に **ops ターゲット**（runtime + postgresql-client + `migrations/` + `alembic.ini`）を追加し、**ops Container App**（ingress なし・min_replicas 0）と **Manual トリガーの Container Apps Job**（`alembic upgrade head`）を ephemeral 層に置く |
@@ -138,6 +138,70 @@ Day 3 の暫定構成「public access + サーバーレベル firewall rule」�
 - **workload profiles 環境の managed resources 用 RG**（`ME_` プレフィックスの自動作成 RG）が
   CI 用 SP の権限スコープ外に作られる際の挙動は未実測。当面の apply はローカル（Owner）実行のため
   ブロッカーにはならない
+
+## 追記（2026-08-22。#84: 外部レビュー指摘の反映と CIDR 拡大）
+
+apply 前の外部レビューを受けて、本 ADR の決定を 4 点補強する。ステータスは Accepted のまま。
+
+### 1. サブネットを最小要件より大きく取り直す（/27→/26・/28→/27）
+
+**サブネットのサイズは CAE / PostgreSQL の作成後に変更できない**（CAE: 本文の networking 出典。
+PostgreSQL: 委任サブネットはサーバーが生きている限り手放せず、変更 = persistent 層の作り直し）。
+当初の割り当ては最小要件ちょうどで、「変更できない値を最小要件ぴったりで作る」設計だった。
+
+| | 当初 | 拡大後 | 実質利用可能数 |
+| --- | --- | --- | --- |
+| VNet | `10.10.0.0/24` | 据え置き | — |
+| `snet-...-aca` | `10.10.0.0/27`（32） | **`10.10.0.0/26`（64）** | 15 → **47**（Azure 予約 5 + CAE インフラ予約 12 を控除） |
+| `snet-...-pgsql` | `10.10.0.32/28`（16） | **`10.10.0.64/27`（32）** | 11 → **27**（Azure 予約 5 を控除） |
+
+- 根拠: `/27` は workload profiles 環境の最小要件ちょうど（本文の networking 出典）で、Day 4 は
+  ops コンテナと backend が同時に動く。`snet-pgsql` には本体に加えて **Day 4 の PITR 復元先サーバー・
+  Day 5 の HA standby** が入る。Azure はサブネットごとに 5 IP（先頭 4 + 末尾 1）を予約する
+  （出典: <https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-faq> ）
+- コスト: プライベート IP アドレス・VNet・サブネットに課金はなく（本文「採択理由」の無料根拠と同じ）、
+  拡大の追加費用はゼロ。`/24` 内で `.0〜.63` / `.64〜.95` と重複せず、160 アドレスの余白も残る
+
+### 2. リソースプロバイダー登録は手動側の前提作業として固定する
+
+`Microsoft.Network` / `Microsoft.ContainerService` が NotRegistered のままで（2026-08-22 読み取り実測）、
+このまま apply すると `409 MissingSubscriptionRegistration` で失敗する（`Microsoft.ContainerService` は
+CAE の custom VNet 構成の前提。出典: <https://learn.microsoft.com/en-us/azure/container-apps/vnet-custom> ）。
+**Terraform の自動登録には任せない**: 登録はサブスクリプション単位で、CI の service principal
+（RG スコープ Contributor）には権限がなく、自動登録に任せると「ローカルでは通るが CI では落ちる」
+（Day 3 の 409 実測: `docs/verification/walking-skeleton/observations.md`）。手順は
+[vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §0-1、namespace の一覧は
+[azure-resource-inventory.md](../operations/azure-resource-inventory.md) の「リソースプロバイダー登録」節が正本。
+
+### 3. secret 更新の revision 反映をコードで担保する（`revision_suffix`）
+
+Container Apps は **secret を更新しても既存 revision に反映しない**（"An updated or deleted secret
+doesn't automatically affect existing revisions in your app"。secret の変更だけでは新 revision も
+作られない。出典: <https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets> ）。
+Day 4 で DSN を復元先へ向け替えた後、古い revision が元サーバーを見続けるとアプリ回復時刻の計測が偽になる。
+
+- 対応: serving / ops 両 Container App の template に **`revision_suffix` = DSN の sha256 先頭 8 桁**を
+  設定（`terraform/ephemeral/main.tf`）。`database_url` が変わる apply では template が必ず変化し、
+  新 revision の作成が Terraform のコードで保証される。手順書の「restart を忘れない」運用への依存をなくす
+- `revision_suffix` が azurerm **5.1.0** の `azurerm_container_app` template に存在することは
+  `terraform providers schema -json` で確認済み（2026-08-22）。Container Apps **Job** の template には
+  revision の概念自体がなく suffix も存在しない（同確認）。Job の新 execution が更新後の secret を
+  読むことは**未実測**（cutover 実測時に確認する）
+- suffix は不可逆な truncated hash で、revision 名として公開されても DSN・パスワードは復元できない
+
+### 4. ephemeral 層の夜間 destroy をやめる（destroy は Day 5 の最終 teardown のみ）
+
+private access 化後は ops コンテナ / migration Job が**唯一の DB アクセス経路**になり、夜間に
+ephemeral を destroy すると翌朝の Day 4 ドリルも Day 5 の疎通 probe も開始できない。選択肢は
+(a) destroy を後ろへ移す / (b) 毎朝 ACR 再 push 込みの 2 段階 apply で作り直す、の 2 つで **(a) を採択**:
+
+- (b) はドリル本番の前に毎朝 apply + イメージ push という不確実な作業を積む（VNet 統合 CAE の
+  作成時間は未実測で延びる可能性あり）。計測が主目的の日の冒頭に置くべきでない
+- (a) の追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources 込みで約 0.84 USD/日
+  （本文「採択理由」の Retail Prices API 実測単価）。Container App はスケールゼロで夜間の
+  コンピュート課金はない。Day 5 の probe も ops 経由のため、整合的に「destroy は Day 5 §5-6 の
+  最終 teardown のみ」とする（[day3-5-execution-plan.md](../operations/day3-5-execution-plan.md)
+  §3-6 / §4-8 / §5-6 を改訂）
 
 ## 関連
 

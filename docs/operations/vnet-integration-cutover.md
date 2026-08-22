@@ -22,6 +22,69 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 - `terraform/persistent/terraform.tfvars` から `firewall_allowed_client_ips` の行を削除する
   （変数自体が削除されたため。残すと undeclared variable の警告が出る）
 
+### 0-1. リソースプロバイダー登録（apply より前に必須。Azure への書き込み = 要ユーザー承認）
+
+このサブスクリプションでは `Microsoft.Network`（VNet の作成に必要）と `Microsoft.ContainerService`
+（CAE の custom VNet 構成に必要。出典: [Integrate a virtual network with an Azure Container Apps
+environment](https://learn.microsoft.com/en-us/azure/container-apps/vnet-custom) に
+"Register the `Microsoft.ContainerService` provider" と明記）が **NotRegistered** であり
+（2026-08-22 読み取り実測）、登録しないまま §1 の apply を実行すると
+`409 MissingSubscriptionRegistration` で失敗する（Day 3 に別 namespace で実際に踏んだエラー。
+[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）。
+
+```bash
+# 現状確認（読み取りのみ）
+az provider show -n Microsoft.Network --query registrationState -o tsv
+az provider show -n Microsoft.ContainerService --query registrationState -o tsv
+
+# NotRegistered の場合のみ登録する（サブスクリプション単位の書き込み操作。ローカルの Owner で実行）
+az provider register --namespace Microsoft.Network --wait
+az provider register --namespace Microsoft.ContainerService --wait
+
+# 両方 Registered になったことを確認してから §1 へ進む
+az provider show -n Microsoft.Network --query registrationState -o tsv
+az provider show -n Microsoft.ContainerService --query registrationState -o tsv
+```
+
+- **Terraform の自動登録（provider の `resource_provider_registrations` 等）には任せない**。
+  プロバイダー登録はサブスクリプション単位の操作で、CI の service principal（RG スコープの
+  Contributor）には実行権限がない（`/register/action` はサブスクリプションスコープ。Day 3 の 409 と
+  Owner 手動登録の実測記録は上記 observations.md）。Terraform に任せると「ローカル（Owner）では通るが
+  CI では落ちる」構成になり、CI 経由デプロイ（Issue #82）で必ず踏む。手動登録を前提作業として固定する
+- 登録済み・未登録の全 namespace の一覧は
+  [azure-resource-inventory.md](./azure-resource-inventory.md) の「リソースプロバイダー登録」節が正本
+
+### 0-2. 必須変数の export（最初の plan より前。値を画面に出さない）
+
+Terraform は `.env` を自動では読まない。`terraform.tfvars` にも secret は書かない方針のため、
+必要な値を **`TF_VAR_*` 環境変数**として export してから plan / apply に入る。§2 の ACR-only apply も
+必須変数 `container_image` が未指定だと入力プロンプトで停止し、full apply は `database_url` が空だと
+ops リソースの precondition で失敗する。
+
+```bash
+# 1) 使うイメージの SHA をここで確定する（以後の build / push / apply すべてで同じ値を使う）
+SHA=$(git rev-parse --short HEAD)
+
+# 2) .env から secret を読み込む（値を画面に echo しない）。
+#    .env に TF_VAR_database_url が無ければ、TF_VAR_administrator_password と同じ作法で
+#    追記してから実行する（値の形式は terraform/ephemeral/variables.tf の database_url を参照）
+set -a; source .env; set +a
+
+# 3) serving / ops 両イメージ参照
+export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-$SHA"
+export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA"
+
+# 4) 設定の有無だけ確認する（値は表示しない）
+env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
+# → TF_VAR_administrator_password / TF_VAR_container_image /
+#   TF_VAR_database_url / TF_VAR_ops_container_image の 4 つが並ぶこと
+```
+
+- **この環境変数は §1〜§4 の apply / destroy 全体で維持する**（同じシェルで通しで実行する。
+  シェルを開き直したら本節を再実行する）
+- `TF_VAR_database_url` のホスト部は §1 の apply 後に新 FQDN へ更新が必要になる（§1 参照。
+  更新したら `.env` を編集して本節の 2) を再実行する）
+
 ## 1. persistent 層の再作成（PostgreSQL が作り直される）
 
 ```bash
@@ -42,6 +105,7 @@ terraform -chdir=terraform/persistent output server_fqdn
 ```
 
 - `.env` / CI secret の `TF_VAR_database_url` のホスト部をこの FQDN に更新する（`sslmode=require` は維持）。
+  更新後に §0-2 の 2)（`set -a; source .env; set +a`）を再実行して export を反映する。
   **作業端末からこの FQDN へは到達できなくなるのが正常**（psql 検証は §3 の ops 経由で行う）
 
 ## 2. ephemeral 層の apply（2 段階。egress IP 依存の旧 2 段階とは別物）
@@ -49,23 +113,24 @@ terraform -chdir=terraform/persistent output server_fqdn
 旧構成の「firewall rule の for_each が outbound IP に依存するための 2 段階 apply」は廃止された。
 残るのは「ACR にイメージが無いと Container App / Job が作れない」というイメージ押し込みの段階のみ。
 
+変数はすべて §0-2 で export 済みの `TF_VAR_*` から渡る（コマンドラインに `-var` で secret を
+並べない）。`TF_VAR_database_url` が §1 の新 FQDN へ更新済みであることを先に確認する。
+
 ```bash
-# 第 1 段: ACR だけ先に作る
+# 第 1 段: ACR だけ先に作る（-target でも container_image は必須変数のため、
+# §0-2 の TF_VAR_container_image が無いと入力プロンプトで停止する）
 terraform -chdir=terraform/ephemeral apply -target=azurerm_container_registry.main
 
-# イメージ投入（serving と ops の 2 本。タグは main の short SHA）
-SHA=$(git rev-parse --short HEAD)
+# イメージ投入（serving と ops の 2 本。タグは §0-2 で確定した $SHA）
 az acr login --name felisaichatbotacrdev
 docker build -t felisaichatbotacrdev.azurecr.io/backend:sha-$SHA backend/
 docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA backend/
 docker push felisaichatbotacrdev.azurecr.io/backend:sha-$SHA
 docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA
 
-# 第 2 段: 残り全部（CAE + app + ops app + migration Job）
-terraform -chdir=terraform/ephemeral apply \
-  -var "container_image=felisaichatbotacrdev.azurecr.io/backend:sha-$SHA" \
-  -var "ops_container_image=felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA"
-# database_url は TF_VAR_database_url 環境変数で渡す（§1 で更新した新 FQDN のもの）
+# 第 2 段: 残り全部（CAE + app + ops app + migration Job）。
+# container_image / ops_container_image / database_url は TF_VAR_* から渡る（§0-2）
+terraform -chdir=terraform/ephemeral apply
 ```
 
 - CAE は workload profiles + custom VNet になったため作成時間が伸びる可能性がある（実測して記録）
@@ -89,13 +154,23 @@ az containerapp exec  -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -
 az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 0
 ```
 
-## 4. 終業 teardown（従来どおり）
+## 4. 終業時の扱い（「毎日 destroy」を改める。ADR-0018 追記 2026-08-22）
+
+**ephemeral 層はカットオーバー後、Day 5 の最終 teardown（計画書 §5-6）まで destroy しない。**
+private access 化後は ops Container App / migration Job が**唯一の DB アクセス経路**であり、
+夜間に ephemeral を destroy すると翌朝の Day 4 PITR ドリル（seed 投入・破壊・復元確認）も
+Day 5 の疎通 probe も開始できないため（判断根拠は ADR-0018 追記と計画書 §3-6）。
 
 ```bash
-terraform -chdir=terraform/ephemeral destroy
+# 終業時は destroy せず、状態確認とコスト見張り（計画書 §8）のみ行う
 az resource list -g rg-felisaichatbot-dev-tf -o table
-# → 残るのは pgsql / id / log + vnet / subnets / private DNS zone（persistent 層。ADR-0018）
+az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query state -o tsv
 ```
+
+- 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources を含めて
+  約 0.84 USD/日（いずれも Retail Prices API 実測単価。ADR-0018）。ドリル前の朝に不確実な
+  再構築作業（apply + イメージ push）を積むより安い、という判断（ADR-0018 追記）
+- スケールゼロ（min_replicas 0）のため、夜間のコンピュート課金は serving / ops とも発生しない
 
 ## 5. 巻き戻し（万一 private access で B1ms が作れない場合）
 
@@ -109,17 +184,25 @@ az resource list -g rg-felisaichatbot-dev-tf -o table
 復元コマンドが private 前提になる（計画書 §4-3 の改訂を参照）:
 
 ```bash
+# --no-wait で非同期にし、RTO はポーリングで計測する（同期 restore だと CLI が完了まで
+# ブロックし、1 分間隔の計測が成立しない。計測手順の正本は計画書 §4-3）
 az postgres flexible-server restore \
   -g rg-felisaichatbot-dev-tf \
   --name pgsql-felisaichatbot-dev-restored \
   --source-server pgsql-felisaichatbot-dev \
   --restore-time "<T_target (ISO8601 UTC)>" \
+  --no-wait \
   --vnet vnet-felisaichatbot-dev \
   --subnet snet-felisaichatbot-dev-pgsql \
   --private-dns-zone felisaichatbot-dev.private.postgres.database.azure.com
 ```
 
 - 復元サーバーは**同じ VNet に入る**（public へは復元できない。ADR-0018 の出典参照）。
-  接続検証（`SELECT 1` / マーカー行数）は ops コンテナから行う
-- `/28`（16 アドレス、Azure 予約 5 を除き実質 11）に一時的に 2 台目のサーバーが入る。
-  委任サブネットの空きが足りない場合は `--subnet` にアドレス追加が要るため、失敗したらまず空きを疑う
+  接続検証（`SELECT 1` / マーカー行数）は ops コンテナから、**復元先の FQDN を指す専用 DSN** で行う
+  （元サーバーの `DATABASE_URL` と混ぜない。手順は計画書 §4-3）
+- アプリ・ops を復元先へ向け替えるときは `TF_VAR_database_url` を更新して ephemeral 層を apply する。
+  secret の更新は既存 revision に自動反映されないが、`revision_suffix`（DSN ハッシュ）により
+  apply が必ず新 revision を作る（コードで担保。`terraform/ephemeral/main.tf` / ADR-0018 追記）
+- 委任サブネットは `/27`（32 アドレス、Azure 予約 5 を除き実質 27。ADR-0018 追記）で、
+  復元中の 2 台同居 + Day 5 の HA standby を見込んでも余白がある。それでも復元が失敗したら
+  まずサブネットの空きを疑う

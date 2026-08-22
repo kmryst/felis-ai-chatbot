@@ -28,13 +28,37 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
 | tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
 | PostgreSQL Flexible Server（**private access**。ADR-0018） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018） |
-| VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（/27・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（/28・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
+| VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018） | ephemeral | 毎日 destroy | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は Day 5 の最終 teardown のみ） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
 管理外にしたのは「Terraform で作ると自分の足を撃つ」もの（鶏と卵・destroy すると権限や認証が壊れる・据え置き判断。§B の理由区分）であり、いずれも寿命が長い。だから終了時の後片付けは **`terraform -chdir=terraform/ephemeral destroy` と `terraform -chdir=terraform/persistent destroy` の 2 本で済み、`az group delete` は不要**である（手順は「プロジェクト終了時の後片付け」節）。
+
+## サブスクリプションのリソースプロバイダー登録（手動側の前提作業）
+
+リソースプロバイダー登録は**サブスクリプション単位の設定変更**であり、リソースではない。当初（Day 3）は
+「リソースではないため台帳の対象に追加しない」と判断した（[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）が、
+**未登録 namespace は apply を `409 MissingSubscriptionRegistration` で確実に失敗させる前提条件**であり、
+plan 差分にも出ないため、本台帳の「管理外リソースの読み取り確認」と同じ役割が要ると判断を改めて一覧化する（#84）。
+
+- **登録は Terraform に任せず、手動（ローカルの Owner）で行う**。CI の service principal は
+  RG スコープの Contributor で、`/register/action`（サブスクリプションスコープ）を実行できない
+  （Day 3 に 409 を実測し Owner の手動登録で解消した記録が上記 observations.md にある）。
+  Terraform の自動登録に任せると「ローカルでは通るが CI では落ちる」構成になる（Issue #82 で踏む）
+- 登録手順と確認コマンドは [vnet-integration-cutover.md](./vnet-integration-cutover.md) §0-1
+
+| Namespace | 状態（2026-08-22 読み取り実測） | 経緯 / 必要とする理由 |
+| --- | --- | --- |
+| `Microsoft.DBforPostgreSQL` | Registered | bootstrap 時点で登録済み（observations.md）。PostgreSQL Flexible Server |
+| `Microsoft.Storage` | Registered | bootstrap（tfstate Storage Account）時点で登録済み |
+| `Microsoft.ManagedIdentity` | Registered | bootstrap（マネージド ID 手動作成）時点で登録済み |
+| `Microsoft.App` | Registered | Day 3（2026-08-21）に 409 を踏んで手動登録。Container Apps / CAE / Job |
+| `Microsoft.ContainerRegistry` | Registered | Day 3（2026-08-21）に 409 を踏んで手動登録。ACR |
+| `Microsoft.OperationalInsights` | Registered | Day 3（2026-08-21）に 409 を踏んで手動登録。Log Analytics |
+| `Microsoft.Network` | **NotRegistered** | **VNet 統合カットオーバー（ADR-0018）の apply 前に手動登録が必要**。VNet / サブネット / private DNS zone |
+| `Microsoft.ContainerService` | **NotRegistered** | **同上**。CAE の custom VNet 構成の前提（出典: <https://learn.microsoft.com/en-us/azure/container-apps/vnet-custom> に "Register the `Microsoft.ContainerService` provider" と明記） |
 
 ## 12か月無料枠（PostgreSQL Flexible Server）
 
