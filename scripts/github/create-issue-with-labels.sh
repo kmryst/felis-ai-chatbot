@@ -24,6 +24,9 @@ Required:
 Notes:
   - Repeat --area for multiple area labels.
   - The script applies required labels at issue creation time.
+  - The body file must contain the template headings 目的 / 対象 / 受け入れ条件
+    (## or ###, each with non-empty content). Template:
+    docs/issue-templates/feature_request.md
 EOF
 }
 
@@ -82,6 +85,7 @@ done
 [[ -n $title ]] || die "--title is required"
 [[ -n $body_file ]] || die "--body-file is required"
 [[ -f $body_file ]] || die "Body file not found: $body_file"
+validate_issue_body_template "$body_file"
 validate_required_labels "$type_label" "$risk_label" "$cost_label" "${area_labels[@]}"
 
 create_args=(

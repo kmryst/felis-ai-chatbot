@@ -37,6 +37,12 @@ Issue / PR 駆動開発を必ず守る。
 
 Issue は起票前にプランを提示してユーザーに確認してもらう。
 
+Issue 本文はテンプレートに沿って書く。必須見出しは `## 目的` / `## 対象` / `## 受け入れ条件`
+（`##` または `###`、見出しテキストは完全一致、各セクションの中身必須）。
+CLI 用テンプレートは `docs/issue-templates/feature_request.md`、Web UI 用は
+`.github/ISSUE_TEMPLATE/feature_request.yml`。沿っていない Issue には
+issue-template-check が `needs-template` ラベルを付ける。
+
 ```bash
 ./scripts/github/create-issue-with-labels.sh \
   --title "短い要約" \
