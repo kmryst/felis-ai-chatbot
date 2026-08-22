@@ -62,17 +62,20 @@ Terraform は `.env` を自動では読まない。`terraform.tfvars` にも sec
 ops リソースの precondition で失敗する。
 
 ```bash
-# 1) 使うイメージの SHA をここで確定する（以後の build / push / apply すべてで同じ値を使う）
-SHA=$(git rev-parse --short HEAD)
+# 1) 使うイメージタグは「実際に ACR へ push 済みの SHA」= .env の DEPLOY_SHA が正本。
+#    HEAD から再計算しない（理由は本節末尾の注意）。DEPLOY_SHA は §2 で push に成功した
+#    ときだけ書き戻す。初回（まだ一度も push していない）は未設定のままでよく、§2 の
+#    push 後に書き戻してから本節を再実行する
 
-# 2) .env から secret を読み込む（値を画面に echo しない）。
+# 2) .env から secret と DEPLOY_SHA を読み込む（値を画面に echo しない）。
 #    .env に TF_VAR_database_url が無ければ、TF_VAR_administrator_password と同じ作法で
 #    追記してから実行する（値の形式は terraform/ephemeral/variables.tf の database_url を参照）
 set -a; source .env; set +a
 
-# 3) serving / ops 両イメージ参照
-export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-$SHA"
-export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA"
+# 3) serving / ops 両イメージ参照（DEPLOY_SHA 未設定なら :? で即失敗する。
+#    初回で §2 の push がまだなら、この 2 行を飛ばして §2 へ進む）
+export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-${DEPLOY_SHA:?DEPLOY_SHA が .env に無い（§2 の push 後に書き戻す）}"
+export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
 
 # 4) 設定の有無だけ確認する（値は表示しない）
 env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
@@ -82,6 +85,13 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 
 - **この環境変数は §1〜§4 の apply / destroy 全体で維持する**（同じシェルで通しで実行する。
   シェルを開き直したら本節を再実行する）
+- **注意（タグを HEAD から再計算してはいけない理由）**: 以前の手順は 1) で
+  `git rev-parse --short HEAD` を実行していたが、push は §2 の一度だけなのに対し HEAD は
+  実測記録のコミット等で進むため、あとから本節を再実行する Day 4 の apply（計画書 §4-3 の 8 /
+  §4-5）が **push していないタグ**を参照し、新 revision が `ErrImagePull` で起動しなくなる。
+  また `git rev-parse --short HEAD` は**作業ツリーが dirty でも同じ値を返す**ため、
+  タグがビルド内容を同定しない（未コミットの変更込みでビルドしても同じタグになる）。
+  push した時点の SHA を `.env` の `DEPLOY_SHA` に固定し、build / push したときだけ更新する
 - `TF_VAR_database_url` のホスト部は §1 の apply 後に新 FQDN へ更新が必要になる（§1 参照。
   更新したら `.env` を編集して本節の 2) を再実行する）
 
@@ -125,15 +135,27 @@ terraform -chdir=terraform/persistent output server_fqdn
 
 ```bash
 # 第 1 段: ACR だけ先に作る（-target でも container_image は必須変数のため、
-# §0-2 の TF_VAR_container_image が無いと入力プロンプトで停止する）
+# TF_VAR_container_image が無いと入力プロンプトで停止する。初回で §0-2 の 3) を飛ばした
+# 場合は、実在しない暫定値で export してよい — この段は ACR しか作らず、イメージは参照されない）
+# export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-bootstrap"   # 初回のみ
+# export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-bootstrap"
 terraform -chdir=terraform/ephemeral apply -target=azurerm_container_registry.main
 
-# イメージ投入（serving と ops の 2 本。タグは §0-2 で確定した $SHA）
+# イメージ投入（serving と ops の 2 本）。push するタグはここで確定する。
+# git rev-parse --short HEAD は作業ツリーが dirty でも同じ値を返す（= タグがビルド内容を
+# 同定しない）ため、先に作業ツリーが clean であることを確認する
+git status --short          # 出力が空（clean）であることを確認してから進む
+NEW_SHA=$(git rev-parse --short HEAD)
 az acr login --name felisaichatbotacrdev
-docker build -t felisaichatbotacrdev.azurecr.io/backend:sha-$SHA backend/
-docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA backend/
-docker push felisaichatbotacrdev.azurecr.io/backend:sha-$SHA
-docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$SHA
+docker build -t felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA backend/
+docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA backend/
+docker push felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA
+docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA
+
+# 2 本とも push に成功したら、.env の DEPLOY_SHA を $NEW_SHA へ書き戻す（無ければ追記。
+# .env はコミットしない）。以後の apply（Day 4 の向け替え / 戻しを含む）はこの push 済み
+# タグを使い、HEAD が進んでも影響を受けない。書き戻したら §0-2 の 2)〜4) を再実行して
+# TF_VAR_container_image / TF_VAR_ops_container_image を反映する
 
 # 第 2 段: 残り全部（CAE + app + ops app + migration Job）。
 # container_image / ops_container_image / database_url は TF_VAR_* から渡る（§0-2）
@@ -208,8 +230,9 @@ az postgres flexible-server restore \
   接続検証（`SELECT 1` / マーカー行数）は ops コンテナから、**復元先の FQDN を指す専用 DSN** で行う
   （元サーバーの `DATABASE_URL` と混ぜない。手順は計画書 §4-3）
 - アプリ・ops を復元先へ向け替えるときは `TF_VAR_database_url` を更新して ephemeral 層を apply する。
-  secret の更新は既存 revision に自動反映されないが、`revision_suffix`（DSN ハッシュ）により
-  apply が必ず新 revision を作る（コードで担保。`terraform/ephemeral/main.tf` / ADR-0018 追記）
+  secret の更新は既存 revision に自動反映されないが、template 内の非 secret 環境変数
+  `DSN_REVISION_MARKER`（DSN ハッシュ）が変わるため apply が必ず新 revision を作る
+  （コードで担保。`terraform/ephemeral/main.tf` / ADR-0018 追記 #98）
 - 委任サブネットは `/27`（32 アドレス、Azure 予約 5 を除き実質 27。ADR-0018 追記）で、
   復元中の 2 台同居 + Day 5 の HA standby を見込んでも余白がある。それでも復元が失敗したら
   まずサブネットの空きを疑う
