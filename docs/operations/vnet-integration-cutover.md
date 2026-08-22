@@ -80,7 +80,8 @@ export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:s
 # 4) 設定の有無だけ確認する（値は表示しない）
 env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 # → TF_VAR_administrator_password / TF_VAR_container_image /
-#   TF_VAR_database_url / TF_VAR_ops_container_image の 4 つが並ぶこと
+#   TF_VAR_database_url / TF_VAR_ops_container_image の 4 つに加え、
+#   /chat 保護（#107）導入後は TF_VAR_chat_api_key / TF_VAR_chat_disabled が並ぶこと
 ```
 
 - **この環境変数は §1〜§4 の apply / destroy 全体で維持する**（同じシェルで通しで実行する。

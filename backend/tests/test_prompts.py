@@ -115,7 +115,11 @@ def test_chat_response_has_no_references_field(monkeypatch):
 
     monkeypatch.setattr(main_module, "search_similar_documents", fake_search)
     monkeypatch.setattr(main_module, "fetch_property_records", fake_properties)
-    with TestClient(main_module.app) as client:
+    import os
+
+    with TestClient(
+        main_module.app, headers={"X-API-Key": os.environ["CHAT_API_KEY"]}
+    ) as client:
         res = client.post("/chat", json={"message": "台風について教えて"})
     assert res.status_code == 200
     body = res.json()
