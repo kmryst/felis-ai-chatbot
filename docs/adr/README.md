@@ -51,6 +51,7 @@
 | [0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) | Accepted | CI 用 service principal の最小権限化（PR credential / RBAC Administrator を見送り）と Terraform 管理リソース専用 RG の分離 |
 | [0013](./0013-azure-resource-naming-convention.md) | Accepted | Azure リソース命名規則（CAF 略語準拠）の制定と未作成リソース名の統一（稼働中の Azure OpenAI は例外として記録） |
 | [0014](./0014-keep-azure-openai-out-of-terraform.md) | Accepted | Azure OpenAI を Terraform 管理外に据え置く（import 却下。当初理由のクォータ喪失懸念は誤りと判明し、理由を引き直して確定） |
-| [0015](./0015-ephemeral-layer-acr-container-apps-design.md) | Accepted（Log Analytics の配置のみ ADR-0016 で変更） | ephemeral 層（ACR + Container Apps）の設計 — 最小 SKU・スケールゼロ・egress 経路・イメージタグ方針・ACR pull 認証（マネージド ID + AcrPull を管理外で手動払い出し） |
+| [0015](./0015-ephemeral-layer-acr-container-apps-design.md) | Accepted（Log Analytics の配置は ADR-0016、egress IP 許可と 2 段階 apply は ADR-0018 で変更） | ephemeral 層（ACR + Container Apps）の設計 — 最小 SKU・スケールゼロ・egress 経路・イメージタグ方針・ACR pull 認証（マネージド ID + AcrPull を管理外で手動払い出し） |
 | [0016](./0016-log-analytics-workspace-in-persistent-layer.md) | Accepted | Log Analytics workspace を ephemeral 層から persistent 層へ移す（毎日の destroy から監視ログを切り離す。参照は data source） |
 | [0017](./0017-no-nightly-stop-for-postgresql.md) | Accepted | PostgreSQL を夜間 stop しない（12か月無料枠の判明でコスト根拠が消え、停止は新規バックアップ停止という実害だけが残るため） |
+| [0018](./0018-postgresql-private-access-and-vnet-integration.md) | Accepted | PostgreSQL を private access（VNet 統合）で確定し、運用経路を VNet 内の ops コンテナ（+ Manual マイグレーション Job）に一本化する |

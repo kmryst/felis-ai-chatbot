@@ -39,6 +39,25 @@ Azure リソースの命名規則を次のとおり制定し、**未作成のリ
 | Container Apps Environment（Day 3 予定） | `cae` | `cae-felisaichatbot-dev` | —（本 ADR で予約） | 未作成 |
 | Log Analytics workspace（導入する場合） | `log` | `log-felisaichatbot-dev` | —（本 ADR で予約） | 未作成 |
 | Managed Identity（user-assigned。導入する場合） | `id` | `id-felisaichatbot-dev` | —（本 ADR で予約） | 未作成 |
+| Virtual network（ADR-0018） | `vnet` | `vnet-felisaichatbot-dev` | —（ADR-0018 で予約） | 未作成 |
+| Subnet（CAE 用。ADR-0018） | `snet` | `snet-felisaichatbot-dev-aca` | —（ADR-0018 で予約。qualifier `-aca`） | 未作成 |
+| Subnet（PostgreSQL 用。ADR-0018） | `snet` | `snet-felisaichatbot-dev-pgsql` | —（ADR-0018 で予約。qualifier `-pgsql`） | 未作成 |
+| Private DNS zone（ADR-0018） | —（下記の追記 2） | `felisaichatbot-dev.private.postgres.database.azure.com` | —（ADR-0018 で予約） | 未作成 |
+| Private DNS zone VNet link（ADR-0018） | —（下記の追記 3） | `vnet-felisaichatbot-dev-link` | —（ADR-0018 で予約） | 未作成 |
+| Container Apps（ops 用。ADR-0018） | `ca` | `ca-felisaichatbot-dev-ops` | —（ADR-0018 で予約。qualifier `-ops`） | 未作成 |
+| Container Apps Job（ADR-0018） | `caj` | `caj-felisaichatbot-dev-migrate` | —（ADR-0018 で予約。qualifier `-migrate`） | 未作成 |
+
+### 追記（2026-08-22。ADR-0018 のリソース追加に伴う規則表の更新）
+
+1. `vnet`（`Microsoft.Network/virtualNetworks`）/ `snet`（`Microsoft.Network/virtualNetworks/subnets`）/
+   `caj`（`Microsoft.App/jobs`）は CAF 略語表の一次情報で 2026-08-22 に確認した（出典は本文末尾と同じ
+   [Abbreviation recommendations](https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/azure-best-practices/resource-abbreviations)）
+2. **Private DNS zone（`Microsoft.Network/privateDnsZones`）の CAF 「略語」は接頭辞ではなく
+   「DNS ドメイン名そのもの」**（表中の表記は *&lt;DNS domain name&gt;*）。したがって規則 1 の
+   `<type>-felisaichatbot-<env>` は適用せず、名前は Azure 側の機能要件
+   （`[name].postgres.database.azure.com` 形式・サーバー名と同名不可。ADR-0018）で決める
+3. Private DNS zone の VNet link は CAF 略語表に項目がない子リソース。独自略語は作らず（規則 1）、
+   リンク先 VNet 名 + `-link` の記述的な名前とする
 
 ### 既存リソースの例外（改名しない）
 

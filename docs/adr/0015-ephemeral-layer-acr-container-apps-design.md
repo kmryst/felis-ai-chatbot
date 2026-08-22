@@ -8,6 +8,12 @@ Accepted
 
 （**Log Analytics workspace の配置（ephemeral 層）のみ [ADR-0016](./0016-log-analytics-workspace-in-persistent-layer.md) により persistent 層へ変更された**。設定値（PerGB2018 / 保持 30 日 / 日次取込上限 1 GB）と他の決定はすべて引き続き有効）
 
+（**選択肢 4-(a)（egress IP を PostgreSQL firewall rule で許可 + IP 変動のリスク受容）と、7 の
+「outbound_ip_addresses 依存の 2 段階 apply」は [ADR-0018](./0018-postgresql-private-access-and-vnet-integration.md)
+（private access / VNet 統合）により不要化された**。egress IP は DB の到達制御に使われなくなり、
+firewall rule リソース自体が削除された。SKU / スケールゼロ / イメージタグ方針 / ACR pull 認証（選択肢 6-(b)）等、
+他の決定は引き続き有効）
+
 ## 日付
 
 2026-08-21
