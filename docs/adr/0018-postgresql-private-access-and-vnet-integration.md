@@ -205,7 +205,7 @@ ephemeral を destroy すると翌朝の Day 4 ドリルも Day 5 の疎通 prob
 
 ## 関連
 
-- [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日・geo 冗長無効の決定は不変
+- [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日の決定は不変（geo 冗長は本 ADR 起案時は無効のままの予定だったが、その後 [ADR-0019](./0019-enable-geo-redundant-backup.md) が本 ADR の再作成タイミングを利用して有効へ変更した）
 - [ADR-0013](./0013-azure-resource-naming-convention.md) — 本 ADR で `vnet` / `snet` / `caj` / private DNS zone の行を追加
 - [ADR-0015](./0015-ephemeral-layer-acr-container-apps-design.md) — 選択肢 4-(a) と 7 の 2 段階 apply を本 ADR が不要化（他は有効）
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-1 / §4

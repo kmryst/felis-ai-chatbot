@@ -1,5 +1,6 @@
 # 設計値の正本は docs/operations/day3-5-execution-plan.md §3-1（PostgreSQL）と ADR-0016（Log Analytics）。
-# 保持期間 7 日・geo 冗長無効の判断は docs/adr/0011、ネットワーク境界（VNet 統合 / private access）は
+# 保持期間 7 日の判断は docs/adr/0011、geo 冗長バックアップ有効の判断は docs/adr/0019
+# （ADR-0011 の geo 冗長部分のみを supersede）、ネットワーク境界（VNet 統合 / private access）は
 # docs/adr/0018 に記録。
 
 data "azurerm_resource_group" "dev" {
@@ -110,8 +111,16 @@ resource "azurerm_postgresql_flexible_server" "main" {
 
   # 保持 7 日（既定のまま）: 検証期間 3 日 < 復旧ウィンドウ 7 日（ADR-0011）
   backup_retention_days = 7
-  # geo 冗長は作成時にしか決められない。無効の判断根拠は ADR-0011
-  geo_redundant_backup_enabled = false
+  # geo 冗長バックアップは作成時にしか設定できず、作成後は変更できない（"You can configure
+  # geo-redundant storage for backup only during server creation. After a server is provisioned,
+  # you can't change the backup storage redundancy option." 出典:
+  # https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-backup-restore ）。
+  # azurerm 5.1.0 でも ForceNew 属性（変更 = サーバー再作成。ADR-0019 に確認記録）。
+  # 当初は無効（ADR-0011）だったが、12 か月無料枠（バックアップ 32 GB）の判明と
+  # 実測 Backup Storage Used 約 2.7 MiB により有効化の実コストがゼロになったため、
+  # cutover（ADR-0018）の再作成タイミングで有効化した（ADR-0019）。
+  # geo リストアは PITR 不可・RPO 最大 1 時間で、Day 4 の PITR ドリルとは別物（同 ADR）。
+  geo_redundant_backup_enabled = true
 
   # private access（VNet 統合）。ネットワーク方式は作成時にしか決められず、
   # public からの変更はサーバーの再作成（ForceNew）になる（ADR-0018）。

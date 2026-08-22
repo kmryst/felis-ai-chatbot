@@ -47,7 +47,7 @@
 | [0008](./0008-jma-attribution-and-weather-act-compliance.md) | Accepted | 気象庁の出典表示（記載例準拠）と気象業務法（17条・23条）への設計対応 |
 | [0009](./0009-azure-openai-as-llm-provider.md) | Accepted | LLM 提供元を Azure OpenAI（japaneast。chat は無料試用クォータ制約で GlobalStandard）に確定する |
 | [0010](./0010-rag-wiring-and-hallucination-guard.md) | Accepted | RAG を結線し、検索結果が閾値未満なら LLM を呼ばないハルシネーション・ガードをコードで担保する |
-| [0011](./0011-backup-retention-and-geo-redundancy.md) | Accepted | PostgreSQL のバックアップ保持 7 日（検証 3 日 < 窓 7 日）・geo 冗長無効を作成時に確定する |
+| [0011](./0011-backup-retention-and-geo-redundancy.md) | Accepted（geo 冗長は ADR-0019 で変更） | PostgreSQL のバックアップ保持 7 日（検証 3 日 < 窓 7 日）・geo 冗長無効を作成時に確定する |
 | [0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) | Accepted | CI 用 service principal の最小権限化（PR credential / RBAC Administrator を見送り）と Terraform 管理リソース専用 RG の分離 |
 | [0013](./0013-azure-resource-naming-convention.md) | Accepted | Azure リソース命名規則（CAF 略語準拠）の制定と未作成リソース名の統一（稼働中の Azure OpenAI は例外として記録） |
 | [0014](./0014-keep-azure-openai-out-of-terraform.md) | Accepted | Azure OpenAI を Terraform 管理外に据え置く（import 却下。当初理由のクォータ喪失懸念は誤りと判明し、理由を引き直して確定） |
@@ -55,3 +55,4 @@
 | [0016](./0016-log-analytics-workspace-in-persistent-layer.md) | Accepted | Log Analytics workspace を ephemeral 層から persistent 層へ移す（毎日の destroy から監視ログを切り離す。参照は data source） |
 | [0017](./0017-no-nightly-stop-for-postgresql.md) | Accepted | PostgreSQL を夜間 stop しない（12か月無料枠の判明でコスト根拠が消え、停止は新規バックアップ停止という実害だけが残るため） |
 | [0018](./0018-postgresql-private-access-and-vnet-integration.md) | Accepted | PostgreSQL を private access（VNet 統合）で確定し、運用経路を VNet 内の ops コンテナ（+ Manual マイグレーション Job）に一本化する |
+| [0019](./0019-enable-geo-redundant-backup.md) | Accepted | geo 冗長バックアップを有効化する（無料枠の判明で 2 倍課金の前提が崩れ、cutover の再作成が最後の設定機会のため。ADR-0011 の geo 冗長部分のみ supersede） |

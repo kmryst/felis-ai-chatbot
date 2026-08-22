@@ -20,7 +20,7 @@
 | 想定される追い質問 | 答えになる実測・記録 | どこで作るか |
 | --- | --- | --- |
 | リストアは試しましたか？ | PITR ドリルの RTO / RPO 実測とタイムライン | Day 4（`docs/verification/restore-drill/`） |
-| 保持期間はどう決めましたか？ | 7日（既定）採用の根拠と、geo 冗長を無効にした判断の記録 | Day 3（ADR） |
+| 保持期間はどう決めましたか？ | 7日（既定）採用の根拠と、geo 冗長の判断の記録（当初無効 → 無料枠の判明で前提が変わり有効化。ADR-0011 / ADR-0019） | Day 3（ADR） |
 | メンテナンス中に止まりましたか？ | 計画フェイルオーバーの実測ダウンタイム（HA では計画メンテがこの切替で処理される） | Day 5（`docs/verification/failover-drill/`） |
 | vacuum は見ていますか？ | autovacuum 発火・bloat・長時間トランザクション阻害の観測記録 | Day 4（`docs/verification/vacuum-maintenance/`） |
 | 監視は何を見ていますか？ | 指標・アラートと閾値の根拠 | Day 5（時間不足なら削る。§1-2） |
@@ -118,7 +118,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 
 ### 3-1. PostgreSQL Flexible Server の設計値（Terraform `terraform/persistent/`）
 
-トレードオフを伴う判断は着手時に ADR として記録する（保持期間・geo 冗長の判断で 1 本）。
+トレードオフを伴う判断は着手時に ADR として記録する（保持期間・geo 冗長の判断で 1 本 = ADR-0011。geo 冗長はその後、前提の変化により ADR-0019 で有効へ変更した）。
 
 | 項目 | 値 | 根拠 |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | ストレージ | 32 GiB（最小） | データは数百 MB 規模。バックアップ無料枠も 32 GiB になる（§2-1 No.7） |
 | PostgreSQL バージョン | ローカル（Docker の PostgreSQL 17）と揃える。作成前に `az postgres flexible-server list-skus -l japaneast` の `supportedServerVersions` で提供を確認 | ローカルとの差異をなくす |
 | バックアップ保持期間 | **7 日（既定のまま）** | 検証期間は 3 日で、復旧ウィンドウ 7 日で十分に覆う。延長はバックアップストレージ消費（=無料枠超過リスク）を増やすだけで、このプロジェクトでは得るものがない（§2-1 No.1）。「既定だから」ではなく「要件（3 日）< 窓（7 日）だから」と ADR に書く |
-| geo 冗長バックアップ | **無効** | (a) 有効化は作成時のみで後から変更不可（§2-1 No.5）なので今決める必要がある。(b) 有効時はバックアップサイズ 2 倍課金。(c) geo リストアは PITR 不可・RPO 最大 1 時間で、本プロジェクトの本命である PITR ドリルには寄与しない。(d) リージョン災害対策は本プロジェクトの要件にない。「無効にした」という判断と根拠を残すこと自体が成果物 1 になる |
+| geo 冗長バックアップ | **有効**（**2026-08-22 改訂。ADR-0019**。当初は無効 = ADR-0011） | 有効化は作成時のみで後から変更不可（§2-1 No.5）であり、cutover（ADR-0018）の再作成が最後の設定機会。当初の却下理由のうち「バックアップサイズ 2 倍課金」は 12 か月無料枠（バックアップ 32 GB）の判明と実測約 2.7 MiB で崩れ、有効化の実コストがゼロになった。geo リストアは PITR 不可・RPO 最大 1 時間で PITR ドリルとは別物、リージョン災害対策が要件外である点は不変（ADR-0019）。判断の反転の経緯を記録すること自体が成果物 1 になる |
 | HA | 無効（Day 5 に有効化） | Burstable は HA 非対応（§2-1 No.10） |
 | ネットワーク | **private access（VNet 統合）**: 委任サブネット `snet-felisaichatbot-dev-pgsql`（/28）+ private DNS zone。`public_network_access_enabled = false`・firewall rule なし（**2026-08-22 改訂。ADR-0018**） | 当初の「public access + firewall rule」は walking skeleton 開通までの暫定構成（Issue #81）。egress IP の変動が実測で確認され（[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）、IP 許可は本質的な制御にならないため、テーブル 0 件・バックアップ 1 件の再作成コスト最小のうちに private access へ確定した。`psql` / Alembic は VNet 内の ops コンテナ経由（[vnet-integration-cutover.md](./vnet-integration-cutover.md)） |
 | `azure.extensions` | **`VECTOR,PGSTATTUPLE`**（Terraform のサーバーパラメータで設定） | `CREATE EXTENSION` は事前 allowlist 必須（§2-1 No.27）。`vector` は既存 migration `backend/migrations/versions/0001_initial_schema.py` が `CREATE EXTENSION IF NOT EXISTS vector` を実行するため Alembic 適用の前提。`pgstattuple` は Day 4 の bloat 実測（§4-6）で使う。PG17 で両方提供済み（§2-1 No.27） |
@@ -174,7 +174,7 @@ az monitor metrics list \
 
 - CI（GitHub Actions）経由で Container Apps がデプロイされ、`/readyz` が 200 を返す（= Azure 上の PostgreSQL へ `SELECT 1` が通っている = Container Apps からの接続経路が開通している）
 - `psql` で接続でき、Alembic migration（`CREATE EXTENSION IF NOT EXISTS vector` を含む）が適用済み（= `azure.extensions` の設定が効いている。§3-1）。**private access 化（ADR-0018）後の psql / alembic は作業端末からではなく VNet 内の ops コンテナ / migration Job から行う**（[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3）。ここが通らないと Day 4 の `psql` 作業・pgstattuple・seed 投入がすべて開始できない
-- `az postgres flexible-server show` で `backup.backupRetentionDays: 7` / geo 冗長無効 / `earliestRestoreDate` の値が記録済み
+- `az postgres flexible-server show` で `backup.backupRetentionDays: 7` / geo 冗長有効（cutover 後の再作成サーバー。ADR-0019。cutover 前の旧サーバーの記録は Disabled で正しい） / `earliestRestoreDate` の値が記録済み
 - §3-4 の結果（HA 可否）が確定し、Day 5 の経路（変更 or 新規作成）が決まっている
 
 ### 3-6. teardown / stop（Day 3 終了時）
@@ -390,7 +390,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（�
 
 | # | 成果物 | 中身 | 作る日 |
 | --- | --- | --- | --- |
-| 1 | Backup | 保持 7 日・日次スナップショット + WAL・geo 冗長無効の**根拠**（§3-1 の表 + ADR） | Day 3 |
+| 1 | Backup | 保持 7 日・日次スナップショット + WAL・geo 冗長の判断（無効 → 前提変化で有効化）の**根拠**（§3-1 の表 + ADR-0011 / ADR-0019） | Day 3 |
 | 2 | PITR ドリル | 破壊 → 特定時刻へ復旧。**RTO / RPO 実測** → `docs/verification/restore-drill/` | Day 4 |
 | 3 | Maintenance（Azure 側） | メンテナンスウィンドウ設定・マイナー更新の仕組み・**階層変更ダウンタイム実測**・**夜間 stop を廃止した判断の記録**（「停止中は新規バックアップなし」（§2-1 No.6）を根拠に運用を変えた。ADR-0017） | Day 3〜5 |
 | 4 | Maintenance（PostgreSQL 側） | autovacuum 発火実測・bloat 計測・ANALYZE・長時間トランザクション阻害の観測 → `docs/verification/vacuum-maintenance/` | Day 4 |
@@ -439,7 +439,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（�
 
 ## 9. Day 3〜5 でやらないこと（スコープクリープ防止）
 
-- geo リストア・読み取りレプリカ・長期保持（Azure Backup / LTR）の実施（根拠の議論は §3-1 で済ませており、実物は作らない）
+- geo リストア・読み取りレプリカ・長期保持（Azure Backup / LTR）の実施（根拠の議論は §3-1 で済ませており、実物は作らない）。geo 冗長バックアップを有効化（ADR-0019）した後も、geo リストアのドリルは「時間が余ればやること」にも**入れない**: private access（ADR-0018）ではペアリージョン側に VNet 一式と接続経路の新設が要り「時間が余れば」の作業量ではなく、PITR 不可のため本命成果物にも寄与しない（判断の記録は ADR-0019）
 - Memory Optimized 階層・pgBouncer・カスタムメンテナンス自動化などの検証
 - アプリ機能の追加開発（walking skeleton の先のアプリ改善は本プロジェクトの目的ではない）
 - 本書に書いた設計値の再議論（ADR 化は実施時に行うが、方向は本書で確定）

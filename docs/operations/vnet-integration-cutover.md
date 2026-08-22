@@ -89,7 +89,9 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 
 ```bash
 # plan で「pgsql が destroy → create（replace）される」「firewall rule が destroy される」
-# 「VNet / subnet ×2 / private DNS zone / VNet link が add される」ことを確認してから apply する
+# 「VNet / subnet ×2 / private DNS zone / VNet link が add される」
+# 「geo_redundant_backup_enabled が false → true になる（replace 要因のひとつ。ADR-0019）」
+# ことを確認してから apply する
 terraform -chdir=terraform/persistent plan
 terraform -chdir=terraform/persistent apply
 ```
@@ -98,6 +100,11 @@ terraform -chdir=terraform/persistent apply
   （link 完成前のサーバー作成は失敗し得るため `depends_on` で明示済み）
 - **B1ms × private access は「明文の禁止がない」根拠のみで未確定**（ADR-0018）。ここで失敗したら
   その時点のエラーを記録し、GP 最小 SKU での作成可否を切り分ける
+- 再作成後のサーバーは geo 冗長バックアップ有効（ADR-0019）。**作成後 1 時間はペアリージョンへの
+  レプリケーション待ちのため geo リストアできない**（"After you create a server, wait at least one hour
+  before initiating a geo-restore." 出典:
+  <https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-backup-restore> ）。
+  Day 4 の PITR ドリルには影響しない（PITR と geo リストアは別経路）
 - apply 後、新しい接続先 FQDN を取得する（private DNS zone 配下の名前に変わる）:
 
 ```bash
