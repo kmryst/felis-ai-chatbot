@@ -44,7 +44,7 @@
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
 | HA / 冗長構成 | 常設では無し。Day 5 に数時間だけ検証 | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [計画書 §5](./operations/day3-5-execution-plan.md) / ADR は Day 5 で作成予定 |
-| geo 冗長バックアップ | 無効（作成時のみ決定可・不可逆） | バックアップ 2 倍課金で、本命の PITR ドリルに寄与せず、リージョン災害対策は要件にない | DR 要件に応じて有効化（サーバー再作成が必要） | [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md) |
+| geo 冗長バックアップ | 有効へ確定（コード反映済み。実機反映は cutover の apply 時）。ただし geo リストアの手順整備・演習は未実施 | 無料枠の判明で 2 倍課金の前提が崩れ、作成時のみ設定可の制約を cutover の再作成で解消した。geo リストアは PITR 不可・RPO 最大 1 時間で主成果物に寄与しないため演習はスコープ外 | DR 要件に基づく geo リストア手順（ペアリージョン側 VNet 含む）の整備と定期演習 | [ADR-0019](./adr/0019-enable-geo-redundant-backup.md) / [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md) |
 | 長期保持（LTR） | 未使用（保持は 7 日のみ） | 要件（検証 3 日）< 復旧ウィンドウ（7 日）で、延長は無料枠超過リスクを増やすだけ | 保持要件（監査・コンプライアンス）に応じた LTR | [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md)（選択肢 4 で却下） / [計画書 §9](./operations/day3-5-execution-plan.md) |
 | 読み取りレプリカ | 無し | 読み取り負荷分散・参照系分離の要件がない | 負荷・DR 要件に応じたレプリカ設計 | [計画書 §9](./operations/day3-5-execution-plan.md) |
 | リージョン構成 | japaneast 単一。ただし chat 推論（GlobalStandard SKU）のみリージョンを跨ぎ得る | 無料試用サブスクリプションでは japaneast の Standard 系 chat クォータが取れなかった | データ所在要件に応じ Standard SKU へ切替（コード変更不要）。DB / アプリのマルチリージョンは DR 要件次第 | [ADR-0009](./adr/0009-azure-openai-as-llm-provider.md) |

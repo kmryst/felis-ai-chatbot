@@ -27,7 +27,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9） | 管理外 | 触らない | 残す | $0 |
 | Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
 | tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
-| PostgreSQL Flexible Server（**private access**。ADR-0018） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018） |
+| PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は Day 5 の最終 teardown のみ） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる） |
