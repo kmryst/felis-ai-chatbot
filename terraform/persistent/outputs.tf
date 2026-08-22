@@ -1,10 +1,10 @@
 output "server_fqdn" {
-  description = "PostgreSQL Flexible Server の FQDN（アプリの接続文字列・psql が使う）"
+  description = "PostgreSQL Flexible Server の FQDN（private DNS zone 配下の名前。VNet 内からのみ解決・到達できる。DATABASE_URL のホスト部に使う）"
   value       = azurerm_postgresql_flexible_server.main.fqdn
 }
 
 output "server_id" {
-  description = "PostgreSQL Flexible Server のリソース ID（ephemeral 層が firewall rule 追加時に参照）"
+  description = "PostgreSQL Flexible Server のリソース ID（az monitor metrics などの読み取りコマンドで使う）"
   value       = azurerm_postgresql_flexible_server.main.id
 }
 

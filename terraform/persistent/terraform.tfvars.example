@@ -1,8 +1,6 @@
 # terraform.tfvars は gitignore 対象。実値はこのファイルをコピーして作る。
 # administrator_password はここにも書かず TF_VAR_administrator_password 環境変数で渡す。
 
-# 必須（default なし）。空 map は validation で拒否される（firewall rule 0 件 = 全接続拒否のため）。
-firewall_allowed_client_ips = {
-  # 作業端末のグローバル IP（当日 `curl -s ifconfig.me` で確認して記入）
-  "allow-workstation" = "203.0.113.10"
-}
+# private access 化（ADR-0018）に伴い firewall_allowed_client_ips 変数は削除された。
+# 既存の terraform.tfvars に同名の行が残っていると undeclared variable の警告が出るので消すこと。
+# 現状 persistent 層に必須の tfvars 項目はない（resource_group_name / server_name は default あり）。

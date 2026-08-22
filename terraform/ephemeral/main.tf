@@ -1,23 +1,26 @@
-# 設計値の正本は docs/operations/day3-5-execution-plan.md §3-2（walking skeleton）と ADR-0015。
+# 設計値の正本は docs/operations/day3-5-execution-plan.md §3-2（walking skeleton）と ADR-0015 / ADR-0018。
 # この層は毎日 destroy / apply を繰り返す（§3-6 の teardown / §8 のコスト見張り）。
 #
-# 【apply 手順の注意（2 段階 apply）】
-# firewall rule の for_each は Container App の outbound_ip_addresses（apply 後にしか
-# 確定しない値）に依存するため、リソースが何もない状態からの一発 apply は
-# 「Invalid for_each argument」で失敗する。初回・destroy 後の再構築は次の 2 段階で行う:
-#   1. terraform apply -target=azurerm_container_app.main   # ACR / CAE / App まで作成
-#   2. terraform apply                                      # outbound IP が確定し firewall rule を追加
-# （§3-1「Container Apps の egress IP は ephemeral 層が apply 後に自層の firewall rule で許可する」の実装）
+# 【apply 手順の注意（段階 apply）】
+# 旧構成にあった「firewall rule の for_each が outbound_ip_addresses に依存するための 2 段階 apply」は、
+# private access 化（ADR-0018）で firewall rule ごと消えたため不要になった。
+# ただし ACR が空のままでは Container App / Job がイメージを pull できないため、
+# 初回・destroy 後の再構築は次の 2 段階で行う（イメージ押し込みの都合であり、for_each 制約ではない）:
+#   1. terraform apply -target=azurerm_container_registry.main   # ACR だけ先に作成
+#   2. docker push（または az acr import）でイメージ投入 → terraform apply   # 残り全部
+# 手順の全体は docs/operations/vnet-integration-cutover.md を参照。
 
 data "azurerm_resource_group" "dev" {
   name = var.resource_group_name
 }
 
-# persistent 層が管理する PostgreSQL Flexible Server。この層では読み取り参照のみ
-# （firewall rule の親 server_id として使う）。サーバー本体の変更は persistent 層でしか行わない。
-data "azurerm_postgresql_flexible_server" "main" {
-  name                = var.postgres_server_name
-  resource_group_name = data.azurerm_resource_group.dev.name
+# persistent 層が管理する VNet 上の Container Apps 用委任サブネット（ADR-0018）。
+# この層では読み取り参照のみ。サブネット本体の変更は persistent 層でしか行わない
+# （terraform_remote_state は使わない。ADR-0015 の 7 と同じ理由）。
+data "azurerm_subnet" "aca" {
+  name                 = var.aca_subnet_name
+  virtual_network_name = var.vnet_name
+  resource_group_name  = data.azurerm_resource_group.dev.name
 }
 
 # ---------------------------------------------------------------------------
@@ -48,8 +51,6 @@ resource "azurerm_container_registry" "main" {
 # 監視ログが消えないようにするため（Day 5 の閾値決定は Day 3〜4 の実測レンジが前提。計画書 §7）。
 # terraform_remote_state は使わず data source で参照する（ADR-0015 の 7 と同じ理由:
 # persistent の state には sensitive 値が入るため読み取り面を増やさない）。
-# azurerm 5.1.0 の data source は id を提供し、azurerm_container_app_environment が
-# 要求するのは log_analytics_workspace_id のみ（provider スキーマで確認済み 2026-08-21）。
 data "azurerm_log_analytics_workspace" "main" {
   name                = var.log_analytics_workspace_name
   resource_group_name = data.azurerm_resource_group.dev.name
@@ -59,22 +60,39 @@ data "azurerm_log_analytics_workspace" "main" {
 # Container Apps Environment + Container App
 # ---------------------------------------------------------------------------
 
+# VNet 統合（ADR-0018）: workload profiles 環境 + custom VNet + External。
+# - workload profiles を選ぶ理由: Consumption-only 環境の VNet 統合は legacy 表記で最小 /23・
+#   UDR / NAT Gateway 非対応。workload profiles は最小 /27 で足りる
+#   （出典: https://learn.microsoft.com/en-us/azure/container-apps/networking ）
+# - Consumption プロファイルのみ使う限りプラン管理の固定費はない
+#   （出典: https://learn.microsoft.com/en-us/azure/container-apps/billing ）
+# - custom VNet では managed resources（Standard LB + Standard static public IP）が課金対象になる
+#   （出典: https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks 。
+#    単価と 24h 換算は ADR-0018）。この層を毎日 destroy する運用でこの課金も止まる
+# - External のまま（internal_load_balancer_enabled = false）: /readyz を作業端末から叩く検証経路を維持する。
+#   DB 側は private access なので、DB の到達性はこの設定の影響を受けない
+# - ネットワーク種別は CAE 作成後に変更不可（同 networking 出典）。この層は毎日作り直すため制約にならない
 resource "azurerm_container_app_environment" "main" {
   name                = "cae-felisaichatbot-dev"
   resource_group_name = data.azurerm_resource_group.dev.name
   location            = data.azurerm_resource_group.dev.location
 
-  # VNet 統合はしない（day3-5-execution-plan.md §3-1 / §9。作業量とコストだけ増え、
-  # 検証目的に寄与しない）。既定の Azure ネットワーク上の環境として作る。
   logs_destination           = "log-analytics"
   log_analytics_workspace_id = data.azurerm_log_analytics_workspace.main.id
+
+  infrastructure_subnet_id       = data.azurerm_subnet.aca.id
+  internal_load_balancer_enabled = false
+
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
 }
 
 # ACR pull 用 user-assigned managed identity（ADR-0015 選択肢 6-(b) で確定）。
 # identity 本体と AcrPull ロール割当（RG スコープ）は Terraform 管理外・手動作成
 # （docs/operations/azure-resource-inventory.md #8 / #9 が正本）。ID と権限は据え置き、
 # ACR / Container Apps は毎日 destroy / apply という寿命の分離のため、この層は読み取り参照のみ。
-# 手動作成が済むまでは実体がなく plan / apply は通らない（validate は通る）。
 data "azurerm_user_assigned_identity" "acr_pull" {
   name                = var.acr_pull_identity_name
   resource_group_name = data.azurerm_resource_group.dev.name
@@ -85,6 +103,9 @@ resource "azurerm_container_app" "main" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = data.azurerm_resource_group.dev.name
   revision_mode                = "Single"
+
+  # workload profiles 環境では app がどのプロファイルで動くかを明示する（Consumption のみ使う。ADR-0018）
+  workload_profile_name = "Consumption"
 
   identity {
     type         = "UserAssigned"
@@ -147,22 +168,128 @@ resource "azurerm_container_app" "main" {
 }
 
 # ---------------------------------------------------------------------------
-# PostgreSQL firewall rule（Container Apps の egress 許可）
+# 運用経路（ops Container App + マイグレーション Job。ADR-0018）
 # ---------------------------------------------------------------------------
 
-# Container App の outbound IP を persistent 層の PostgreSQL に許可する。
-# 【既知の不確実性（ADR-0015）】VNet 統合なしの環境では outbound IP は静的保証がなく
-# 「Outbound IPs might change over time」と明記されている（出典:
-# https://learn.microsoft.com/en-us/azure/container-apps/networking ）。
-# この層は毎日 destroy / apply されるため、rule は毎朝その時点の実 IP で作り直される。
-# 稼働中に IP が変わると /readyz が DB 接続エラーで落ちる。その場合は
-# terraform apply の再実行で rule を現在値に追随させる（検知は /readyz の 200 監視）。
-resource "azurerm_postgresql_flexible_server_firewall_rule" "container_app_egress" {
-  for_each = toset(azurerm_container_app.main.outbound_ip_addresses)
+# private access 化後、DB へは VNet 内からしか到達できない。手元の psql / alembic の代わりに、
+# VNet 内の運用コンテナを唯一の対話経路とする（「本番 DB へ手元から直接繋がない」運用。ADR-0018）。
+# - ingress なし: 外に晒す必要が一切ない
+# - min_replicas 0: 平常時はレプリカ 0 で課金ゼロ。使うときだけ min_replicas を一時的に
+#   1 へ上げて `az containerapp exec` で入る（手順は docs/operations/vnet-integration-cutover.md）
+# - イメージは backend の ops ターゲット（runtime + postgresql-client + migrations/ + alembic.ini）。
+#   serving イメージには運用ツールを混ぜない（backend/Dockerfile）
+# - ops_container_image が空の間は作らない（hello-world 段階や ops イメージ未 push の状態でも
+#   apply が通るようにするため）
+resource "azurerm_container_app" "ops" {
+  count = var.ops_container_image == "" ? 0 : 1
 
-  # rule 名にドットは使えないためハイフンに置換（例: aca-egress-20-78-1-2）
-  name             = "aca-egress-${replace(each.value, ".", "-")}"
-  server_id        = data.azurerm_postgresql_flexible_server.main.id
-  start_ip_address = each.value
-  end_ip_address   = each.value
+  name                         = "ca-felisaichatbot-dev-ops"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  template {
+    min_replicas = 0
+    max_replicas = 1
+
+    container {
+      name   = "ops"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      # serving 用 CMD（uvicorn）を上書きし、exec で入るためだけに待機させる
+      command = ["sleep", "infinity"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（ops コンテナは DB 接続のためだけに存在する）。"
+    }
+  }
+}
+
+# Alembic マイグレーション実行用の Container Apps Job（Manual トリガー。ADR-0018）。
+# `az containerapp job start` で起動し、`alembic upgrade head` を 1 回実行して終了する。
+# 課金は実行中のレプリカ分のみ（Manual トリガーで放置中はゼロ）。
+resource "azurerm_container_app_job" "migrate" {
+  count = var.ops_container_image == "" ? 0 : 1
+
+  name                         = "caj-felisaichatbot-dev-migrate"
+  location                     = data.azurerm_resource_group.dev.location
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
+
+  # マイグレーション 1 本に 10 分あれば十分（現状の migration は CREATE EXTENSION + DDL のみ）。
+  # 超えたら設計を疑うべきで、無限に待たない
+  replica_timeout_in_seconds = 600
+  # 失敗時に自動で叩き直さない（スキーマ変更の再試行は人間が状態を確認してから）
+  replica_retry_limit = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  template {
+    container {
+      name   = "migrate"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      command = ["alembic", "upgrade", "head"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（migration Job は DB 接続のためだけに存在する）。"
+    }
+  }
 }

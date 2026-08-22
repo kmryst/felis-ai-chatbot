@@ -14,12 +14,6 @@ variable "acr_name" {
   default     = "felisaichatbotacrdev"
 }
 
-variable "postgres_server_name" {
-  description = "persistent 層が管理する PostgreSQL Flexible Server 名（data source 参照のみ。この層では作成・変更しない）"
-  type        = string
-  default     = "pgsql-felisaichatbot-dev"
-}
-
 variable "container_image" {
   description = <<-DESC
     Container App にデプロイするイメージの完全参照（例: felisaichatbotacrdev.azurecr.io/hello-world:sha-abc1234）。
@@ -78,4 +72,37 @@ variable "log_analytics_workspace_name" {
   description = "persistent 層が管理する Log Analytics workspace 名（ADR-0016。data source 参照のみ。この層では作成・変更しない）"
   type        = string
   default     = "log-felisaichatbot-dev"
+}
+
+variable "vnet_name" {
+  description = "persistent 層が管理する VNet 名（ADR-0018。data source 参照のみ。この層では作成・変更しない）"
+  type        = string
+  default     = "vnet-felisaichatbot-dev"
+}
+
+variable "aca_subnet_name" {
+  description = <<-DESC
+    persistent 層が管理する Container Apps Environment 用委任サブネット名（ADR-0018）。
+    `Microsoft.App/environments` へ委任済みの /27。この層は CAE の infrastructure_subnet_id として
+    data source 参照するのみで、サブネット本体の変更は persistent 層でしか行わない。
+  DESC
+  type        = string
+  default     = "snet-felisaichatbot-dev-aca"
+}
+
+variable "ops_container_image" {
+  description = <<-DESC
+    運用コンテナ（ops Container App / migration Job）のイメージ完全参照
+    （例: felisaichatbotacrdev.azurecr.io/backend-ops:sha-abc1234。backend/Dockerfile の ops ターゲット）。
+    空のままなら ops Container App と migration Job は作られない（hello-world 段階や
+    ops イメージ未 push の状態でも apply を通すため）。指定する場合は database_url も必須
+    （各リソースの precondition が検査する）。
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ops_container_image == "" || (can(regex(":[a-zA-Z0-9._-]+$", var.ops_container_image)) && !endswith(var.ops_container_image, ":latest"))
+    error_message = "ops_container_image は空か、タグ付きの完全参照（タグは英数字と . _ - のみ）を指定し、latest タグは使わないでください（ADR-0015 のイメージタグ方針）。"
+  }
 }
