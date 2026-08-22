@@ -291,7 +291,10 @@ Day 4 の PITR ドリルは DSN を **元サーバー → 復元先 → 元サ�
 
 つまり Single revision モードでも旧 revision は deprovision されるだけで一覧に残り、戻しの apply の
 suffix は既存の非アクティブ revision と名前が衝突する。**衝突時に ARM API がエラーを返すのか、
-黙って既存 revision を参照するのかは公式に記載がなく未実測**だが、どちらでも Day 4 は壊れる:
+黙って既存 revision を参照するのかは公式に記載がなく未実測**（ステップ C 内で意図的に衝突させて
+実測する予定。手順は [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §3-3、
+記録先は [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md)）だが、
+どちらでも Day 4 は壊れる:
 エラーなら切り戻し（§4-5）がブロックされ、無反応なら「元サーバーに戻したつもりで復元先を見続ける」
 ため RTO / RPO の計測値が偽になる。
 
@@ -323,7 +326,8 @@ secret は `properties.configuration` にあり新 revision を作らないが�
 - 検証: `terraform validate` / ダミー変数での `terraform plan` で、両 Container App の template に
   `DSN_REVISION_MARKER` が入り `revision_suffix` が未指定（known after apply）になることを確認
   （2026-08-22。ephemeral 層は destroy 済みのため実 apply での revision 生成挙動は未実測。
-  ステップ B/C と Day 4 の戻し apply で実測する）
+  ステップ B/C と Day 4 の戻し apply で実測する。suffix 衝突時の ARM API の挙動そのものは
+  ステップ C の意図的衝突実測 — vnet-integration-cutover.md §3-3 — で確かめる）
 
 ## 関連
 

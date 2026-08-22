@@ -226,6 +226,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 > 中身を見ずに apply すると、**本命成果物である Backup / PITR の経路をドリルの最中に壊せてしまう**。
 > ephemeral 層（DSN 向け替えの再 apply。§4-3 の 8 / §4-5）でも同じゲートを踏む。
 
+- ステップ C の revision 名衝突の意図的実測（[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3-3）が完了し、結果が [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) に記録済みであることを確認する（ADR-0018 追記 #98 の未実測項目。Day 4 の DSN 往復 apply はこの実測結果を前提に行う）
 - `az postgres flexible-server show` で `state: Ready` を確認する（Ready でなければ §2-1 No.8 の自動再起動等の想定外イベントを疑い、Activity Log を確認して記録する）
 - §3-3 と同じコマンドで `earliestRestoreDate` / Backup Storage Used を取り、前日終業時からの推移を `observations.md` に記録（連続稼働中のバックアップ蓄積の実測。PITR ドリルの復元可能範囲の確認を兼ねる）
 

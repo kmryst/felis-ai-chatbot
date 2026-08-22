@@ -183,6 +183,123 @@ az containerapp exec  -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -
 az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 0
 ```
 
+### 3-3. revision 名衝突の意図的実測（Azure への書き込み = 要ユーザー承認）
+
+ADR-0018 追記 #98 は「過去に使った revision suffix を再指定したとき、ARM API がエラーを返すのか
+黙って既存 revision を参照するのかは公式に記載がなく**未実測**」とした。Day 4 の本番（DSN の
+往復 apply）で初めて踏むのではなく、**ここ（ステップ C。§3-2 の psql 疎通成功の直後）で意図的に
+衝突させて実測し、証跡を残す**。「未実測の前提を実測に変えた」記録自体が本プロジェクトの成果物である。
+本節のコマンドはすべて Azure への書き込みを含むため、冒頭の但し書きどおり
+**ユーザーの明示承認を得てから**実行する。結果はすべて
+[vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) の
+「revision 名衝突の意図的実測」欄に記録する。
+
+**対象は ops（`ca-felisaichatbot-dev-ops`）のみ**。ingress が無くトラフィックが乗らないため、
+壊れても外部影響がない。serving（`ca-felisaichatbot-dev`）では行わない。
+
+```bash
+# 前提: §3-2 の psql 疎通が成功済みで、min_replicas は 0 に戻してあること
+
+# 0) 基準状態を記録する（revision の一覧・active/inactive・replicas）
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+
+# 1) suffix probe1 で新 revision を作る。env の追加（--set-env-vars）は template の変化 =
+#    revision-scope の変更なので、suffix 指定と合わせて新 revision が作られる想定
+az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+  --revision-suffix probe1 --set-env-vars REVISION_COLLISION_PROBE=1
+echo "exit=$?"
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+# → probe1 側の revision の実名をここで控える（suffix と実名の区切り文字も実出力で確認して記録する）
+
+# 2) suffix probe2 でもう 1 回。Single revision モードで probe1 をアクティブから外すための
+#    中間ステップ。これが無いと「非アクティブな既存 revision との名前衝突」のテストにならない
+#    （アクティブな revision と同名にするのとは別の話）
+az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+  --revision-suffix probe2 --set-env-vars REVISION_COLLISION_PROBE=2
+echo "exit=$?"
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+# → probe1 が非アクティブ側に落ち、probe2 がアクティブであることを確認して記録
+
+# 3) 本番: probe1 を再指定する（= 非アクティブな既存 revision と同名）。
+#    env 値を 3 に変えて「同名だが内容は新しい」状態を作り、あとで新旧を識別できるようにする
+az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+  --revision-suffix probe1 --set-env-vars REVISION_COLLISION_PROBE=3
+rc=$?; echo "exit=$rc"    # ← これが測りたい値。exit code と、エラーならエラー全文を必ず記録する
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+```
+
+**3) の結果の記録（ここを曖昧にすると測った意味がない）**:
+
+- exit code。エラーなら**エラー全文**（メッセージとエラーコード）。さらに `--debug` を付けて
+  再実行し、stderr のログから **ARM への PUT/PATCH リクエストが実際に発行されたか**（= CLI 側の
+  バリデーションで ARM に到達する前に弾かれたのではないか）と HTTP ステータス・ARM エラーコードを
+  切り分けて記録する
+- 成功（exit 0）の場合は、probe1 という名前の revision が**新しい内容で存在する**のか、
+  **古い内容のまま再アクティブ化されただけ**なのかを区別する:
+
+```bash
+# 1) で控えた probe1 の実名を <REV_PROBE1> に入れる
+az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+  --revision <REV_PROBE1> \
+  --query "{active: properties.active, createdTime: properties.createdTime, env: properties.template.containers[0].env}"
+# → REVISION_COLLISION_PROBE が 3 なら「同名で新しい内容」、1 のままなら「古い内容の再利用」。
+#   createdTime が 1) の時刻のままか 3) の時刻に変わったかも突き合わせる。
+#   なお revision は本来 "Immutable: Once established, a revision remains unchangeable."
+#   （出典: https://learn.microsoft.com/en-us/azure/container-apps/revisions ）とされており、
+#   「同名で新しい内容」が観測された場合はこの記述との食い違いとして特記する
+```
+
+**判定表（結果に応じた Day 4 への含意。どちらに転んでも本 PR の変更で回避済みであることの確認）**:
+
+| 3) の結果 | 旧方式（`revision_suffix` = DSN ハッシュ固定）への含意 | 現方式（suffix 未指定・Azure が一意生成 + `DSN_REVISION_MARKER`）での扱い |
+| --- | --- | --- |
+| エラーが返る | Day 4 の戻し apply（§4-5）が同じ衝突でブロックされていたことの実証になる | suffix を指定しないため衝突自体が発生しない |
+| 黙認され、古い内容のまま | 「元サーバーに戻したつもりで復元先を見続ける」= RTO / RPO の計測値が偽になっていたことの実証になる | 同上 |
+| 黙認され、同名で新しい内容になる | 動作はするが revision 履歴の同一名が別内容を指し、immutable の公式記述と食い違う（履歴の信頼性が失われる） | 同上 |
+
+**`--set-env-vars` を選んだ根拠（`az containerapp update --help` の実出力。2026-08-22 取得）**:
+
+> `--set-env-vars` : Add or update environment variable(s) in container. **Existing environment
+> variables are not modified.** Space-separated values in 'key=value' format.
+
+既存の env（secret 参照の `DATABASE_URL` と `DSN_REVISION_MARKER`）を**消さずに**追加できる。
+対して `--replace-env-vars` は同ヘルプで
+"Replace environment variable(s) in container. **Other existing environment variables are
+removed.**" とされており、これを使うと ops の DB 接続が壊れるため**使わない**。
+公式 Web ドキュメントではなく手元の CLI ヘルプ実出力を根拠とする
+（ドキュメントと CLI 実挙動が食い違った前例があるため。ADR-0018 追記 #96 ほか）。
+
+**コスト影響**:
+
+- probe で revision が最大 3 本増えるが、非アクティブ revision に課金は無い
+  （"Container Apps doesn't charge for inactive revisions."
+  出典: <https://learn.microsoft.com/en-us/azure/container-apps/revisions> ）
+- ops は `min_replicas` 0 のまま実施する。新 revision の provision 中に一時的にレプリカが
+  立つ場合（立つかどうかは未実測）は、その稼働分だけ active vCPU / memory の課金が発生する。
+  各ステップの revision list で `Replicas` 列も記録しておく
+
+**後始末とゲート（すべて Azure への書き込み = 要ユーザー承認）**:
+
+```bash
+# probe で入れた template の変更（REVISION_COLLISION_PROBE / suffix 指定）をコード定義へ収束させる。
+# まず plan が probe の差分を検出することを確認してから apply する
+terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   # exit 2 想定
+terraform -chdir=terraform/ephemeral apply
+
+# plan が probe の差分を検出しない場合（provider の refresh が env 差分を拾うかは未実測）は、
+# az 側で明示的に戻してから再度 plan を取る:
+#   az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
+#     --remove-env-vars REVISION_COLLISION_PROBE
+#   （--remove-env-vars: "Remove environment variable(s) from container. Space-separated
+#     environment variable names." 同ヘルプ実出力）
+
+# ゲート: ステップ A / Day 4 / Day 5 と同じ。az で直接触った後にコードと実体が乖離して
+# いないことを担保する。exit 0 になるまで §4 以降へ進まない
+terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   # exit 0 を確認
+
+# psql 疎通が probe 前と同じく取れることを §3-2 と同じ手順で再確認する
+```
+
 ## 4. 終業時の扱い（「毎日 destroy」を改める。ADR-0018 追記 2026-08-22）
 
 **ephemeral 層はカットオーバー後、Day 5 の最終 teardown（計画書 §5-6）まで destroy しない。**
