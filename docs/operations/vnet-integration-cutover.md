@@ -175,15 +175,36 @@ az containerapp job execution list -g rg-felisaichatbot-dev-tf -n caj-felisaicha
 # → Status: Succeeded を確認。失敗時はログを見る（Log Analytics: ContainerAppConsoleLogs_CL）
 
 # 3-2. psql 対話経路（ops コンテナ）
-# min_replicas 0 のため、まずレプリカを起こす（未実測: exec に稼働レプリカが必要という理解。ADR-0018）
-az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 1
+# ops は min_replicas = 1 の常駐構成（2026-08-22 是正。ADR-0015 追記）。exec は Running
+# レプリカに直接つながる（実測）ため、min-replicas の一時変更は不要
+az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table  # Running 1 本を確認
 az containerapp exec  -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --command bash
 #   コンテナ内で: psql "$DATABASE_URL" -c 'SELECT 1;' / \dt でマイグレーション結果を確認
-# 使い終わったら必ず 0 へ戻す（常駐課金を残さない）
-az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --min-replicas 0
 ```
 
+- **旧手順（使うたびに min-replicas を 1 に上げ、終わったら 0 に戻す）の訂正（2026-08-22）**:
+  この操作は目的（常駐課金を残さない）を**達成していなかった**。ingress なしの ops には
+  スケールインを駆動する仕組みが無く、min-replicas を 0 に戻してもレプリカ 1 が常駐し続ける
+  （Replicas メトリクスで実測。[observations.md](../verification/vnet-cutover/observations.md)
+  の「G4 の訂正」節が正本）。さらに 0 宣言は idle 課金の適格条件（"Configured with a minimum
+  replica count greater than zero"。出典:
+  <https://learn.microsoft.com/en-us/azure/container-apps/billing> ）を外すため、常駐レプリカが
+  **active 単価で課金される**構成だった。宣言を実態に合わせた min_replicas = 1 へ是正済み
+
+- **`az containerapp exec` の非対話実行の癖（2026-08-22 実測）**: `--command` の文字列は
+  コンテナ内シェルを介さず実行されるため **`$DATABASE_URL` 等は展開されない**（psql が
+  ローカルソケットへ向かう）。`--command 'sh -c "…"'` の入れ子引用は az 側の分割で壊れる
+  （Syntax error を実測）。スクリプトから叩く場合は `--command bash` で対話セッションを張り、
+  **接続確立（約 10 秒）を待ってから標準入力にコマンドを流し込む**（pty が必要なら `script -qec` を使う）
+
 ### 3-3. revision 名衝突の意図的実測（Azure への書き込み = 要ユーザー承認）
+
+> **2026-08-22 実施済み**。結果は
+> [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) の
+> 「revision 名衝突の意図的実測」節が正本: **PATCH は ARM に HTTP 202 で受理された後、
+> revision provisioning が `revision with suffix probe1 already exists`
+> （`ContainerAppOperationError`）で明示的に失敗**（判定表 1 行目）。既存 revision は無変更。
+> 本節の手順は再実施できるよう残すが、判定表の「未実測」前提は解消済み。
 
 ADR-0018 追記 #98 は「過去に使った revision suffix を再指定したとき、ARM API がエラーを返すのか
 黙って既存 revision を参照するのかは公式に記載がなく**未実測**」とした。Day 4 の本番（DSN の
@@ -200,15 +221,17 @@ ADR-0018 追記 #98 は「過去に使った revision suffix を再指定した�
 ```bash
 # 前提: §3-2 の psql 疎通が成功済みで、min_replicas は 0 に戻してあること
 
-# 0) 基準状態を記録する（revision の一覧・active/inactive・replicas）
-az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+# 0) 基準状態を記録する（revision の一覧・active/inactive・replicas）。
+#    既定の revision list は inactive を表示しない（2026-08-22 実測: deprovision 完了後の
+#    revision は一覧から消える）。非アクティブ側を見るときは必ず --all を付ける
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --all -o table
 
 # 1) suffix probe1 で新 revision を作る。env の追加（--set-env-vars）は template の変化 =
 #    revision-scope の変更なので、suffix 指定と合わせて新 revision が作られる想定
 az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
   --revision-suffix probe1 --set-env-vars REVISION_COLLISION_PROBE=1
 echo "exit=$?"
-az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --all -o table
 # → probe1 側の revision の実名をここで控える（suffix と実名の区切り文字も実出力で確認して記録する）
 
 # 1-b) ガード: 既存 env が生き残ったことの実測確認（確認できるまで 2) へ進まない）。
@@ -235,7 +258,7 @@ az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
   --revision-suffix probe2 --set-env-vars REVISION_COLLISION_PROBE=2
 echo "exit=$?"
-az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --all -o table
 # → probe1 が非アクティブ側に落ち、probe2 がアクティブであることを確認して記録
 
 # 3) 本番: probe1 を再指定する（= 非アクティブな既存 revision と同名）。
@@ -243,7 +266,7 @@ az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
   --revision-suffix probe1 --set-env-vars REVISION_COLLISION_PROBE=3
 rc=$?; echo "exit=$rc"    # ← これが測りたい値。exit code と、エラーならエラー全文を必ず記録する
-az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table
+az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --all -o table
 ```
 
 **3) の結果の記録（ここを曖昧にすると測った意味がない）**:
@@ -292,9 +315,10 @@ removed.**" とされており、これを使うと ops の DB 接続が壊れ�
 - probe で revision が最大 3 本増えるが、非アクティブ revision に課金は無い
   （"Container Apps doesn't charge for inactive revisions."
   出典: <https://learn.microsoft.com/en-us/azure/container-apps/revisions> ）
-- ops は `min_replicas` 0 のまま実施する。新 revision の provision 中に一時的にレプリカが
-  立つ場合（立つかどうかは未実測）は、その稼働分だけ active vCPU / memory の課金が発生する。
-  各ステップの revision list で `Replicas` 列も記録しておく
+- ops は min_replicas = 1 の常駐構成（2026-08-22 是正。実施当時は 0 宣言だったが 1 レプリカが
+  常駐し active 単価で課金されていた — 経緯は observations.md「G4 の訂正」節）。probe 中も
+  レプリカ 1 が維持され、その稼働分の課金が発生する。各ステップの revision list で
+  `Replicas` 列も記録しておく
 
 **後始末とゲート（すべて Azure への書き込み = 要ユーザー承認）**:
 
@@ -304,8 +328,10 @@ removed.**" とされており、これを使うと ops の DB 接続が壊れ�
 terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   # exit 2 想定
 terraform -chdir=terraform/ephemeral apply
 
-# plan が probe の差分を検出しない場合（provider の refresh が env 差分を拾うかは未実測）は、
-# az 側で明示的に戻してから再度 plan を取る:
+# 2026-08-22 実測: provider の refresh は env 差分を拾い、plan は exit 2（ops の in-place
+# update = probe env の削除のみ）を返した。ただし config が suffix 未指定のため、probe 用
+# suffix の残存自体は drift として検出されない（新 revision は apply 時に自動生成名で作られる）。
+# 万一 plan が差分を検出しない場合の代替経路（今回は不要だった）:
 #   az containerapp update -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
 #     --remove-env-vars REVISION_COLLISION_PROBE
 #   （--remove-env-vars: "Remove environment variable(s) from container. Space-separated
@@ -334,7 +360,11 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 - 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources を含めて
   約 0.84 USD/日（いずれも Retail Prices API 実測単価。ADR-0018）。ドリル前の朝に不確実な
   再構築作業（apply + イメージ push）を積むより安い、という判断（ADR-0018 追記）
-- スケールゼロ（min_replicas 0）のため、夜間のコンピュート課金は serving / ops とも発生しない
+- 夜間のコンピュート課金（2026-08-22 是正）: **serving は** min_replicas 0 + ingress の暗黙
+  HTTP スケールルールで Replicas 0 まで縮退し課金ゼロ（実測）。**ops は** min_replicas 1 の
+  常駐で、公式の idle 適格条件（min > 0 / 最小数で稼働 / 全コンテナ起動済み / HTTP 処理なし /
+  0.01 vCPU 未満 / 1,000 bytes/s 未満）を満たすことを実測済み — ただし **idle 単価が請求に
+  実際に適用されたかは課金データでは未確認**（詳細は ADR-0015 追記と observations.md）
 
 ## 5. 巻き戻し（万一 private access で B1ms が作れない場合）
 
@@ -342,6 +372,35 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 - 切り分け: SKU を GP 最小に変えて再 apply → 通れば B1ms × private の制約が確定（ADR-0018 に追記して記録）
 - GP でも通らない場合はエラーを記録した上で、コードを revert して public access 構成で作り直す
   （main へ revert PR。暫定構成の継続を Issue で追跡する）
+
+## 6. ステップ B/C の失敗時対応（2026-08-22 の実走を踏まえて追記）
+
+§5 は persistent 層の apply 失敗（B1ms × private access が作れない場合）しかカバーしていない、
+という外部レビュー指摘への追記。**2026-08-22 の実走ではステップ B/C は全ゲート合格で完走**しており、
+以下のうち「実測」と書いた項目だけが実際に踏んだ経路である。**踏んでいない失敗経路は「未踏」と明記
+する。未踏の経路について具体的な復旧コマンドを想像で並べることはしない**（間違った手順書は無いより悪い）。
+
+### 原則（実測で裏付けあり）
+
+- **destroy で消しにいかない**。ephemeral 層は「`terraform plan` を読む → apply で収束」が
+  そのまま復旧経路になる（実測: §3-3 の probe で az により template を書き換えた後、
+  plan exit 2 → apply（in-place 18 秒）→ plan exit 0 に収束し、psql 疎通も回復した）。
+  中途半端な状態で止まったら、まず `plan -detailed-exitcode` で「コードとの乖離」を測る
+- **一過性の ARM エラーはリトライしてから疑う**（実測: `az containerapp revision list` が
+  1 回だけ `InternalServerError` を返し、10 秒後のリトライで成功。再発なし）
+- 症状の確定を構成変更より先に行う: revision の `runningState` / `runningStateDetails`、
+  Log Analytics の `ContainerAppSystemLogs_CL` / `ContainerAppConsoleLogs_CL`。
+  **推測で NAT Gateway 追加等の構成変更をしない**（コストと設計に影響。判断を仰ぐ）
+
+### 個別の失敗モード
+
+| 失敗モード | 状態 | 対応 |
+| --- | --- | --- |
+| revision suffix の名前衝突 | **実測**（§3-3 で意図的に再現） | ARM が `ContainerAppOperationError` で拒否し、**既存 revision は無変更**のまま。suffix 指定をやめて apply し直す（現行コードは suffix 未指定なので通常運用では発生しない） |
+| az で直接触った後の drift | **実測**（§3-3 の後始末） | `plan` を読んで `apply` で収束 → `plan -detailed-exitcode` exit 0 を確認 |
+| イメージ push 前に apply が走り `ErrImagePull` | **未踏**（G1 ゲート = push 直後のタグ実在・ダイジェスト一致確認で予防し、発生しなかった） | 症状確定（`runningStateDetails`）→ 正しいタグを push → 同じ参照で apply。詳細手順は実際に踏んだときに記録する |
+| CAE 作成失敗・タイムアウト | **未踏**（実測は 3 分 07 秒で成功） | 状態を記録して報告。CAE は作り直し以外の復旧手段が乏しい想定だが、**未踏のため断定しない** |
+| 委任サブネットから ACR に到達できない | **未踏**（実測で到達できることが確定済み。NSG / UDR / NAT Gateway なしの素の委任サブネットで pull 成功） | 発生し得るのは構成を変えた場合。症状確定 → 変更差分の特定から |
 
 ## PITR ドリル（Day 4）への影響
 

@@ -248,52 +248,293 @@ service endpoint を自動付与する**。用途は **WAL（Write-Ahead Log）�
   exit 0 であることを確認する**」というゲートを追加。ドリル最中の不用意な apply を防ぐため
 - ADR-0018 に追記（新規 ADR は起こさない。判断根拠は当該追記に記載）
 
-## revision 名衝突の意図的実測（**未実施**。手順: [vnet-integration-cutover.md](../../operations/vnet-integration-cutover.md) §3-3。#98）
+## ステップ B: ephemeral 層の apply（2026-08-22 実施。完了。#100）
+
+手順書 §0-2 / §2 の初回ブートストラップ経路（`DEPLOY_SHA` 未設定から開始）を初めて通した。
+ユーザーの実行承認済み。ゲート（G0〜G2）は各段の直後に実施し、**全ゲート合格**。
+
+### 結果サマリ
+
+| 項目 | 実測 |
+| --- | --- |
+| ACR-only apply（第 1 段） | 12:03:37Z 開始、**31.8 秒**、1 added |
+| serving / ops イメージ build | 12:04:29Z〜36Z（キャッシュ多用で 6.2 秒 / 0.7 秒）。SHA=`06ad1f3`（作業ツリー clean 確認済み） |
+| push | 12:06:08Z〜13Z（3.0 秒 / 2.3 秒） |
+| ephemeral 全体 apply（第 2 段） | 12:07:10Z〜12:11:12Z、**計 4 分 03 秒**。内訳: **CAE（workload profiles + custom VNet）3 分 07 秒** / serving 50 秒 / ops 49 秒 / migration Job 18 秒 |
+| 委任サブネット → ACR 到達性（未実測だった前提 1） | **到達できる**。NSG / UDR / NAT Gateway なしのまま、serving / ops とも ACR からの pull で revision が `RunningAtMaxScale` に到達 |
+| `/readyz` | **200** `{"status":"ok","db":"ok"}`（12:12:30Z。VNet 内経路での `SELECT 1` 開通） |
+
+### 実施順の正直な記録
+
+ローカルゲート（G0）の指示を受領したのは **ACR-only apply の完了後**。ACR 単体は後段の検証を無効化
+しない資源のため取り消さず、**イメージ push（Azure へ内容が渡る最初の 操作）より前に G0 を全件実施**した。
+G0c の persistent 基準線 plan も厳密には「ACR-only apply 後」の取得である。
+
+### G0: ローカルゲート（Azure へ push する前）
+
+#### G0a. ops イメージでの実 migration テスト（`%` 入り DSN）
+
+PR #99 の回帰テストは `engine_from_config` をモックしており実 DB 非接続。ここでは
+「ローカル DSN に `%` が無かったから踏まなかった」という元不具合の条件を意図的に再現した。
+
+```text
+実行: docker network create g0a-net
+      docker run -d --name g0a-pg --network g0a-net (pgvector/pgvector:pg17)
+      CREATE USER testpct WITH PASSWORD 'p@ss%word' SUPERUSER;   ← URL エンコードで %40 / %25 が DSN に現れる
+      docker run --rm --network g0a-net -e DATABASE_URL='postgresql://testpct:p%40ss%25word@g0a-pg:5432/felis' \
+        felisaichatbotacrdev.azurecr.io/backend-ops:sha-06ad1f3 alembic upgrade head
+出力: Running upgrade  -> 0001 / exit 0
+検証: alembic_version = 0001 = `alembic heads`（同イメージで実行）と一致 / public に 5 テーブル
+      イメージ内 migrations/env.py に `replace("%", "%%")` が入っていることも grep で確認（1 件）
+後始末: コンテナ停止・削除 → ネットワーク削除（依存の逆順）。残存コンテナ 0・ポート保持プロセスなし
+合否: **合格**
+```
+
+#### G0b. イメージの中身と素性
+
+```text
+docker image inspect: 両イメージとも arch=amd64 os=linux
+ops イメージ: /usr/bin/psql / /app/.venv/bin/alembic / alembic.ini / migrations/versions/0001_initial_schema.py 実在
+serving 単体起動（DB 到達不能な DSN を与えて）: /health=200、/readyz=503、
+  WARNING "database readiness check failed" が構造化ログに出る（起動可否と DB 不達の振る舞いを分離して確認）
+合否: **合格**
+```
+
+#### G0c. plan を読んでから apply
+
+```text
+terraform -chdir=terraform/persistent plan -detailed-exitcode → exit 0（12:05:46Z。作業基準線）
+ephemeral 全体 plan（apply 直前に取得・熟読）: 4 to add（CAE / serving / ops / Job）、
+  イメージ参照は push 済み sha-06ad1f3、revision_suffix = (known after apply)、
+  ops に DSN_REVISION_MARKER env あり。serving 側の env 2 ブロックは
+  dynamic ブロックの for_each が sensitive 変数（database_url）由来のため plan 上
+  「(sensitive value)」とマスクされる（ブロック数 2 で存在は確認。機能影響なし）
+合否: **合格**
+```
+
+### G1: push 直後（12:06 実測）
+
+```text
+az acr repository show-tags: backend / backend-ops とも sha-06ad1f3 実在
+ダイジェスト一致: backend  sha256:20e70f8b7f8e…（ローカル RepoDigest = ACR digest）
+                 backend-ops sha256:1503b275cb4c…（同上）
+合否: **合格**
+push 後に .env へ DEPLOY_SHA=06ad1f3 を書き戻し、§0-2 の 2)〜4) を再実行（手順書どおり）
+```
+
+### G2: ephemeral apply 直後
+
+```text
+terraform -chdir=terraform/ephemeral plan -detailed-exitcode → exit 0（12:11:35Z）
+revision 実測: serving ca-felisaichatbot-dev--axeh5j3 / ops ca-felisaichatbot-dev-ops--snnzgc3、
+  いずれも runningState=RunningAtMaxScale・runningStateDetails=null・replicas=1
+  （suffix 未指定時の自動生成名と、区切り文字が実測で `--` であることを確認。
+   公式 revisions ドキュメントの例は `<APP名>-<suffix>` の一重ハイフンで、実挙動と食い違う）
+/readyz: HTTP/2 200 {"status":"ok","db":"ok"}（12:12:30Z）。
+  terraform output container_app_fqdn（= latest_revision_fqdn。revision 固有名入り）と
+  アプリ安定 FQDN（az containerapp show の ingress.fqdn）の両方で 200（→ Issue #101）
+ネガティブテスト（private access の実証）: 作業端末から DB FQDN へ
+  getent hosts → 解決失敗（Name or service not known）。**DNS 解決の段階で失敗**するため
+  TCP 接続の試行自体が不成立（到達性は DNS で遮断されていることを区別して記録）
+一過性事象: ops の revision list が 1 回だけ ARM InternalServerError
+  （correlation ID fa67178b-…）。10 秒後のリトライで成功。以後再発なし
+合否: **合格**
+```
+
+## ステップ C: ops 結線と revision 名衝突実測（2026-08-22 実施。完了。#100）
+
+### §3-1 マイグレーション Job（G3）
+
+```text
+az containerapp job start（12:13:12Z）→ execution caj-felisaichatbot-dev-migrate-og8aw5j
+  12:13:15Z 開始 → 12:13:59Z のポーリングで Succeeded（所要 44 秒以内）
+G3（Succeeded を鵜呑みにしない検証。ops コンテナから exec で実測）:
+  SELECT 1 → 1
+  SELECT version_num FROM alembic_version → 0001（= alembic heads と一致）
+  \dt → 5 テーブル（alembic_version / documents / object_properties / objects / sources、owner felisadmin）
+  ローカル G0a と同一のテーブル構成であることを確認
+合否: **合格**
+```
+
+### §3-2 psql 経路と exec の実挙動（G4）
+
+- **min_replicas を上げずに exec に成功した**。ephemeral apply 直後の初期プロビジョニングの
+  レプリカ（12:10:44Z 作成）が Running のまま残っており、その状態では
+  `az containerapp exec` が直接つながる。手順書 §3-2 の「まず min-replicas を 1 に上げる」は
+  この経路では不要だった。**「レプリカ 0 の状態で exec できるか」は今回も踏んでおらず未実測のまま**
+- `az containerapp exec --command` の実挙動（手順書に反映済み）:
+  - コマンド文字列はコンテナ内シェルを介さず実行され、**`$DATABASE_URL` 等の環境変数は展開されない**
+    （psql がローカルソケットに向かう誤動作を実測）
+  - `sh -c "…"` の入れ子引用は az 側の分割で**壊れる**（Syntax error を実測）
+  - 動いた方式: `--command bash` で対話セッションを張り、**標準入力からコマンドを流し込む**
+    （接続確立まで約 10 秒待ってから入力。`script -qec` で pty を割り当て）
+- G4 の当時の判定: 「scale 設定は serving / ops とも minReplicas=null（=0）/ maxReplicas=1 を
+  `az containerapp show` で確認。serving は ScaledToZero を実測」→ 合格と報告
+- **【訂正 2026-08-22】この G4 判定は誤り**。ops は 1 レプリカが常駐し続けており（課金継続）、
+  ゲートの趣旨（常駐課金を残さない）に対して不合格だった。誤判定の内訳と是正は本ファイル末尾の
+  「**G4 の訂正と ops 常駐レプリカの是正**」節が正本
+
+### §3-3 の実測結果は次節の記入欄に記載（実施済み）
+
+### G6: 終了時の全体確認（12:25:51Z）
+
+```text
+az resource list -g rg-felisaichatbot-dev-tf: 11 リソース（persistent 6 + ACR / CAE /
+  serving / ops / Job の 5）。意図しないリソースなし
+serving 無傷確認: revision は axeh5j3 の 1 本のみ（§3-3 の probe は ops のみ）。/readyz 200
+クレジット残（balanceSummary API）: current 200.00 / estimated 199.83 USD
+  作業開始時点（12:02:57Z）の実測も current 200.00 / estimated 199.83 USD で**差分なし**。
+  課金データは反映ラグがあるため「本日の作業分が 0 USD」を意味しない（未反映。
+  翌日以降の終業チェックで消費を確認する）。参考: coordinator 把握の開始残高 199.87 USD とは
+  0.04 USD の差があるが、いずれも estimated（推定値）であり、実測時刻の違いによるもの
+```
+
+## revision 名衝突の意図的実測（**2026-08-22 実施。完了**。手順: [vnet-integration-cutover.md](../../operations/vnet-integration-cutover.md) §3-3。#98 / #100）
 
 ADR-0018 追記 #98 の未実測項目「過去に使った revision suffix の再指定を ARM API がエラーにするのか
 黙認するのか」を、ステップ C（§3-2 の psql 疎通成功直後）に ops Container App で意図的に衝突させて
-実測する。**以下はすべて記入欄であり、値が入っていない間は未実施**。実施はユーザーの明示承認後。
+実測した。ユーザーの実行承認済み。**結論: ARM に PATCH は受理（HTTP 202）された後、
+サーバー側の revision provisioning が「revision with suffix probe1 already exists」で明示的に失敗する
+（判定表 1 行目 = エラーが返る）。既存 revision には一切影響しない。**
 
 ### タイムライン（実施時に記入）
 
 | 時刻 (UTC) | ステップ | コマンド exit code | メモ |
 | --- | --- | --- | --- |
-| | 0) 基準の revision list | | |
-| | 1) suffix probe1 + env=1 | | |
-| | 1-b) 既存 env 生存確認（ガード） | | |
-| | 2) suffix probe2 + env=2 | | |
-| | 3) suffix probe1 再指定 + env=3（本番） | | |
+| 12:17:29 | 0) 基準の revision list | 0 | active は `…ops--snnzgc3`（RunningAtMaxScale・replicas 1）のみ |
+| 12:17:29〜38 | 1) suffix probe1 + env=1 | 0 | `…ops--probe1` 作成（created 12:17:38Z）。suffix と実名の区切りは **`--`**（公式例の一重 `-` と食い違い） |
+| 12:17:5x | 1-b) 既存 env 生存確認（ガード） | 0 | 下表。**3 env とも残存 = 合格** |
+| 12:18:08〜16 | 2) suffix probe2 + env=2 | 0 | `…ops--probe2` 作成。probe1 は 12:18:51 Deprovisioning → 12:19:13 以降**既定の revision list から消える**（`--all` を付けると Active=False / Stopped で保持されていることを確認。手順書側に `--all` を追記済み） |
+| 12:23:07〜15 | 3) suffix probe1 再指定 + env=3（本番） | **1** | 下表 |
 
 ### 1-b) ガードの結果（実施時に記入。ここが NG なら 2) 3) は未実施のまま後始末へ）
 
 | 項目 | 記録 |
 | --- | --- |
-| probe1 revision の env 一覧（`revision show` の実出力。secret 値は含めない） | |
-| `DATABASE_URL`（secretRef = database-url）が残っているか | |
-| `DSN_REVISION_MARKER` が残っているか | |
-| ヘルプ記述（"Existing environment variables are not modified."）と実挙動の一致 / 食い違い | |
+| probe1 revision の env 一覧（`revision show` の実出力。secret 値は含めない） | `[{name: DATABASE_URL, secretRef: database-url}, {name: DSN_REVISION_MARKER, value: dsn-6bf2e8ac}, {name: REVISION_COLLISION_PROBE, value: "1"}]`（クエリパス `properties.template.containers[0].env` は手順書の想定どおりで修正不要。secretRef は参照名のみで値は出力されない形式であることを確認） |
+| `DATABASE_URL`（secretRef = database-url）が残っているか | **残っている** |
+| `DSN_REVISION_MARKER` が残っているか | **残っている**（値 dsn-6bf2e8ac も不変） |
+| ヘルプ記述（"Existing environment variables are not modified."）と実挙動の一致 / 食い違い | **一致**（追加 1 件のみで既存 2 件は無変更） |
 
 ### 3) の結果（実施時に記入。§3-3 の「記録すべきこと」参照）
 
 | 項目 | 記録 |
 | --- | --- |
-| exit code | |
-| エラー全文（メッセージ・ARM エラーコード） | |
-| CLI 側バリデーションで ARM 到達前に弾かれたか（`--debug` の PUT/PATCH と HTTP status） | |
-| 成功時: probe1 の `REVISION_COLLISION_PROBE` の値（3 = 新内容 / 1 = 旧内容の再利用） | |
-| 成功時: probe1 の `createdTime`（1) の時刻のままか 3) の時刻か） | |
-| 各ステップの revision list（active / inactive / Replicas 列） | |
+| exit code | **1**（12:23:07Z 発行 → 12:23:15Z 失敗） |
+| エラー全文（メッセージ・ARM エラーコード） | `ERROR: Failed to provision revision for container app 'ca-felisaichatbot-dev-ops'. Error details: The following field(s) are either invalid or missing. Field 'template.revisionsuffix' is invalid with details: 'Invalid value: "probe1": revision with suffix probe1 already exists.';..`　`--debug` の応答 JSON 内のエラーコードは `ContainerAppOperationError` |
+| CLI 側バリデーションで ARM 到達前に弾かれたか（`--debug` の PUT/PATCH と HTTP status） | **弾かれていない**。`--debug` で PATCH `…/containerApps/ca-felisaichatbot-dev-ops?api-version=2025-07-01` が発行され **HTTP 202 で受理**された後、非同期の provisioning 操作がサーバー側で失敗（= ARM/RP 側の拒否。CLI バリデーションではない） |
+| 成功時: probe1 の `REVISION_COLLISION_PROBE` の値（3 = 新内容 / 1 = 旧内容の再利用） | （失敗のため該当なし）失敗後の probe1 は **値 1・createdTime 12:17:38Z のまま無変更** = 衝突エラーは既存 revision に影響しない |
+| 成功時: probe1 の `createdTime`（1) の時刻のままか 3) の時刻か） | 同上（12:17:38Z のまま） |
+| 各ステップの revision list（active / inactive / Replicas 列） | 0): snnzgc3 のみ Active。1) 後: snnzgc3 + probe1 Active（遷移中）。2) 後: probe1/snnzgc3 → Deprovisioning → `--all` でのみ Active=False/Stopped として見える。3) 後: 構成不変（probe2 Active のまま）。**既定の `revision list` は inactive を表示しない**（`--all` が必要） |
 
 ### 判定（実施時に記入）
 
-- 観測された挙動が §3-3 判定表のどの行に当たるか:
-- Day 4 への含意（旧方式ならどう壊れていたか）:
-- ADR-0018 追記 #98 の「未実測」記述の更新要否:
+- 観測された挙動が §3-3 判定表のどの行に当たるか: **1 行目（エラーが返る）**
+- Day 4 への含意（旧方式ならどう壊れていたか）: 旧方式（`revision_suffix` = DSN ハッシュ固定）のままなら、Day 4 §4-5 の戻し apply は過去 suffix の再指定になり、**この `ContainerAppOperationError` でブロックされていた**（切り戻し不能）。「黙認されて計測が偽になる」経路（判定表 2 行目）は実挙動としては発生しないことも同時に確定した
+- ADR-0018 追記 #98 の「未実測」記述の更新要否: **要**（実測済みに更新した。ADR-0018 追記 #100 参照）
 
 ### 後始末とゲート（実施時に記入）
 
 | 検証 | 結果 |
 | --- | --- |
-| probe 差分に対する `terraform plan -detailed-exitcode`（apply 前。exit 2 想定） | |
-| `terraform apply` 後の `plan -detailed-exitcode`（**exit 0 必須ゲート**） | |
-| psql 疎通の再確認（§3-2 と同じ手順） | |
+| probe 差分に対する `terraform plan -detailed-exitcode`（apply 前。exit 2 想定） | **exit 2**。差分は ops の in-place update 1 件（`REVISION_COLLISION_PROBE` env の削除のみ）。**provider の refresh は env 差分を拾う**（手順書の未実測注記を実測で解消。`--remove-env-vars` の代替経路は不要だった）。なお config が suffix 未指定のため、probe2 という suffix の残存自体は **drift として検出されない**ことも観測 |
+| `terraform apply` 後の `plan -detailed-exitcode`（**exit 0 必須ゲート**） | apply は in-place 18 秒で完了し、Azure が自動生成名 `…ops--0000001` の新 revision を作成（自動 suffix の実形式）。plan → **exit 0**（12:25:07Z）。**合格** |
+| psql 疎通の再確認（§3-2 と同じ手順） | 新 revision `…ops--0000001` のレプリカへ exec し `SELECT 1` → **1**。**合格** |
+
+## G4 の訂正と ops 常駐レプリカの是正（2026-08-22 実施。完了。#100）
+
+coordinator の独立実測により、ステップ C 完了報告後の 12:37 時点で **ops Container App が
+1 レプリカのまま常駐している（課金継続中）**ことが判明した。G4 を「合格」とした報告は誤り。
+本節は (1) 誤判定の内訳、(2) 原因調査（読み取りのみ）、(3) 是正（`min_replicas = 1`）と検証、
+(4) 副産物として得た独立知見、を記録する。
+
+### 1. G4 誤判定の内訳（取り繕わない記録）
+
+- **何を見て合格としたか**: `az containerapp show --query properties.template.scale` の
+  **設定値**（minReplicas: null / maxReplicas: 1）のみ。null を「= 0 だから良し」と解釈し、
+  serving が `ScaledToZero` になったのを見て「ops も追って縮退する」と**推測で補完**した
+- **なぜ不十分だったか**: ゲートの趣旨は「常駐課金を残さない」であり、確認すべきは設定値では
+  なく**実レプリカ数を cooldown（300 秒）経過後に経時で見る**ことだった。ops の実レプリカは
+  一度も確認していない
+- **ゲート設計側の要因**（coordinator 自認。隠さず記録）: ゲート文言が「min-replicas を 0 に
+  戻したことを実測で確認」であり、「設定値が 0 に戻っていること」の確認とも読める曖昧さがあった。
+  実レプリカ数の経時確認を明示すべきだった
+- **正しい確認方法**: `az containerapp replica list` と Replicas メトリクス
+  （`az monitor metrics list --metric Replicas`、**end-time 明示**）を cooldown 経過後に読む
+
+### 2. 原因調査（読み取りのみ。12:38〜12:44 実測）
+
+- **設定は serving / ops で完全に同一**（minReplicas: null / rules: null / cooldown 300）なのに
+  挙動が分かれた。差分は ingress の有無のみ:
+  - serving（ingress あり）: Replicas 0↔1 を往復（12:11→1 / 12:20→0 / 12:27→1 / 12:32→0 /
+    12:37→1。cooldown 300 秒と整合。1 への遷移はいずれも /readyz probe と対応）
+  - ops（ingress なし・rule なし）: **12:11 から 12:39 まで連続 1.0、一度も 0 なし**
+    （revision が snnzgc3 → 0000001 と替わっても常駐は継続）
+- 結論: **ingress の暗黙 HTTP スケールルールだけがゼロへの scale-in を駆動しており、
+  ingress なし + rule なしにはスケールインの仕組みが存在しない**（プロビジョン時のレプリカ数の
+  まま常駐）
+- **公式 scale-app の Important 記述と実挙動が逆**（coordinator 取得の逐語: "If ingress is
+  disabled and you don't define a `minReplicas` or a custom scale rule, your container app
+  **scales to zero and has no way of starting back up**."）。実測では「0 に落ちる」のではなく
+  「1 のまま落ちない」。実測を正とする
+- **課金上の帰結**（公式 billing <https://learn.microsoft.com/en-us/azure/container-apps/billing>
+  の逐語）:
+
+  > To be eligible for idle charges, a revision must be:
+  > - Configured with a minimum replica count greater than zero
+  > - Scaled to the minimum replica count
+
+  min 0 宣言のままでは常駐レプリカが idle 適格にならず **active 単価**（Retail Prices API
+  japaneast 実測: vCPU 0.000024 USD/秒・memory 0.000003 USD/GiB 秒）で課金される
+  = 0.25 vCPU / 0.5 GiB で **0.648 USD/日**。CPU 実測は約 0.0017 vCPU（sleep infinity）で
+  0.01 vCPU 閾値を大きく下回っていたにもかかわらず、である
+- terraform state は `min_replicas = 0`、ARM 実値は `minReplicas: null`、plan は exit 0
+  → provider は 0 と null を読み書き双方向で同一視（0 を省略したのが provider か ARM かは
+  リクエストトレースが無く**未確定**）
+
+### 3. 是正（ユーザー判断: 選択肢 1 = `min_replicas = 1` の明示。ops のみ）
+
+**主目的は「`min_replicas = 0` と宣言しながら 1 レプリカが常駐し、その宣言のせいで idle 適格を
+外していた」という宣言と実態の食い違いの解消**（コスト効果は副次）。判断の背景として、
+サブスクリプションは FreeTrial / spendingLimit: On（coordinator 実測）でクレジット枯渇は当面の
+制約にならないことも確認済み。serving は縮退が実測で確認できているため 0 のまま触らない。
+
+- 12:55:08Z `terraform plan`: 差分は ops の `min_replicas = 0 -> 1` の in-place 1 件のみ
+  （熟読してから apply）
+- 12:55:25Z apply 完了（17 秒）。scale 変更は revision-scope のため新 revision
+  `…ops--0000002`（自動生成連番の 2 号）が作成された
+- **ARM 実値が `minReplicas: 1` になったことを確認**（0 のときは null 化していたため、
+  1 が実際に送られ保持されることを実値で確認する必要があった → 保持された）
+- `terraform plan -detailed-exitcode` → **exit 0**（12:55:35Z）
+
+### 4. 是正後の検証（cooldown 300 秒超を待ってから実測）
+
+すべて 13:03:38Z に計測（新レプリカ作成 12:55:21Z から **8 分超 = cooldown 300 秒の 1.6 倍経過後**。
+G4 と同じ轍を踏まないため、設定値でなく実レプリカ・実メトリクスを見る）。
+
+| 検証 | 実測 | 合否 |
+| --- | --- | --- |
+| 実レプリカ（`az containerapp replica list`） | `…ops--0000002-…-7pcgb` 1 本 Running（12:55:21Z 作成のまま） | 合格（宣言 min=1 と実態 1 が一致） |
+| Replicas メトリクス（1 分粒度・end-time 明示） | 12:55〜13:02 の全点で 1.0（増減なし） | 合格 |
+| idle 適格: min replica count > 0 | ARM 実値 `minReplicas: 1` | 満たす |
+| idle 適格: 最小数で稼働 | レプリカ数 1 = minReplicas 1 | 満たす |
+| idle 適格: 全コンテナ起動済み | replica runningState = Running | 満たす |
+| idle 適格: HTTP 処理なし | ingress なし（HTTP 経路が存在しない） | 満たす |
+| idle 適格: 0.01 vCPU 未満 | UsageNanoCores 平均 0.75〜4.76M・最大 7.04M nanocores = **最大 0.0070 vCPU** | 満たす |
+| idle 適格: 1,000 bytes/s 未満 | RxBytes 12.6〜15.6 KB/分（≈ 210〜260 B/s）+ TxBytes 8.0〜10.3 KB/分（≈ 133〜171 B/s）、合算最大 ≈ 431 B/s | 満たす |
+| psql 疎通（§3-2 と同じ経路） | `…ops--0000002` へ exec、`SELECT 1` → 1 | 合格 |
+
+**公式の idle 適格条件 6 点をすべて満たすことを実測で確認した。ただし idle 単価が請求に実際に
+適用されたかは課金データの反映ラグにより未確認**（「idle になった」とは断定しない。適用時の
+机上計算は 0.194 USD/日 = ADR-0015 追記）。
+
+### 5. 独立した知見（Day 4 / Day 5 の計測でも使う）
+
+1. **ingress の有無でスケールイン挙動が分かれる**（上記 2）。ingress なしアプリに
+   「min_replicas = 0 でコスト最小化」は成立しない
+2. **公式 scale-app の Important 記述は実挙動と逆**（上記 2。ドキュメントと実挙動が食い違った
+   実例がまた 1 件増えた。--high-availability / service_endpoint に続き 3 例目）
+3. **Azure Monitor メトリクス API は end-time 未指定だと未来時刻に 0.0 のフィラー値を返す**。
+   「12:40 に Replicas が 0 になった」ように見える偽データを実際に踏んだ（実際は 1 のまま）。
+   **Day 4 の RTO / RPO 計測・Day 5 の疎通計測でメトリクスを読むときは必ず end-time を明示**し、
+   末尾の値は replica list 等の実体と突き合わせること

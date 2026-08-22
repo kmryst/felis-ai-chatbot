@@ -25,7 +25,7 @@
 
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
-| DB のネットワーク境界 | private access（VNet 統合）へ確定（コード・移行手順とも main 反映済み。実機への適用状況は移行手順書と台帳の確認コマンドが正本） | 当初の public access + firewall は walking skeleton 開通までの暫定で、egress IP の変動が実測で確認されたため確定構成へ引き上げた | private access（この移行の方向そのもの） | [ADR-0018](./adr/0018-postgresql-private-access-and-vnet-integration.md) / Issue #81（CLOSED） / [vnet-integration-cutover.md](./operations/vnet-integration-cutover.md) |
+| DB のネットワーク境界 | private access（VNet 統合）を**実機に適用済み**（2026-08-22 ステップ A〜C 完了。VNet 内経路の `/readyz` 200 と、作業端末から DB FQDN が DNS 解決すらできないこと（到達不能）の両方を実測。DB への対話経路は ops コンテナ経由のみ = [実測記録](./verification/vnet-cutover/observations.md)） | 当初の public access + firewall は walking skeleton 開通までの暫定で、egress IP の変動が実測で確認されたため確定構成へ引き上げた | private access（この移行の方向そのもの） | [ADR-0018](./adr/0018-postgresql-private-access-and-vnet-integration.md) / Issue #81（CLOSED） / [vnet-integration-cutover.md](./operations/vnet-integration-cutover.md) |
 | tfstate のネットワーク境界 | RBAC のみ。公開ネットワークから到達可 | tfstate backend を Day 0 に最短で確立し、主成果物（PITR / Maintenance）の実測を優先した | ネットワーク境界（selected networks / Private Endpoint）+ 共有アクセスキー無効化 | **Issue #87** |
 | `/chat` の公開面 | 外部 ingress を認証・レート制限なしで公開 | 検証経路（`/readyz` を外部から叩く）の確保が目的で、認証・流量制御は 5 日間のスコープ外 | 認証（少なくとも API キー / IP 制限）+ レート制限。LLM 課金を伴うエンドポイントを匿名公開しない | **追跡先なし**（本書が初出） |
 

@@ -291,10 +291,10 @@ Day 4 の PITR ドリルは DSN を **元サーバー → 復元先 → 元サ�
 
 つまり Single revision モードでも旧 revision は deprovision されるだけで一覧に残り、戻しの apply の
 suffix は既存の非アクティブ revision と名前が衝突する。**衝突時に ARM API がエラーを返すのか、
-黙って既存 revision を参照するのかは公式に記載がなく未実測**（ステップ C 内で意図的に衝突させて
-実測する予定。手順は [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) §3-3、
-記録先は [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md)）だが、
-どちらでも Day 4 は壊れる:
+黙って既存 revision を参照するのかは公式に記載がなく、本追記の時点では未実測だった**
+（→ **2026-08-22 に §3-3 の意図的衝突で実測済み。エラーが返る**。追記 #100 と
+[vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) が正本）。
+実測前の整理としては、どちらでも Day 4 は壊れる:
 エラーなら切り戻し（§4-5）がブロックされ、無反応なら「元サーバーに戻したつもりで復元先を見続ける」
 ため RTO / RPO の計測値が偽になる。
 
@@ -325,9 +325,62 @@ secret は `properties.configuration` にあり新 revision を作らないが�
   環境変数 `DSN_REVISION_MARKER` を読めばよい
 - 検証: `terraform validate` / ダミー変数での `terraform plan` で、両 Container App の template に
   `DSN_REVISION_MARKER` が入り `revision_suffix` が未指定（known after apply）になることを確認
-  （2026-08-22。ephemeral 層は destroy 済みのため実 apply での revision 生成挙動は未実測。
-  ステップ B/C と Day 4 の戻し apply で実測する。suffix 衝突時の ARM API の挙動そのものは
-  ステップ C の意図的衝突実測 — vnet-integration-cutover.md §3-3 — で確かめる）
+  （2026-08-22 追記時点。同日中にステップ B/C を実走し、実 apply での revision 生成
+  （自動生成 suffix）と suffix 衝突時の ARM の挙動をどちらも実測で確定した。追記 #100 参照。
+  Day 4 の戻し apply のみ未実施）
+
+## 追記（2026-08-22。#100: ステップ B/C の実走で確定した事実）
+
+ステップ B（ACR・イメージ push・ephemeral 全体 apply）とステップ C（migration Job・psql 疎通・
+§3-3 の revision 名衝突実測）を完走した。実測記録の正本は
+[vnet-cutover/observations.md](../verification/vnet-cutover/observations.md)。本 ADR の
+未実測事項のうち、以下が実測で確定した（すべて 2026-08-22 実測）。
+
+### 確定した事実
+
+- **revision suffix の名前衝突はエラーになる**（追記 #98 の未実測項目）: 非アクティブな既存
+  revision と同名の suffix を `az containerapp update` で指定すると、PATCH は ARM に HTTP 202 で
+  受理された後、revision provisioning が `Invalid value: "probe1": revision with suffix probe1
+  already exists.`（エラーコード `ContainerAppOperationError`）で失敗する。CLI 側バリデーション
+  ではなく ARM/RP 側の拒否。**既存 revision は内容・createdTime とも無変更**。旧方式
+  （suffix = DSN ハッシュ固定）なら Day 4 の戻し apply がここでブロックされていたことの実証であり、
+  「黙認されて計測が偽になる」経路は実挙動としては存在しないことも同時に確定
+- **CAE（workload profiles + custom VNet）の作成所要時間: 3 分 07 秒**（`terraform apply` の
+  リソース単位ログ。serving / ops Container App 各 50 秒・migration Job 18 秒、ephemeral 全体
+  4 分 03 秒）。本文の「作成時間が伸びる可能性（未実測）」の初回実測値
+- **委任サブネット（NSG / UDR / NAT Gateway なし）から ACR に到達できる**: serving / ops とも
+  ACR pull で revision が `RunningAtMaxScale` に到達。外部レビュー未決着 2 点のうちの 1 点が決着
+- **suffix 未指定時の自動生成 revision 名**: 初回はランダム英数字（`…--axeh5j3` / `…--snnzgc3`）、
+  az での template 変更後の Terraform 収束 apply では連番形式（`…--0000001`）を観測。
+  **アプリ名と suffix の区切りは `--`**（公式 revisions ドキュメントの例 `<APP名>-<suffix>` の
+  一重ハイフンとは食い違う。実測を正とする）
+- **`az containerapp exec` は Running レプリカがあれば min-replicas 操作なしでつながる**
+  （apply 直後の初期プロビジョニングのレプリカに直接 exec 成功）。**レプリカ 0 の状態で
+  exec できるかは未実測のまま**
+- **azurerm provider の refresh は az で加えた env 差分を drift として検出する**（plan exit 2 →
+  apply で収束 → exit 0）。config が suffix 未指定の場合、suffix の残存は drift にならない
+
+### コスト前提の訂正（追記 #84 の 4 の「約 0.84 USD/日」について）
+
+追記 #84 の「ephemeral 層を残す追加コストは ACR + CAE managed resources 込みで約 0.84 USD/日」は、
+**ops Container App の常駐レプリカ分を含んでいなかった**。ステップ B/C 後の実測で、ops
+（ingress なし・scale rule なし）は `min_replicas = 0` の宣言でもレプリカ 1 が常駐し続け、
+かつ 0 宣言は idle 課金の適格条件を外すため **active 単価 0.648 USD/日**（0.25 vCPU / 0.5 GiB、
+Retail Prices API 実測単価）が加わることが判明した（当時の実態は合計約 1.5 USD/日）。
+是正として ops を `min_replicas = 1` へ変更済み（**主目的は宣言と実態の食い違いの解消**。
+経緯と実測は [ADR-0015 追記](./0015-ephemeral-layer-acr-container-apps-design.md) と
+[observations.md](../verification/vnet-cutover/observations.md) の「G4 の訂正」節が正本）。
+是正後は idle 適格条件を満たすことを実測確認済み（適用時の机上計算 0.194 USD/日。**単価の実適用は
+課金データ未反映のため未確認**）。なお Consumption の月次無料枠が先に吸収するため請求実額は
+さらに小さい可能性があり、サブスクリプションは FreeTrial / spendingLimit: On（2026-08-22 実測）で
+クレジット枯渇が当面の制約にならないことも確認済み。「destroy を後ろへ移す」判断自体は変えない。
+
+### 未実測のまま残る事項
+
+- migration Job の新 execution が更新後の secret を読むか（追記 #84 の項目）: 今回は secret を
+  更新する 操作 が無かったため実測していない。**Day 4 の DSN 向け替えで初めて実測される**
+- レプリカ 0 の状態での `az containerapp exec` 可否（上記）
+- Day 4 の戻し apply（DSN 往復）そのもの
 
 ## 関連
 
