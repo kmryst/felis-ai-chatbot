@@ -64,7 +64,11 @@ def upgrade() -> None:
         """
         CREATE TABLE obs.phase_config (
             id INT PRIMARY KEY CHECK (id = 1),
-            phase TEXT NOT NULL,
+            -- 許可リスト外は即エラー（手動 UPDATE のタイポ 'laod' 等が静かに通り、
+            -- その区間が比較に使えなくなる事故を防ぐ。_bool_env の「緩い解釈をしない」と同じ方針）
+            phase TEXT NOT NULL CHECK (
+                phase IN ('baseline', 'load', 'gp_load', 'cooldown')
+            ),
             since TIMESTAMPTZ NOT NULL DEFAULT now()
         )
         """
