@@ -36,3 +36,43 @@ async def check_database_ready(database_url: str, connect_timeout_seconds: int) 
             extra={"error_type": type(exc).__name__},
         )
         return False
+
+
+# 3 系列の鮮度クエリ（Issue #104。/readyz が返し、外形監視 #106 が系列別に判定する。
+# 設計と閾値の根拠は docs/operations/credit-window-execution-plan.md §5-3）
+_OBS_FRESHNESS_SQL = """
+SELECT
+  (extract(epoch FROM now() - (SELECT max(ts) FROM obs.marker)))::bigint,
+  (extract(epoch FROM now() - (SELECT max(ts) FROM obs.db_stats)))::bigint,
+  (extract(epoch FROM now() - (SELECT max(ts) FROM obs.bloat_stats)))::bigint
+"""
+
+
+async def fetch_observation_freshness(
+    database_url: str, connect_timeout_seconds: int
+) -> dict[str, int | None] | None:
+    """観測 3 系列（マーカー / 統計 / pgstattuple）の最新レコード経過秒を返す。
+
+    - 系列がまだ空なら該当キーは None（max() が NULL）
+    - obs スキーマ未作成・接続失敗など取得自体ができない場合は None を返す
+      （/readyz の可否には影響させない。readiness は DB 到達性の話であり、
+      観測が止まっているかどうかの判定は外形監視 #106 の役割）
+    """
+    try:
+        async with await psycopg.AsyncConnection.connect(
+            database_url,
+            connect_timeout=connect_timeout_seconds,
+        ) as conn:
+            cur = await conn.execute(_OBS_FRESHNESS_SQL)
+            row = await cur.fetchone()
+        return {
+            "marker_age_seconds": row[0],
+            "stats_age_seconds": row[1],
+            "pgstattuple_age_seconds": row[2],
+        }
+    except Exception as exc:
+        logger.warning(
+            "observation freshness query failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return None

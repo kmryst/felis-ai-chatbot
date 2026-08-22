@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.db import check_database_ready
+from app.db import check_database_ready, fetch_observation_freshness
 from app.llm.client import (
     AzureOpenAIConfig,
     LLMError,
@@ -97,7 +97,14 @@ async def readyz() -> JSONResponse:
         return JSONResponse(
             status_code=503, content={"status": "unavailable", "db": "unreachable"}
         )
-    return JSONResponse(status_code=200, content={"status": "ok", "db": "ok"})
+    # 観測 3 系列の鮮度（#104。外形監視 #106 が系列別に判定する。
+    # 取得できない場合は null — readiness の可否には影響させない）
+    obs = await fetch_observation_freshness(
+        settings.database_url, settings.db_connect_timeout_seconds
+    )
+    return JSONResponse(
+        status_code=200, content={"status": "ok", "db": "ok", "obs": obs}
+    )
 
 
 class ChatRequest(BaseModel):
