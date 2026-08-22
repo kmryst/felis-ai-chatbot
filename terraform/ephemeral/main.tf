@@ -353,3 +353,74 @@ resource "azurerm_container_app_job" "migrate" {
     }
   }
 }
+
+
+# 観測ワークロード + スナップショット採取 Job（Issue #104。Schedule トリガー・毎分。
+# 設計の正本: docs/operations/credit-window-execution-plan.md §5-3）。
+# - cron_expression が azurerm 5.1.0 の schedule_trigger_config に存在することは
+#   `terraform providers schema -json` で確認済み（2026-08-23。必須属性は cron_expression のみ）
+# - 実行内容は ops イメージ内の /app/observability/collect.sql（マーカー INSERT +
+#   カウンタ UPDATE を毎分、統計スナップショットは分 % 5 = 0、pgstattuple は分 = 0 のみ）
+# - コスト目安: 実行数秒 × 1440 回/日 × active 単価 0.0000075 USD/秒 ≈ 0.05 USD/日前後
+#   + Consumption 無料枠吸収（#104 の受け入れ条件でデプロイ後に実測する）
+# - migration Job と同じく revision の概念なし。失敗はリトライしない（毎分の次回実行が
+#   事実上のリトライ。連続失敗は /readyz の鮮度（#106 の系列別ゲート）が検出する）
+resource "azurerm_container_app_job" "obs_collect" {
+  count = var.ops_container_image == "" ? 0 : 1
+
+  name                         = "caj-felisaichatbot-dev-obs"
+  location                     = data.azurerm_resource_group.dev.location
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
+
+  # 毎分実行のため 55 秒で必ず打ち切る（次回実行と重ねない）。psql 1 本は数秒で終わる想定
+  replica_timeout_in_seconds = 55
+  replica_retry_limit        = 0
+
+  schedule_trigger_config {
+    cron_expression          = "* * * * *"
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  template {
+    container {
+      name   = "obs-collect"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      # $DATABASE_URL の展開にシェルが必要（exec 形式では環境変数が展開されない。
+      # az containerapp exec で実測済みの挙動と同型）
+      command = ["/bin/sh", "-c", "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f /app/observability/collect.sql"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（採取 Job は DB へ書き込むためだけに存在する）。"
+    }
+  }
+}
