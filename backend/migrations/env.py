@@ -31,7 +31,20 @@ def _database_url() -> str:
     return url
 
 
-config.set_main_option("sqlalchemy.url", _database_url())
+# set_main_option の値は ConfigParser を通り、pyformat 補間（%(name)s）が解釈される。
+# Azure に渡す DSN はパスワードの URL エンコード等で生の `%` を含むため、そのまま渡すと
+# DB 接続の**前**に `ValueError: invalid interpolation syntax` で落ちる（private access の
+# 疎通不良と誤診しやすい）。ローカル用 DATABASE_URL には `%` が無いため、ローカルの
+# alembic 実行ではこの問題を踏まない。
+# 対処は公式ドキュメントどおり `%` → `%%` のエスケープを選んだ（ConfigParser を迂回する
+# 独自経路より、offline（get_main_option）/ online（get_section → engine_from_config）の
+# 両読み出しで ConfigParser が `%%` を `%` に戻すことに乗る方が env.py の構造を変えずに済む。
+# 両経路とも元の DSN に戻ることは backend/tests/test_migrations_env.py で回帰テスト済み）。
+# 出典（Alembic 公式 Config.set_main_option。https://alembic.sqlalchemy.org/en/latest/api/config.html ）:
+#   "Note that this value is passed to ConfigParser.set, which supports variable
+#    interpolation using pyformat (e.g. %(some_value)s). A raw percent sign not part of
+#    an interpolation symbol must therefore be escaped, e.g. %%."
+config.set_main_option("sqlalchemy.url", _database_url().replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
