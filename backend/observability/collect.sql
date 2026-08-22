@@ -16,31 +16,34 @@ INSERT INTO obs.marker DEFAULT VALUES;
 -- 2) カウンタ UPDATE（毎分。dead tuple 1 個/分の供給源）
 UPDATE obs.counter SET n = n + 1, updated_at = now() WHERE id = 1;
 
--- 3) テーブル単位統計（5 分間隔）
+-- 3) テーブル単位統計（5 分間隔）。phase は obs.phase_config から読む（フェーズ遷移は
+--    手動 UPDATE 1 回。採取の方法・間隔はフェーズ間で完全に同一 = ラベルだけが変わる）。
+--    'load' スキーマはフェーズ 2 の負荷生成テーブル用（存在しない間は行が出ないだけ）
 INSERT INTO obs.table_stats (
-    relname, n_live_tup, n_dead_tup, n_tup_ins, n_tup_upd,
+    phase, relname, n_live_tup, n_dead_tup, n_tup_ins, n_tup_upd,
     autovacuum_count, last_autovacuum, autoanalyze_count, last_autoanalyze
 )
-SELECT relname, n_live_tup, n_dead_tup, n_tup_ins, n_tup_upd,
-       autovacuum_count, last_autovacuum, autoanalyze_count, last_autoanalyze
-FROM pg_stat_user_tables
-WHERE schemaname IN ('obs', 'public')
+SELECT pc.phase, s.relname, s.n_live_tup, s.n_dead_tup, s.n_tup_ins, s.n_tup_upd,
+       s.autovacuum_count, s.last_autovacuum, s.autoanalyze_count, s.last_autoanalyze
+FROM pg_stat_user_tables s, obs.phase_config pc
+WHERE s.schemaname IN ('obs', 'public', 'load')
   AND extract(minute FROM now())::int % 5 = 0;
 
 -- 4) DB 単位統計（5 分間隔。WAL / サイズ / XID age）
-INSERT INTO obs.db_stats (wal_records, wal_bytes, db_size_bytes, frozen_xid_age)
-SELECT w.wal_records, w.wal_bytes,
+INSERT INTO obs.db_stats (phase, wal_records, wal_bytes, db_size_bytes, frozen_xid_age)
+SELECT pc.phase, w.wal_records, w.wal_bytes,
        pg_database_size(current_database()),
        age(d.datfrozenxid)
-FROM pg_stat_wal w, pg_database d
+FROM pg_stat_wal w, pg_database d, obs.phase_config pc
 WHERE d.datname = current_database()
   AND extract(minute FROM now())::int % 5 = 0;
 
 -- 5) 実 bloat（1 時間間隔。マーカー系 2 テーブルのみ）
-INSERT INTO obs.bloat_stats (relname, table_len, tuple_percent, dead_tuple_percent, free_percent)
-SELECT t.relname, s.table_len, s.tuple_percent, s.dead_tuple_percent, s.free_percent
+INSERT INTO obs.bloat_stats (phase, relname, table_len, tuple_percent, dead_tuple_percent, free_percent)
+SELECT pc.phase, t.relname, s.table_len, s.tuple_percent, s.dead_tuple_percent, s.free_percent
 FROM (VALUES ('obs.marker'), ('obs.counter')) AS t(relname),
-     LATERAL pgstattuple(t.relname) AS s
+     LATERAL pgstattuple(t.relname) AS s,
+     obs.phase_config pc
 WHERE extract(minute FROM now())::int = 0;
 
 COMMIT;

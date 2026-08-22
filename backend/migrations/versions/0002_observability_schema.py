@@ -54,6 +54,23 @@ def upgrade() -> None:
     )
     op.execute("INSERT INTO obs.counter (id, n) VALUES (1, 0)")
 
+    # --- フェーズ識別（Issue #104 / フェーズ 2 = 高負荷観測。#103） ---
+    # どの計測フェーズのスナップショットかを識別する。あとから列を足しても過去データに
+    # 遡って印を付けられないため、フェーズ 1 開始前に必ず入れておく。
+    # フェーズ遷移は手動 UPDATE 1 回（手順は credit-window-execution-plan.md §5-5）。
+    # 採取の方法・間隔はフェーズ間で完全に同一とし、変わるのはこのラベルだけ
+    #（揃っていない 2 つのデータの比較は無意味、という要件をコードで支える）
+    op.execute(
+        """
+        CREATE TABLE obs.phase_config (
+            id INT PRIMARY KEY CHECK (id = 1),
+            phase TEXT NOT NULL,
+            since TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
+    op.execute("INSERT INTO obs.phase_config (id, phase) VALUES (1, 'baseline')")
+
     # --- 観測する側（スナップショット。すべて INSERT-only） ---
 
     # テーブル単位統計（5 分間隔。autovacuum 発火の鋸歯を挟む）
@@ -61,6 +78,7 @@ def upgrade() -> None:
         """
         CREATE TABLE obs.table_stats (
             ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+            phase TEXT NOT NULL,
             relname TEXT NOT NULL,
             n_live_tup BIGINT,
             n_dead_tup BIGINT,
@@ -79,6 +97,7 @@ def upgrade() -> None:
         """
         CREATE TABLE obs.db_stats (
             ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+            phase TEXT NOT NULL,
             wal_records BIGINT,
             wal_bytes NUMERIC,
             db_size_bytes BIGINT,
@@ -92,6 +111,7 @@ def upgrade() -> None:
         """
         CREATE TABLE obs.bloat_stats (
             ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+            phase TEXT NOT NULL,
             relname TEXT NOT NULL,
             table_len BIGINT,
             tuple_percent DOUBLE PRECISION,
