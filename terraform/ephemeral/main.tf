@@ -334,12 +334,6 @@ resource "azurerm_container_app_job" "migrate" {
         name        = "DATABASE_URL"
         secret_name = "database-url"
       }
-
-      # 新 revision 作成のコード担保（詳細コメントは serving 側の同名 env を参照）
-      env {
-        name  = "DSN_REVISION_MARKER"
-        value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
-      }
     }
   }
 
