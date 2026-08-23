@@ -367,8 +367,23 @@ H3 の一次情報（[Compute options](https://learn.microsoft.com/en-us/azure/p
   'load' スキーマを既に対象に含めてある（#104。テーブルが無い間は行が出ないだけ）
 - 負荷生成は **Manual トリガーの Container Apps Job**（ops イメージ流用、psql ループ）。
   フェーズ 1 の間は一度も起動しない = ベースラインへの混入はゼロ
-- フェーズ遷移手順: 負荷開始の直前に `UPDATE obs.phase_config SET phase='load', since=now()`、
-  GP 昇格直後に `phase='gp_load'`、負荷終了・B1ms 復帰後に `phase='cooldown'`（比較の分析単位）
+- フェーズ遷移手順（Issue #114 の 1 で改訂）: 負荷開始の直前に `'load'`、GP 昇格直後に
+  `'gp_load'`、負荷終了・B1ms 復帰後に `'cooldown'`（比較の分析単位）。遷移は次の **1 文**で
+  行う（`obs.phase_config` は 1 行上書きで履歴が残らないため、追記専用の `obs.phase_log`
+  （migration 0003）へ同時に記録する。1 文の CTE なら履歴の書き忘れが構造的に起きない）:
+
+  ```sql
+  WITH t AS (
+    UPDATE obs.phase_config SET phase = 'load', since = now() WHERE id = 1
+    RETURNING phase, since
+  )
+  INSERT INTO obs.phase_log (phase, since) SELECT phase, since FROM t;
+  ```
+
+- **分析ルール: 各フェーズ先頭の 1 区間は捨てる**（Issue #114 の 2）。スナップショットは
+  累積カウンタの差分で読むため、フェーズ境界直後の最初の 1 行は 2 フェーズをまたぐ
+  累積差分になる（table_stats / db_stats は最大 5 分、bloat_stats は最大 1 時間分）。
+  フェーズ間比較では各フェーズの先頭 1 スナップショットを除外してから集計する
 - 観測者効果の整理（§5-3）との整合: 採取側は不変のまま。負荷生成そのものは「観測対象の
   ワークロード」であって観測者ではない（フェーズラベルで分離されるため、フェーズ 1 の
   ベースラインを汚さない）

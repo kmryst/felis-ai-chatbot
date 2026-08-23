@@ -153,6 +153,11 @@ docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NE
 docker push felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA
 docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA
 
+# 前提（#110 / Issue #114 の 5）: 観測採取（obs collect Job）は ops イメージ内の
+# /app/observability/collect.sql を実行する。この COPY は PR #110 以降の Dockerfile にしか
+# 無いため、DEPLOY_SHA が #110 マージより古いままだと Job は起動してもファイルが無くて落ちる。
+# 観測を動かすデプロイでは、#110 以降のコミットで build / push し DEPLOY_SHA を必ず更新すること
+
 # 2 本とも push に成功したら、.env の DEPLOY_SHA を $NEW_SHA へ書き戻す（無ければ追記。
 # .env はコミットしない）。以後の apply（Day 4 の向け替え / 戻しを含む）はこの push 済み
 # タグを使い、HEAD が進んでも影響を受けない。書き戻したら §0-2 の 2)〜4) を再実行して
