@@ -7,7 +7,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -115,11 +115,20 @@ class ChatResponse(BaseModel):
     reply: str
 
 
-def _enforce_chat_gate(x_api_key: str | None) -> None:
+def _enforce_chat_gate(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> None:
     """/chat の保護ゲート（Issue #107。ADR-0020 の常時稼働の先行ゲート）。
 
+    route の dependency として評価される（Issue #113 の 2）。FastAPI は
+    dependencies をボディ検証より先に解決するため、無認証・遮断中のリクエストに
+    フィールド名入りの 422 詳細を返さない（ゲートが 404 / 401 を先に返す）。
+
     - 緊急遮断フラグ（CHAT_DISABLED=true）: 404。消費超過時の打ち切りスイッチ
-      （credit-window-execution-plan.md §9 の 2）。エンドポイントの存在自体を隠す
+      （credit-window-execution-plan.md §9 の 2）。HTTP 応答上は「/chat が無い」
+      ように見せる。ただし /docs・/openapi.json には /chat が載ったままであり、
+      スキーマ面の存在秘匿はしていない（本番構成で閉じるかは Issue #113 の 1 =
+      ユーザー判断待ち）
     - API キー未設定・空白のみ・最小長（32 文字）未満: 404（fail-closed）。キーを配らずに
       デプロイした場合や弱い鍵の設定ミスで、無認証・弱認証の LLM 課金経路が公開される事故を
       「/chat が無い」側に倒す
@@ -140,11 +149,8 @@ def _enforce_chat_gate(x_api_key: str | None) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-@app.post("/chat")
-async def chat(
-    req: ChatRequest,
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> ChatResponse:
+@app.post("/chat", dependencies=[Depends(_enforce_chat_gate)])
+async def chat(req: ChatRequest) -> ChatResponse:
     """RAG つきチャット応答（ADR-0010）。
 
     - ユーザー質問を embedding し、documents を cosine 類似度で検索する
@@ -155,7 +161,6 @@ async def chat(
     - システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
       必ず適用する
     """
-    _enforce_chat_gate(x_api_key)
     try:
         query_embedding = await app.state.llm.embed(req.message)
     except LLMError as exc:

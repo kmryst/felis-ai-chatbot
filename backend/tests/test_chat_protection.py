@@ -155,3 +155,22 @@ def test_from_env_strips_whitespace_key_to_fail_closed(monkeypatch):
     monkeypatch.setenv("CHAT_API_KEY", "   ")
     settings = Settings.from_env()
     assert settings.chat_api_key == ""
+
+
+# --- 検証順序（Issue #113 の 2）: ゲートはボディ検証より先に評価される ---
+# 無認証のリクエストにフィールド名入りの 422 詳細を返さない（スキーマ情報の
+# 漏えい面を減らす。LLM は呼ばれないため課金リスクはないが、公開面の一貫性の問題）
+
+
+def test_chat_without_key_and_invalid_body_returns_401(raw_client):
+    """認証前にボディ検証が走ると 422 が漏れる。ゲートが先なら 401。"""
+    res = raw_client.post("/chat", json={})
+    assert res.status_code == 401
+
+
+def test_chat_disabled_with_invalid_body_returns_404(raw_client, monkeypatch):
+    """遮断中はボディの中身にかかわらず 404（存在秘匿の一貫性）。"""
+    disabled = dataclasses.replace(main_module.settings, chat_disabled=True)
+    monkeypatch.setattr(main_module, "settings", disabled)
+    res = raw_client.post("/chat", json={})
+    assert res.status_code == 404

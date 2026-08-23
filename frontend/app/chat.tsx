@@ -13,6 +13,11 @@ import { FormEvent, useRef, useState } from "react";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+// /chat の API キー（Issue #113 の 3。backend の CHAT_API_KEY と同じ値を渡す）。
+// NEXT_PUBLIC_* はビルド成果物（ブラウザに配られる JS）に埋め込まれるため、
+// この渡し方はローカル開発専用。公開デプロイでキーを秘匿する仕組みではない
+// （公開面の認証設計は Issue #113 の 4 = レート制限等と合わせてユーザー判断待ち）
+const CHAT_API_KEY = process.env.NEXT_PUBLIC_CHAT_API_KEY;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 type Message = {
@@ -44,7 +49,11 @@ export default function Chat() {
     try {
       const res = await fetch(`${BACKEND_URL}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          // キー未設定ならヘッダ自体を送らない（backend 側は 401 を返す）
+          ...(CHAT_API_KEY ? { "X-API-Key": CHAT_API_KEY } : {}),
+        },
         body: JSON.stringify({ message }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
