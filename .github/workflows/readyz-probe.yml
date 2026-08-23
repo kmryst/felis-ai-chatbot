@@ -1,0 +1,151 @@
+# /readyz 外形監視（Issue #106。設計の正本: docs/operations/credit-window-execution-plan.md §5-3 / §3 の 7）
+#
+# - 5 分間隔で /readyz を外部視点から probe し、稼働率・レイテンシの SLI を蓄積する
+# - 併せて観測 3 系列（マーカー / 統計 / pgstattuple）の鮮度を**系列別に**判定する
+#   （束ねた 1 値では「マーカーだけ新しくて統計が止まっている」を見逃すため）
+# - 鮮度ゲートは**既定で有効**。「まだ始まっていない」と「壊れた」を区別して判定する:
+#   - .obs キーが無い（採取側 #104 未デプロイ）→ skip（green）
+#   - .obs キーはあるが null（採取側はデプロイ済みなのに鮮度クエリが失敗）→ fail
+#   - 系列の値が null → その系列だけ skip。観測テーブルは追記専用で行を削除しないため、
+#     null は「一度も採取していない」のみを意味し「止まった」を意味しない。
+#     採取が止まった系列は max(ts) が古くなるだけなので age が伸び続けて閾値超過で fail する
+#   - 値がある系列は閾値で判定（ブートストラップ中は最初の 1 件が入った系列から個別に発動。
+#     pgstattuple は 1 時間間隔なので最初の 1 時間は null = skip が正常）
+#   既知の限界: **一度も動いたことがない系列は永久に skip され検知できない**。これは計画 §4
+#   観測開始チェックリスト項目 2（3 系列すべてが実データで設計間隔どおり積まれていることの確認）で
+#   担保する（この workflow の鮮度ゲートは項目 2 が通っていることを前提とする）
+# - 失敗（HTTP 非 200 / 鮮度超過）で workflow が fail し、GitHub の失敗通知が届く =
+#   probe の生存確認と採取の生存確認を 1 本に束ねる
+# - 集計: 各 run のログの "PROBE ..." 行が機械可読の 1 行レコード。
+#   例) gh run list -w readyz-probe.yml --json databaseId -q '.[].databaseId' |
+#       xargs -I{} gh run view {} --log | grep '^PROBE '
+# - GitHub Actions の schedule は起動遅延があり厳密な等間隔にならない（既知の仕様）。
+#   集計は必ずレコード内の実測タイムスタンプ ts= を基準にする
+# - 判定ロジックの境界テスト: scripts/test/readyz-probe-freshness-test.sh（ローカル実行）
+name: readyz-probe
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readyz-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      # 停止スイッチ（外部レビュー指摘の反映）: teardown で ephemeral を destroy すると
+      # FQDN ごと消え、この workflow は 5 分ごとに永久に fail 通知を出し続ける。
+      # teardown 手順（credit-window-execution-plan.md §9）に
+      # `gh variable set PROBE_ENABLED --body false` を含めること。既定は有効
+      PROBE_ENABLED: ${{ vars.PROBE_ENABLED || 'true' }}
+      # 安定 FQDN（アプリ URL。revision 固有 FQDN ではない — Issue #101 参照）。
+      # **この既定値は現在の CAE のもの**。ephemeral を destroy → apply すると CAE の
+      # サフィックス（blackbush-… 部分）が変わり無効になるため、再作成後は必ず
+      # repository variable READYZ_URL で上書きする（terraform output から取得）
+      READYZ_URL: ${{ vars.READYZ_URL || 'https://ca-felisaichatbot-dev.blackbush-a1db7f50.japaneast.azurecontainerapps.io/readyz' }}
+      # 鮮度ゲートの系列別閾値（秒）。根拠は計画 §5-3（採取間隔の約 3 倍。
+      # マーカーのみ probe 間隔 5 分の 2 倍 = 10 分）
+      MARKER_MAX_AGE: "600"
+      STATS_MAX_AGE: "900"
+      PGSTATTUPLE_MAX_AGE: "10800"
+      # 鮮度ゲートだけを強制停止する非常口（既定 true = ゲート有効）。
+      # 「まだ始まっていない」は上記のとおり系列別に自動 skip されるため、
+      # 平常運用でこの変数を触る必要はない。誤検知が続く障害対応中などに
+      # 'false' でゲートのみ止める（probe / SLI 記録は続く）。
+      # probe 全体の停止は PROBE_ENABLED — 役割が別なので混ぜない
+      ENFORCE: ${{ vars.OBS_FRESHNESS_ENFORCE || 'true' }}
+    steps:
+      - name: Probe /readyz and evaluate per-series freshness
+        run: |
+          if [ "$PROBE_ENABLED" != "true" ]; then
+            echo "PROBE disabled via repository variable PROBE_ENABLED; skipping."
+            exit 0
+          fi
+          ts="$(date -u +%FT%T.%3NZ)"
+          # SLI は 1 回の素の試行を記録する（リトライすると可用性の実測にならない）
+          code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
+            --max-time 30 "$READYZ_URL" || echo "000 30.000")
+          # curl は失敗時にも -w の出力（000 …）を出すことがあり、その場合は
+          # || のフォールバック文字列と連結される。先頭 2 フィールド（実測値
+          # 優先）を採る（レビュー指摘対応。実測: 実 curl の timeout で確認済み）
+          read -r code latency_s _ <<<"$code_time"
+          latency_ms=$(awk -v t="$latency_s" 'BEGIN { printf "%d", t * 1000 }')
+
+          # .obs の状態を区別する（判定は冒頭コメントの表のとおり）:
+          #   absent  = キー自体が無い（採取側 #104 未デプロイ）
+          #   null    = キーはあるが null（採取側があるのに鮮度が読めない）
+          #   present = 系列別の値あり
+          #   invalid = 200 なのに body が JSON object でない（absent に化けさせない）
+          obs_state="absent"
+          obs_json="null"
+          if [ "$code" = "200" ]; then
+            if ! jq -e 'type == "object"' /tmp/readyz-body.json >/dev/null 2>&1; then
+              obs_state="invalid"
+            elif [ "$(jq -r 'has("obs")' /tmp/readyz-body.json)" = "true" ]; then
+              obs_json=$(jq -c '.obs' /tmp/readyz-body.json)
+              if [ "$obs_json" = "null" ]; then
+                obs_state="null"
+              else
+                obs_state="present"
+              fi
+            fi
+          fi
+          marker_age=$(jq -r '.marker_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+          stats_age=$(jq -r '.stats_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+          pgst_age=$(jq -r '.pgstattuple_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+
+          # 機械可読レコード（集計はこの行を grep する。ts= が実測タイムスタンプ）
+          echo "PROBE ts=$ts code=$code latency_ms=$latency_ms obs=$obs_state marker_age=$marker_age stats_age=$stats_age pgstattuple_age=$pgst_age enforce=$ENFORCE"
+          {
+            echo "| ts | code | latency_ms | obs | marker_age | stats_age | pgstattuple_age |"
+            echo "| --- | --- | --- | --- | --- | --- | --- |"
+            echo "| $ts | $code | $latency_ms | $obs_state | $marker_age | $stats_age | $pgst_age |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          if [ "$code" != "200" ]; then
+            echo "::error::readyz probe failed: HTTP $code"
+            fail=1
+          elif [ "$ENFORCE" != "true" ]; then
+            echo "freshness gate disabled via OBS_FRESHNESS_ENFORCE; skipping gate."
+          elif [ "$obs_state" = "invalid" ]; then
+            echo "::error::readyz returned 200 but body is not a JSON object"
+            fail=1
+          elif [ "$obs_state" = "absent" ]; then
+            # 採取側（#104 = PR #110）未デプロイ。「まだ始まっていない」なので green
+            echo "freshness skipped: response has no .obs key (collector not deployed yet)"
+          elif [ "$obs_state" = "null" ]; then
+            # 採取側はデプロイ済みなのに鮮度が読めない = 「壊れた」なので fail
+            echo "::error::freshness unavailable: .obs is null (collector deployed but freshness query failed)"
+            fail=1
+          else
+            # 系列別判定。null = その系列は一度も採取されていない → skip。
+            # 採取が止まった系列は age が伸び続けて閾値超過で fail する
+            check() { # name age max
+              if [ "$2" = "null" ]; then
+                echo "freshness[$1] skipped: no data yet (series not started)"
+                return 0
+              elif ! [[ "$2" =~ ^-?[0-9]+$ ]]; then
+                # 整数でも null でもない = /readyz の契約外の値。fail-closed
+                # （負数はクロックスキュー時に起こり得る「新鮮」なので許容）
+                echo "::error::freshness[$1] invalid: not an integer: $2"
+                return 1
+              elif [ "$2" -gt "$3" ]; then
+                echo "::error::freshness[$1] stale: ${2}s > ${3}s"
+                return 1
+              fi
+              return 0
+            }
+            check marker "$marker_age" "$MARKER_MAX_AGE" || fail=1
+            check stats "$stats_age" "$STATS_MAX_AGE" || fail=1
+            check pgstattuple "$pgst_age" "$PGSTATTUPLE_MAX_AGE" || fail=1
+          fi
+          exit "$fail"
