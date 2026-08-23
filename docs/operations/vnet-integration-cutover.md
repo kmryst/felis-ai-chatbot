@@ -337,7 +337,7 @@ terraform -chdir=terraform/ephemeral apply
 #   （--remove-env-vars: "Remove environment variable(s) from container. Space-separated
 #     environment variable names." 同ヘルプ実出力）
 
-# ゲート: ステップ A / Day 4 / Day 5 と同じ。az で直接触った後にコードと実体が乖離して
+# ゲート: ステップ A や credit-window-execution-plan.md §6 の実行前チェックと同じ。az で直接触った後にコードと実体が乖離して
 # いないことを担保する。exit 0 になるまで §4 以降へ進まない
 terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   # exit 0 を確認
 
@@ -346,10 +346,11 @@ terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   #
 
 ## 4. 終業時の扱い（「毎日 destroy」を改める。ADR-0018 追記 2026-08-22）
 
-**ephemeral 層はカットオーバー後、Day 5 の最終 teardown（計画書 §5-6）まで destroy しない。**
-private access 化後は ops Container App / migration Job が**唯一の DB アクセス経路**であり、
-夜間に ephemeral を destroy すると翌朝の Day 4 PITR ドリル（seed 投入・破壊・復元確認）も
-Day 5 の疎通 probe も開始できないため（判断根拠は ADR-0018 追記と計画書 §3-6）。
+**ephemeral 層はカットオーバー後、失効前の最終 teardown（[credit-window-execution-plan.md](./credit-window-execution-plan.md)
+§9。2026-09-16 予定）まで destroy しない。** private access 化後は ops Container App / migration Job が
+**唯一の DB アクセス経路**であり、夜間に ephemeral を destroy すると翌朝の PITR ドリルも疎通 probe も
+開始できないため（当初の判断根拠は ADR-0018 追記。その後 [ADR-0020](../adr/0020-credit-window-resource-strategy.md)
+の常時稼働方針 — 期間観測 (a) を止めない — でさらに強化された）。
 
 ```bash
 # 終業時は destroy せず、状態確認とコスト見張り（計画書 §8）のみ行う
@@ -428,5 +429,5 @@ az postgres flexible-server restore \
   `DSN_REVISION_MARKER`（DSN ハッシュ）が変わるため apply が必ず新 revision を作る
   （コードで担保。`terraform/ephemeral/main.tf` / ADR-0018 追記 #98）
 - 委任サブネットは `/27`（32 アドレス、Azure 予約 5 を除き実質 27。ADR-0018 追記）で、
-  復元中の 2 台同居 + Day 5 の HA standby を見込んでも余白がある。それでも復元が失敗したら
+  復元中の 2 台同居 + HA standby（新計画 §6）を見込んでも余白がある。それでも復元が失敗したら
   まずサブネットの空きを疑う
