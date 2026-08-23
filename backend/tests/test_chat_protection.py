@@ -98,7 +98,9 @@ def test_readyz_and_health_not_gated_when_chat_disabled(
     assert raw_client.get("/health").status_code == 200
     res = raw_client.get("/readyz")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok", "db": "ok"}
+    # obs は #104（観測スナップショット）で追加された系列別鮮度。
+    # このテストは DB なしで走るため鮮度取得は失敗し None になる（readiness には影響しない設計）
+    assert res.json() == {"status": "ok", "db": "ok", "obs": None}
 
 
 # --- キー強度の境界（外部レビュー指摘: 空白のみ・短いキーが「鍵」として通る穴） ---

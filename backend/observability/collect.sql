@@ -1,0 +1,57 @@
+-- 観測ワークロード + スナップショット採取（Issue #104。毎分の cron Job から実行）
+-- 設計の正本: docs/operations/credit-window-execution-plan.md §5-3
+--   - マーカー INSERT + カウンタ UPDATE: 毎分（観測される側の書き込み）
+--   - 統計スナップショット: 5 分間隔 / pgstattuple: 1 時間間隔（フルスキャンを伴うため）
+-- 間隔の判定は「前回採取からの経過時間」で行う（外部レビュー指摘の反映）。
+-- 当初の「分の値 % 5 = 0」判定は、ACA のコンテナ起動遅延（コールドスタート 22.7s / 23.1s を
+-- 同リポジトリで実測済み）で :05 予定の実行が :06 に開始すると 1 回まるごと無音スキップする。
+-- 経過ベース（max(ts) が interval より古ければ採取）なら、遅延時はその回で追いつき、
+-- 二重起動時は 2 回目が自然にスキップされる（スキップと二重採取を同時に解決）。
+-- すべて INSERT-only（スナップショット側が dead tuple を作らない）。
+
+\set ON_ERROR_STOP on
+
+BEGIN;
+
+-- 1) マーカー（毎分）
+INSERT INTO obs.marker DEFAULT VALUES;
+
+-- 2) カウンタ UPDATE（毎分。dead tuple 1 個/分の供給源）
+UPDATE obs.counter SET n = n + 1, updated_at = now() WHERE id = 1;
+
+-- 3) テーブル単位統計（5 分間隔）。phase は obs.phase_config から読む（フェーズ遷移は
+--    手動 UPDATE 1 回。採取の方法・間隔はフェーズ間で完全に同一 = ラベルだけが変わる）。
+--    'load' スキーマはフェーズ 2 の負荷生成テーブル用（存在しない間は行が出ないだけ）
+INSERT INTO obs.table_stats (
+    phase, relname, n_live_tup, n_dead_tup, n_tup_ins, n_tup_upd,
+    autovacuum_count, last_autovacuum, autoanalyze_count, last_autoanalyze
+)
+SELECT pc.phase, s.relname, s.n_live_tup, s.n_dead_tup, s.n_tup_ins, s.n_tup_upd,
+       s.autovacuum_count, s.last_autovacuum, s.autoanalyze_count, s.last_autoanalyze
+FROM pg_stat_user_tables s, obs.phase_config pc
+WHERE s.schemaname IN ('obs', 'public', 'load')
+  AND coalesce((SELECT max(ts) FROM obs.db_stats), '-infinity')
+      <= now() - interval '5 minutes';
+-- ↑ アンカーは db_stats の max(ts)（table_stats と同じ 5 分系列。db_stats の INSERT より
+--   先に評価されるよう、この文を db_stats より前に置く = 両者が同じ判定で歩調を揃える）
+
+-- 4) DB 単位統計（5 分間隔。WAL / サイズ / XID age）
+INSERT INTO obs.db_stats (phase, wal_records, wal_bytes, db_size_bytes, frozen_xid_age)
+SELECT pc.phase, w.wal_records, w.wal_bytes,
+       pg_database_size(current_database()),
+       age(d.datfrozenxid)
+FROM pg_stat_wal w, pg_database d, obs.phase_config pc
+WHERE d.datname = current_database()
+  AND coalesce((SELECT max(ts) FROM obs.db_stats), '-infinity')
+      <= now() - interval '5 minutes';
+
+-- 5) 実 bloat（1 時間間隔。マーカー系 2 テーブルのみ）
+INSERT INTO obs.bloat_stats (phase, relname, table_len, tuple_percent, dead_tuple_percent, free_percent)
+SELECT pc.phase, t.relname, s.table_len, s.tuple_percent, s.dead_tuple_percent, s.free_percent
+FROM (VALUES ('obs.marker'), ('obs.counter')) AS t(relname),
+     LATERAL pgstattuple(t.relname) AS s,
+     obs.phase_config pc
+WHERE coalesce((SELECT max(ts) FROM obs.bloat_stats), '-infinity')
+      <= now() - interval '1 hour';
+
+COMMIT;
