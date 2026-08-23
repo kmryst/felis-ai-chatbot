@@ -57,11 +57,17 @@ async def fetch_observation_freshness(
     - obs スキーマ未作成・接続失敗など取得自体ができない場合は None を返す
       （/readyz の可否には影響させない。readiness は DB 到達性の話であり、
       観測が止まっているかどうかの判定は外形監視 #106 の役割）
+    - statement_timeout を接続時に明示する（Issue #114 の 3）。エラーは上の設計で
+      吸収できるが、クエリの遅延はそのまま /readyz の遅延になり、外形監視の
+      30 秒 timeout に達すると観測系の問題が可用性 SLI の欠測に化ける。
+      上限は接続 timeout と同じ秒数（既定 2 秒。ロック待ちや高負荷時のフルスキャン
+      遅延を probe の時間予算より十分内側で打ち切る）
     """
     try:
         async with await psycopg.AsyncConnection.connect(
             database_url,
             connect_timeout=connect_timeout_seconds,
+            options=f"-c statement_timeout={connect_timeout_seconds * 1000}",
         ) as conn:
             cur = await conn.execute(_OBS_FRESHNESS_SQL)
             row = await cur.fetchone()
