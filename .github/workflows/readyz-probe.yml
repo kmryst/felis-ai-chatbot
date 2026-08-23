@@ -73,8 +73,10 @@ jobs:
           # SLI は 1 回の素の試行を記録する（リトライすると可用性の実測にならない）
           code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
             --max-time 30 "$READYZ_URL" || echo "000 30.000")
-          code="${code_time%% *}"
-          latency_s="${code_time##* }"
+          # curl は失敗時にも -w の出力（000 …）を出すことがあり、その場合は
+          # || のフォールバック文字列と連結される。先頭 2 フィールド（実測値
+          # 優先）を採る（レビュー指摘対応。実測: 実 curl の timeout で確認済み）
+          read -r code latency_s _ <<<"$code_time"
           latency_ms=$(awk -v t="$latency_s" 'BEGIN { printf "%d", t * 1000 }')
 
           # .obs の状態を区別する（判定は冒頭コメントの表のとおり）:
@@ -131,6 +133,11 @@ jobs:
               if [ "$2" = "null" ]; then
                 echo "freshness[$1] skipped: no data yet (series not started)"
                 return 0
+              elif ! [[ "$2" =~ ^-?[0-9]+$ ]]; then
+                # 整数でも null でもない = /readyz の契約外の値。fail-closed
+                # （負数はクロックスキュー時に起こり得る「新鮮」なので許容）
+                echo "::error::freshness[$1] invalid: not an integer: $2"
+                return 1
               elif [ "$2" -gt "$3" ]; then
                 echo "::error::freshness[$1] stale: ${2}s > ${3}s"
                 return 1

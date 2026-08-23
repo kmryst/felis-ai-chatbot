@@ -101,6 +101,11 @@ run_case "HTTP 000（接続失敗）→ fail" 1 000 '-'
 run_case "200 だが body が JSON object でない → fail" 1 200 'not json'
 run_case "非常口: ENFORCE=false なら閾値超過でも green（SLI 記録は継続）" \
 	0 200 "$obs"'{"marker_age_seconds":700,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}' false
+run_case "系列値が整数でも null でもない（契約外の応答）→ fail" \
+	1 200 "$obs"'{"marker_age_seconds":"abc","stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+run_case "系列値が負（クロックスキュー = 新鮮）→ green" \
+	0 200 "$obs"'{"marker_age_seconds":-5,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
+
 
 echo
 echo "result: pass=$pass fail=$fail"
