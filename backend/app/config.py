@@ -55,6 +55,45 @@ def _float_env(name: str, default: float) -> float:
         raise InvalidEnvError(name, raw, "数値を指定してください") from exc
 
 
+# /chat API キーの最小長（#107。外部レビュー指摘の反映）。
+# strip 後にこれ未満のキーは「鍵」として成立させない — 検証しないと
+# 「空でなければ何でも鍵」になり、空白 1 個でも fail-closed をすり抜ける（実測で確認済み）
+CHAT_API_KEY_MIN_LENGTH = 32
+
+
+def _chat_api_key_env() -> str:
+    """CHAT_API_KEY を読む。空白は strip し、未設定・空白のみは ""（fail-closed）。
+
+    設定されているのに最小長未満なら起動時に即 fail する
+    （「弱い鍵で保護しているつもり」の潜伏を防ぐ。値はメッセージに含めない）。
+    """
+    raw = (os.environ.get("CHAT_API_KEY") or "").strip()
+    if raw and len(raw) < CHAT_API_KEY_MIN_LENGTH:
+        raise InvalidEnvError(
+            "CHAT_API_KEY",
+            "<redacted>",
+            f"{CHAT_API_KEY_MIN_LENGTH} 文字以上を指定してください",
+        )
+    return raw
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """真偽値の環境変数を読む。true/false 以外は変数名を明示して即 fail する。
+
+    「1」「yes」等の緩い解釈はしない（遮断フラグの誤設定が
+    「保護しているつもり」で潜伏するのを防ぐ）。
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    lowered = raw.strip().lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    raise InvalidEnvError(name, raw, "true か false を指定してください")
+
+
 def _require(name: str, missing: list[str]) -> str:
     value = os.environ.get(name)
     if value is None or value == "":
@@ -99,6 +138,13 @@ class Settings:
     rag_similarity_threshold: float
     # CORS で許可する origin（カンマ区切り）。既定はローカルの frontend のみ
     cors_allowed_origins: tuple[str, ...]
+    # /chat の保護（Issue #107。常時稼働の先行ゲート）
+    # API キー。secret のため repr=False。未設定なら /chat は fail-closed で 404
+    #（キー無しデプロイで LLM 課金経路が無認証公開される事故を構成ミスの側に倒す）
+    chat_api_key: str = field(repr=False)
+    # 緊急遮断フラグ。true で /chat を 404 にする（消費超過時の打ち切りスイッチ。
+    # credit-window-execution-plan.md §9）。/readyz・/health には影響しない
+    chat_disabled: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -150,6 +196,8 @@ class Settings:
                 ).split(",")
                 if origin.strip()
             ),
+            chat_api_key=_chat_api_key_env(),
+            chat_disabled=_bool_env("CHAT_DISABLED", False),
         )
         if missing:
             raise MissingEnvError(missing)
