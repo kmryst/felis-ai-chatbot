@@ -123,3 +123,32 @@ variable "chat_disabled" {
   type        = bool
   default     = false
 }
+
+# --- フェーズ 2 負荷生成 Job（Issue #112。計画 §5-5） ---
+
+variable "load_duration_seconds" {
+  description = <<-EOT
+    負荷生成 Job の 1 実行あたりの継続秒数（load_generate.sh の LOAD_DURATION_SECONDS）。
+    replica_timeout はこの値 + 300 秒（後片付けマージン）で自動計算する。
+    既定 3600（1 時間）。段階投入は実行時に -var で上書きする
+  EOT
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.load_duration_seconds >= 60 && var.load_duration_seconds <= 86400
+    error_message = "load_duration_seconds は 60〜86400（24 時間）の範囲で指定してください（フェーズ 2a は最大 48h だが 1 実行は最長 1 日で区切り、日次のコスト確認と歩調を揃える）。"
+  }
+}
+
+variable "load_batch_rows" {
+  description = "負荷生成の 1 イテレーションあたり INSERT 行数（LOAD_BATCH_ROWS）。既定 500 = 控えめな出発点。CPU Credits Remaining を見ながら段階投入（計画 §5-5）"
+  type        = number
+  default     = 500
+}
+
+variable "load_sleep_seconds" {
+  description = "負荷生成イテレーション間の待機秒数（LOAD_SLEEP_SECONDS）。既定 1"
+  type        = number
+  default     = 1
+}
