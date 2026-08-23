@@ -156,7 +156,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 | 1 | #107 デプロイ済み（/chat が外部から 401 / 404） | 外部から実測 |
 | 2 | #104 デプロイ済み・3 系列すべてが設計間隔で積まれている | obs テーブルの実データ |
 | 3 | 意図的欠落の通知試験に成功（上記 3） | GitHub 失敗通知の受信 → 復旧 green |
-| 4 | **repository variable `OBS_FRESHNESS_ENFORCE=true` を設定済み** | `gh variable list`。**既定は false で、設定するまで無音失敗検知は一切働かない**（手動ステップ。ここを飛ばすと 72h 観測が「3 日前から止まっていた」で終わり得る） |
+| 4 | **鮮度ゲートが有効のまま**（`OBS_FRESHNESS_ENFORCE` が未設定または true。既定 true = 手動設定は不要。#116） | `gh variable list` で false 上書きが残っていないこと。ゲートは採取データの有無で自動発動する（未採取 = null の系列は skip、採取が止まった系列は age 超過で fail）ため、**一度も動いたことがない系列は skip され続け検知できない — 項目 2 の実データ確認が通っていることが無音失敗検知の前提** |
 | 5 | `PROBE_ENABLED` が true（既定 true）のまま | `gh variable list` |
 | 6 | `obs.phase_config` が 'baseline' | SELECT で確認 |
 
