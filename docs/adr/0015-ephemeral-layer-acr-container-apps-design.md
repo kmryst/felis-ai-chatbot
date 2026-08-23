@@ -182,6 +182,15 @@ serving / ops とも `min_replicas = 0` とし、「平常時はレプリカ 0 �
 - ACR Basic のまま serving / ops 2 リポジトリの push / pull が問題なく動作
   （委任サブネットからの pull 到達性は ADR-0018 追記 #100）
 
+## 追記（2026-08-22。#103: 「毎日 destroy」前提の段階的変更への導線）
+
+本文の「この層は毎日 destroy / apply され」（選択肢 6 のリスク受容根拠）や §8 コスト試算の
+稼働時間仮定は、起案時の前提の記録として残す（決定自体は有効）。運用の実態は
+[ADR-0018 追記 #84](./0018-postgresql-private-access-and-vnet-integration.md)（夜間 destroy をやめる）
+→ [ADR-0020](./0020-credit-window-resource-strategy.md)（クレジット失効日まで常時稼働。最終 destroy は
+[credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9 = 2026-09-16）と
+段階的に変わっている。
+
 ## 関連
 
 - [ADR-0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — CI 用 SP の権限 2 件のみ（AcrPull 割当を Terraform で作れない制約の源）

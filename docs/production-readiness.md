@@ -27,7 +27,7 @@
 | --- | --- | --- | --- | --- |
 | DB のネットワーク境界 | private access（VNet 統合）を**実機に適用済み**（2026-08-22 ステップ A〜C 完了。VNet 内経路の `/readyz` 200 と、作業端末から DB FQDN が DNS 解決すらできないこと（到達不能）の両方を実測。DB への対話経路は ops コンテナ経由のみ = [実測記録](./verification/vnet-cutover/observations.md)） | 当初の public access + firewall は walking skeleton 開通までの暫定で、egress IP の変動が実測で確認されたため確定構成へ引き上げた | private access（この移行の方向そのもの） | [ADR-0018](./adr/0018-postgresql-private-access-and-vnet-integration.md) / Issue #81（CLOSED） / [vnet-integration-cutover.md](./operations/vnet-integration-cutover.md) |
 | tfstate のネットワーク境界 | RBAC のみ。公開ネットワークから到達可 | tfstate backend を Day 0 に最短で確立し、主成果物（PITR / Maintenance）の実測を優先した | ネットワーク境界（selected networks / Private Endpoint）+ 共有アクセスキー無効化 | **Issue #87** |
-| `/chat` の公開面 | 外部 ingress を認証・レート制限なしで公開 | 検証経路（`/readyz` を外部から叩く）の確保が目的で、認証・流量制御は 5 日間のスコープ外 | 認証（少なくとも API キー / IP 制限）+ レート制限。LLM 課金を伴うエンドポイントを匿名公開しない | **追跡先なし**（本書が初出） |
+| `/chat` の公開面 | 外部 ingress を認証・レート制限なしで公開（**対処方針は確定済み・実装待ち**: アプリ層 API キー + 緊急遮断フラグの併設。2026-08-22 決定） | 検証経路（`/readyz` を外部から叩く）の確保が目的で、当初 5 日間のスコープ外とした。常時稼働への転換（ADR-0020）で 24/7 露出になるため、常時稼働開始の先行ゲートに格上げされた | 認証（少なくとも API キー / IP 制限）+ レート制限。LLM 課金を伴うエンドポイントを匿名公開しない | **Issue #107** / [credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §10-2 |
 
 ### 2. 認証・シークレット
 
@@ -43,7 +43,7 @@
 
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
-| HA / 冗長構成 | 常設では無し。Day 5 に数時間だけ検証 | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [計画書 §5](./operations/day3-5-execution-plan.md) / ADR は Day 5 で作成予定 |
+| HA / 冗長構成 | 常設では無し。イベント計測として 2 日間（2026-09-09〜10 予定）で検証し、測ったら B1ms へ戻す（[credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §6） | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [credit-window-execution-plan.md §6](./operations/credit-window-execution-plan.md)（計測手法の正本は[旧計画 §5](./operations/day3-5-execution-plan.md)） / ADR はイベント計測の実施時に作成予定 |
 | geo 冗長バックアップ | 有効へ確定（コード反映済み。実機反映は cutover の apply 時）。ただし geo リストアの手順整備・演習は未実施 | 無料枠の判明で 2 倍課金の前提が崩れ、作成時のみ設定可の制約を cutover の再作成で解消した。geo リストアは PITR 不可・RPO 最大 1 時間で主成果物に寄与しないため演習はスコープ外 | DR 要件に基づく geo リストア手順（ペアリージョン側 VNet 含む）の整備と定期演習 | [ADR-0019](./adr/0019-enable-geo-redundant-backup.md) / [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md) |
 | 長期保持（LTR） | 未使用（保持は 7 日のみ） | 要件（検証 3 日）< 復旧ウィンドウ（7 日）で、延長は無料枠超過リスクを増やすだけ | 保持要件（監査・コンプライアンス）に応じた LTR | [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md)（選択肢 4 で却下） / [計画書 §9](./operations/day3-5-execution-plan.md) |
 | 読み取りレプリカ | 無し | 読み取り負荷分散・参照系分離の要件がない | 負荷・DR 要件に応じたレプリカ設計 | [計画書 §9](./operations/day3-5-execution-plan.md) |
@@ -54,9 +54,9 @@
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
 | 監視・アラート | 無し（Log Analytics 基盤と、指標・閾値根拠の表のみ） | Monitoring は面談で名指しされておらず、**時間不足なら削る筆頭**と計画に明記されている | メトリックアラート + 通知経路 + 初動 Runbook | [計画書 §7 / §1-2](./operations/day3-5-execution-plan.md) |
-| コスト監視 | 手動（CLI での残高・リソース確認を終業時に実施） | 5 日間の検証では日次の手動見張りで足りる | Budget + コストアラートによる自動検知 | [計画書 §8](./operations/day3-5-execution-plan.md)（手動手順のみ。**Issue なし**） |
+| コスト監視 | 手動（CLI での残高・リソース確認を終業時に実施）。**Budget アラート導入は計画済み・実装待ち**（総消費上限 75 USD に対し 4 段閾値。2026-08-22 確定） | 当初 5 日間の検証では日次の手動見張りで足りる判断だった。常時稼働への転換（ADR-0020）で無人時間帯が生まれるため自動検知を導入する | Budget + コストアラートによる自動検知 | **Issue #105** / [credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §4 / §8 |
 | リストア試験の継続性 | PITR ドリルは Day 4 の単発実測（定期・自動化なし） | 目的が「設計・実行した記録」であり、継続運用のフェーズがない | 定期リストア試験のスケジュール化と演習記録 | [計画書 §4](./operations/day3-5-execution-plan.md) |
-| LLM モデルの更改 | chat モデルは lifecycleStatus Legacy（廃止期限あり）。更改プロセスなし | 5 日間の題材としては現行モデルで十分 | モデルライフサイクルの追跡と更改計画 | [ADR-0014](./adr/0014-keep-azure-openai-out-of-terraform.md)（「モデルの寿命」節） |
+| LLM モデルの更改 | chat モデルは lifecycleStatus Legacy（廃止期限あり）。更改プロセスなし | 本検証期間の題材としては現行モデルで十分 | モデルライフサイクルの追跡と更改計画 | [ADR-0014](./adr/0014-keep-azure-openai-out-of-terraform.md)（「モデルの寿命」節） |
 
 ### 5. CI/CD・変更管理
 
