@@ -64,6 +64,8 @@ npm run dev   # http://localhost:3000
 - チャット UI からのメッセージは backend の `POST /chat` に送られる（現在はスタブ応答）
 - backend の URL は `NEXT_PUBLIC_BACKEND_URL` で上書き可能（既定 `http://localhost:8000`）
 - backend 側の CORS 許可 origin は `CORS_ALLOWED_ORIGINS`（既定 `http://localhost:3000`）
+- backend で `CHAT_API_KEY` を設定している場合は、frontend 側にも同じ値を
+  `NEXT_PUBLIC_CHAT_API_KEY` で渡す（未設定だと /chat が 401 になる。Issue #113）
 
 ### 5. テストを実行する
 
