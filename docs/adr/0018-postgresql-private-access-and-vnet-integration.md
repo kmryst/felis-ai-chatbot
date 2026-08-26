@@ -61,7 +61,9 @@ Day 3 の暫定構成「public access + サーバーレベル firewall rule」�
 - **(a) ops コンテナ経路（採択）**: backend イメージの ops ターゲット + ingress なし・min_replicas 0 の
   ops Container App（`az containerapp exec` 用）+ Manual トリガーの Container Apps Job（`alembic upgrade head`）。
   「**本番 DB へは VNet 内の運用コンテナ経由でのみ接続し、手元から直接繋がない**」という運用を構成そのもので
-  強制する。追加固定費ゼロ（min 0 / Manual Job は待機中課金なし）
+  強制する。追加固定費ゼロ（min 0 / Manual Job は待機中課金なし）。
+  役割としては bastion host / jump host に相当する（PaaS 製品の Azure Bastion は使っていない。
+  Container Apps の `exec` を経路にしている）
 - (b) Bastion + VM: 常設 VM とBastion の時間課金・パッチ運用が増える。5 日間プロジェクトの運用経路として過大。却下
 - (c) P2S VPN: VPN Gateway の常時課金と証明書配布の運用が増える。作業端末を VNet に入れる発想自体が
   「手元から直接繋がない」原則と逆行する。却下
