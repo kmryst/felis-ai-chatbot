@@ -191,6 +191,34 @@ serving / ops とも `min_replicas = 0` とし、「平常時はレプリカ 0 �
 [credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9 = 2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4））と
 段階的に変わっている。
 
+## 追記（2026-08-27。#132: 層名 ephemeral と Terraform 言語構文 ephemeral の同名衝突）
+
+Terraform 1.10 で `ephemeral` が言語構文のブロック型キーワードとして導入された。その語義は
+「**state / plan に永続化されない**」である
+（出典: <https://developer.hashicorp.com/terraform/language/resources/ephemeral> 。
+本リポジトリは `.mise.toml` で Terraform 1.14.8 を pin しており、この構文は現役）。
+
+一方、本 ADR の層名 `ephemeral` は**リソースの寿命**（毎回 destroy して作り直せる層かどうか。
+対になる `persistent` 層は据え置き）を指しており、この層の state は通常どおり
+`ephemeral/terraform.tfstate`（backend.tf の `key`）へ**永続化される**。同名でありながら
+語義が逆であり、Terraform に習熟した読み手ほど誤読しやすい。本追記は、この衝突を認識した
+上での命名であることを明示するものである（動作上の影響はない）。
+
+**改名はしない**（判断 2026-08-27）。理由:
+
+- **state キーの変更 = state 移行を伴う**: `key = "ephemeral/terraform.tfstate"` を変えるには
+  `terraform init -migrate-state` 相当の操作が必要で、観測フェーズ稼働中のリスクとして
+  ドキュメント整合の利得に見合わない
+- **CI のパスへの波及**: `.github/workflows/` の fmt / validate / deploy 系が
+  `terraform/ephemeral` をパスで参照しており、同時変更が必要になる
+- **ADR 群・運用ドキュメントへの波及**: ADR-0015〜0020 および `docs/operations/` の各文書が
+  層名 `ephemeral` を前提に書かれている。過去の実測記録（`docs/verification/`）は書き換えない
+  運用のため、改名すると新旧名称が恒久的に混在する
+
+なお「ephemeral environment（短命な検証環境）」という業界標準語としての用法は問題なく、
+本追記が対象とするのは層名 / state キーとしての用法と言語構文の混同のみである。
+`terraform/ephemeral/backend.tf` 冒頭コメントにも同じ注意を記載した。
+
 ## 関連
 
 - [ADR-0012](./0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — CI 用 SP の権限 2 件のみ（AcrPull 割当を Terraform で作れない制約の源）
