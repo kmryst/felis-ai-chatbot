@@ -1,148 +1,71 @@
 # felis-ai-chatbot
 
-pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenance / Monitoring を設計・実装・検証する個人開発
+AI チャットボットを題材に、その裏側で動くデータベース（PostgreSQL）を Azure 上に自分で構築し、
+バックアップ・復旧・保守・監視を実際に動かして、その結果を数値で記録している個人開発リポジトリです。
 
-このリポジトリは [idp-golden-path](https://github.com/kmryst/idp-golden-path) の
-ゴールデンパステンプレート **service-baseline** から生成されました。
-以下の運用基盤（ガードレール）が最初から有効です。
+## 対象ロールと、このリポジトリで示せること
 
-## ローカルでの動かし方
+- **対象ロール**: DevOps Engineer / SRE / Platform Engineer / インフラエンジニア
+- **主成果物**: アプリではなく、**PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
+  設計・実行し、実測値と失敗をそのまま記録に残したこと**
+- **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps / ACR / VNet + Private DNS /
+  Log Analytics を管理。DB は private access で、運用経路は VNet 内の ops コンテナに一本化
+- **可観測性**: `/readyz` の外形監視と、DB 内の観測 3 系列（1 分 / 5 分 / 1 時間）を継続採取。
+  可用性と freshness を good events / total events の比として系列別に判定
+- **変更管理**: Issue / Branch / PR / 必須ラベル / CI ガードレール。ルールは
+  [CONTRIBUTING.md](./CONTRIBUTING.md)、AI Agent 向けの作業ルールは [CLAUDE.md](./CLAUDE.md)
+- **公開している弱点**: 本番運用に足りていないものを理由と追跡先つきで 1 枚に集約
+  （[docs/production-readiness.md](./docs/production-readiness.md)）
 
-### 1. PostgreSQL（pgvector）を起動する
+## 実測値
 
-```bash
-cp .env.example .env   # 初回のみ（.env はコミット禁止）
-docker compose up -d   # pgvector 入り PostgreSQL 17
-docker compose ps      # STATUS が healthy になるまで待つ
-```
+進行中のプロジェクトです。**未実測を先に並べています。**
 
-停止は `docker compose down`（データ保持）、破棄は `docker compose down -v`。
-
-### 2. DB スキーマを適用する（マイグレーション）
-
-```bash
-cd backend
-uv sync
-set -a && source ../.env && set +a   # DATABASE_URL を読み込む
-uv run alembic upgrade head          # スキーマ適用
-uv run alembic downgrade base        # 全て戻す（破壊的。ローカル検証用）
-```
-
-スキーマ設計は [ADR-0003](./docs/adr/0003-provenance-schema-design.md)、ツール選定は [ADR-0002](./docs/adr/0002-alembic-for-schema-migrations.md) を参照。
-
-### 3. backend（FastAPI）を起動する
-
-```bash
-mise install          # .mise.toml どおりの python を取得
-cd backend
-uv sync               # 依存インストール（.venv 作成）
-set -a && source ../.env && set +a   # DATABASE_URL 等を読み込む
-uv run uvicorn app.main:app --reload
-```
-
-- `GET /health` — liveness（プロセス生存のみ。依存先は見ない。DB 停止中でも 200）
-- `GET /readyz` — readiness（DB へ `SELECT 1`。到達不能なら 503。接続 timeout は `DB_CONNECT_TIMEOUT_SECONDS`、既定 2 秒）
-- `DATABASE_URL` は必須。欠けていると起動時に即 fail する
-- `POST /chat` — チャット応答。LLM は既定でスタブ（[ADR-0004](./docs/adr/0004-stub-llm-and-no-llm-in-ci.md)。API キー不要・実 LLM は呼ばない）。実 LLM（Azure OpenAI。[ADR-0009](./docs/adr/0009-azure-openai-as-llm-provider.md)）を使う場合は `.env` に Azure 接続情報を設定し `LLM_PROVIDER=azure-openai` にする（CI・テストは常にスタブのまま）
-
-  ```bash
-  curl -s -X POST localhost:8000/chat -H 'Content-Type: application/json' \
-    -d '{"message": "こんにちは"}'
-  ```
-
-- ログは JSON 1行形式。`X-Request-ID` ヘッダを尊重し、無ければ採番してレスポンスヘッダとログに貫通させる
-- 設定は環境変数から読む。secret は `.env`（gitignore 済み）にのみ置く
-
-### 4. frontend（Next.js）を起動する
-
-```bash
-cd frontend
-npm install
-npm run dev   # http://localhost:3000
-```
-
-- チャット UI からのメッセージは backend の `POST /chat` に送られる（現在はスタブ応答）
-- backend の URL は `NEXT_PUBLIC_BACKEND_URL` で上書き可能（既定 `http://localhost:8000`）
-- backend 側の CORS 許可 origin は `CORS_ALLOWED_ORIGINS`（既定 `http://localhost:3000`）
-- backend で `CHAT_API_KEY` を設定している場合は、frontend 側にも同じ値を
-  `NEXT_PUBLIC_CHAT_API_KEY` で渡す（未設定だと /chat が 401 になる。Issue #113）
-
-### 5. テストを実行する
-
-```bash
-# テスト用 DB（開発用 DB とは分離。テストはスキーマを作り直すため必須）
-docker exec felis-db psql -U felis -d postgres -c "CREATE DATABASE felis_test"
-
-cd backend
-TEST_DATABASE_URL=postgresql://felis:local-dev-only@localhost:5433/felis_test \
-  uv run pytest -v
-```
-
-- `TEST_DATABASE_URL` 未設定なら DB テストは skip される（それ以外は常に実行）
-- テストは実 LLM・外部 API を一切呼ばない（[ADR-0004](./docs/adr/0004-stub-llm-and-no-llm-in-ci.md)）。pgvector 類似検索は手書きの固定ベクトルで決定的に検証する
-- CI（`.github/workflows/backend-tests.yml`）は `services:` の pgvector コンテナで同じテストを実行する
-
-## このリポジトリに含まれるもの
-
-| 資産 | 役割 |
+| 項目 | 状態 |
 | --- | --- |
-| `CLAUDE.md` | AI Agent（Claude Code）向けの作業ルール入口 |
-| `CONTRIBUTING.md` | Issue / Branch / Commit / PR / Label / 軽運用・厳密運用の正本 |
-| `.github/labels.yml` | ラベル定義の正本（push で自動同期） |
-| `.mise.toml` | ローカル開発ツールチェーン（Node.js 等）のバージョンの正本。CI pin との一致を Toolchain Version Check が検査する |
-| `.github/workflows/` | PR Policy Check / Commitlint / Markdown Lint / Gitleaks Secret Scan / Sync Labels / Issue Template Check / Toolchain Version Check（実体は [idp-golden-path の reusable workflows](https://github.com/kmryst/idp-golden-path/tree/main/.github/workflows) をタグ固定 `@v1` で参照。更新は Dependabot のバージョンアップ PR で取り込む） |
-| `.github/pull_request_template.md` / `ISSUE_TEMPLATE/` | PR / Issue テンプレート |
-| `scripts/github/` | Issue / PR 作成・ラベル同期・ブランチ cleanup の helper |
-| `docs/adr/` | Architecture Decision Record（0001 に生成経緯を記録済み） |
-| `docs/operations/branch-protection.md` | main ブランチ保護の適用手順（初期状態では未適用） |
-| `docs/operations/bootstrap.md` | Day 0 bootstrap の手順と検証証跡（本リポジトリ立ち上げの正本） |
+| PITR ドリル（RTO / RPO） | **未実測** — 2026-08-28 実施予定 |
+| ゾーン冗長 HA の failover ダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
+| General Purpose へのスケールのダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
+| 低負荷ベースライン観測（フェーズ 1、72h） | **観測中** — 2026-08-23T08:16:19Z 起点。稼働率・レイテンシ分布の最終値は完了後に確定 |
+| 外形監視の実効 coverage | **実測済み** — scheduled run 132 回 ÷ 期待 848 回 = 15.6% |
+| 障害通知の到達 | **実測済み** — probe の run failure から 20 秒後に、GitHub の通知インボックスへ配送記録が生成された（メール受信の実証ではない） |
+| autovacuum の自然発火 | **実測済み** — 1 行を毎分 UPDATE するテーブルで 22.6 時間に 26 回（約 52 分周期） |
+| private access（VNet 統合）への切替 | **実測済み** — VNet 内経路の `/readyz` 200 と、作業端末からの到達不能を両方確認 |
 
-## 初期セットアップ（生成後にやること）
+> PITR の RTO も failover のダウンタイムも、この時点ではまだ 1 つも測っていません。
 
-1. ツールチェーンと依存をインストールし、ローカルで CI と同じチェックを実行できるようにする
+## このプロジェクトの立て付け
 
-   ```bash
-   mise install   # .mise.toml の宣言どおりに Node.js 等を取得する
-   npm ci
-   npm run lint:md
-   ```
+実務では DB 運用を担当していません。カタログスペックや手順書の知識ではなく、
+**自分で構築して実際に動かした実測値で答えられる状態**を作るために、
+Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / HA を
+設計・実行・記録しました。
 
-   Terraform を導入する場合は `.mise.toml` のコメントに従って `terraform` を宣言し、
-   Terraform を使う workflow の pin も同じ値に揃える。両者の一致は Toolchain Version Check が PR ごとに検査する。
+「実務でやった」とは書きません。立て付けは
+「実務では担当していない。だから自分で構築して一通りやった。これがその記録」で固定しています。
+勝負どころは追い質問（リストアは試したか / 保持期間はどう決めたか /
+メンテナンス中に止まったか / vacuum は見ているか）で、
+それに実測で答えるためにこのリポジトリがあります。
 
-2. ラベルが同期されていることを確認する（初回 push 時に Sync Labels workflow が実行される。
-   手動同期は `./scripts/github/sync-labels.sh`）
+## 実測から出た発見
 
-3. 最初の PR をマージして CI（required checks 候補）の実行実績を作ったあと、
-   [docs/operations/branch-protection.md](./docs/operations/branch-protection.md) の手順で
-   main ブランチ保護を適用する
+数値と再現手順の正本は
+[docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md) です。
 
-4. アプリケーションコードの技術選定は `docs/adr/` に ADR として記録してから実装を始める
+- **SQL は完走しているのに job execution は Failed になる。**
+  `replicaTimeout` 55 秒での打ち切りで、exit code すら残りません。
+  「job status」と「採取データの完全性」は別物として扱う必要があります
+- **`gh run view --log` は failure run に対して 0 バイトを返す**（success では取得できる）。
+  可用性 SLI の分子だけが黙って落ちます。REST の job logs 経由なら取得できます
 
-## 開発フロー
+## もっと見る
 
-Issue / PR 駆動開発を基本とします。詳細は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。
+- [docs/production-readiness.md](./docs/production-readiness.md): 本番運用との差分（理由と追跡先つき）
+- [docs/adr/README.md](./docs/adr/README.md): 設計判断（ADR）。撤回した判断も削除せず残しています
+- [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md): フェーズ 1 の実測記録・食い違い・未検証項目
+- [docs/operations/credit-window-execution-plan.md](./docs/operations/credit-window-execution-plan.md): 進行中のフェーズ計画（PITR ドリル / HA / teardown）
 
-```bash
-# Issue 作成
-./scripts/github/create-issue-with-labels.sh --title "短い要約" \
-  --body-file docs/issue-templates/feature_request.md \
-  --type type:feature --area area:app --risk risk:low --cost cost:none
+## ローカルで動かす
 
-# PR 作成（draft で作成される）
-./scripts/github/create-pr-with-labels.sh --title "feat: 変更の要約" \
-  --body-file /path/to/filled-pr-body.md --issue <issue番号> \
-  --type type:feature --area area:app --risk risk:low --cost cost:none --base main
-```
-
-## ドキュメント
-
-- 設計判断: [docs/adr/](./docs/adr/README.md)
-- 利用データソース一覧（気象庁ホームページ）: [docs/data-sources.md](./docs/data-sources.md)
-- Day 0 bootstrap 手順書: [docs/operations/bootstrap.md](./docs/operations/bootstrap.md)
-- Azure リソース台帳（全リソース一覧 + Terraform 管理外リソースの詳細）: [docs/operations/azure-resource-inventory.md](./docs/operations/azure-resource-inventory.md)
-- Day 3〜5 実行計画書（PostgreSQL Backup / PITR / Maintenance / HA / Monitoring）: [docs/operations/day3-5-execution-plan.md](./docs/operations/day3-5-execution-plan.md)
-- 本番運用との差分（横断の状態一覧。理由と追跡先つき）: [docs/production-readiness.md](./docs/production-readiness.md)
-
-本リポジトリは skeleton の手動コピーで立ち上げたため、Backstage TechDocs / Software Catalog 用ファイル
-（`mkdocs.yml` / `catalog-info.yaml`）は含まれていません（[ADR-0001](./docs/adr/0001-bootstrap-by-manual-skeleton-copy.md)）。
+手順は [docs/development/local-setup.md](./docs/development/local-setup.md) にまとめています
+（`cp .env.example .env` のあと `docker compose up -d`）。
