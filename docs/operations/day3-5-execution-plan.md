@@ -86,7 +86,7 @@ PostgreSQL 自体を Day 3 前半に作るのは、PITR の復元可能範囲（
 | 17 | 停止中サーバーとメンテナンス | 停止中はメンテナンスは適用されず、**再起動時に適用**される。適用時は再起動が 5〜8 分程度延びる | [Planned maintenance](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-maintenance) |
 | 18 | マイナーバージョン更新 | 計画メンテナンスの一部として自動適用（"The service includes security updates, software updates, and minor version upgrades as part of planned maintenance"） | [Reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql) |
 | 19 | SLA | ゾーン冗長 HA 99.99% / 同一ゾーン HA 99.95% / 非 HA 99.9% | [Reliability](https://learn.microsoft.com/en-us/azure/reliability/reliability-database-postgresql) |
-| 20 | autovacuum の既定発火条件 | VACUUM: 変更行が「テーブル行数 × 0.2 + 50」超 / ANALYZE: 「× 0.1 + 50」超（PG13+ の insert 経由は「× 0.2 + 1000」）。監視 SQL（`pg_stat_all_tables` の `n_dead_tup` 等）、長時間トランザクション検出 SQL、bloat 用メトリック `bloat_percent`（`metrics.autovacuum_diagnostics = ON` で有効化、動的パラメータで再起動不要）が公式に提供されている | [Autovacuum tuning](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-autovacuum-tuning) |
+| 20 | autovacuum の既定発火条件 | **3 つの条件は別物で、比較する対象が違う**（「変更行」と一括りにしない）。VACUUM: **前回 VACUUM 以降の dead tuple 数**（`n_dead_tup`）が `reltuples × 0.2 + 50` 超 / insert-vacuum（PG13+）: **前回 VACUUM 以降に INSERT した行数**（`n_ins_since_vacuum`）が `reltuples × 0.2 + 1000` 超 / ANALYZE: **前回 ANALYZE 以降の INSERT + UPDATE + DELETE の合計**（`n_mod_since_analyze`）が `reltuples × 0.1 + 50` 超。`reltuples` は `pg_class.reltuples` で、**VACUUM だけでなく ANALYZE でも更新される**（発火予測への影響は [credit-window-execution-plan.md](./credit-window-execution-plan.md) §5-4）。監視 SQL（`pg_stat_all_tables` の `n_dead_tup` 等）、長時間トランザクション検出 SQL、bloat 用メトリック `bloat_percent`（`metrics.autovacuum_diagnostics = ON` で有効化、動的パラメータで再起動不要）が公式に提供されている | [Autovacuum tuning](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/how-to-autovacuum-tuning) |
 | 21 | ストレージ監視の閾値 | 使用率 95%（または残 5 GiB 未満）で**自動的に read-only 化**。「80% 超でのアラート設定」が公式に例示されている（"you can set an alert if the storage percentage exceeds 80% usage"） | [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) |
 | 22 | B1ms の接続数上限 | max 50 / ユーザー接続 35（15 は予約） | [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) |
 | 23 | Burstable の監視推奨 | **CPU Credits Remaining** を監視し低クレジットでアラートせよと明記。クレジット枯渇時は baseline に制限され深刻な性能劣化 | [Compute options](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-compute) |
@@ -436,7 +436,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（�
 | CPU Credits Remaining（Burstable 期間中） | 低下傾向で警告 | 公式推奨（§2-1 No.23）。枯渇で baseline 制限。**具体の閾値は Day 3〜4 の実測レンジを見て決め、根拠を証跡に書く（未実測のまま数字を置かない）** |
 | `cpu_percent`（GP 変更後） | 未定 | 出典のある既定値がないため、Day 5 の負荷実測レンジから決める。決めた根拠を証跡に書く |
 | active connections | > 30 | B1ms のユーザー接続上限 35（§2-1 No.22）の手前。上限到達は `FATAL: sorry, too many clients already` の実害 |
-| Backup Storage Used | > 32 GiB | 無料枠 = プロビジョン済みストレージ 100%（§2-1 No.7）。超過分から課金が始まる |
+| Backup Storage Used（ローカル） | > 16 GiB | 無料枠 = プロビジョン済みストレージ 100% = 32 GiB（§2-1 No.7）。**geo 冗長を有効化した（[ADR-0019](../adr/0019-enable-geo-redundant-backup.md)）ため課金式は 「(2 × ローカルバックアップサイズ − プロビジョン済みストレージ) × GB/月単価」**となり、課金開始点はローカル 16 GiB（2 × 16 − 32 = 0）。ADR-0019 適用前の閾値 32 GiB は本行で訂正済み |
 | `bloat_percent` / `n_dead_tup` | 未定 | メトリックは公式提供（§2-1 No.20）。閾値はワークロード依存のため Day 4 の観測値から決める |
 
 ---

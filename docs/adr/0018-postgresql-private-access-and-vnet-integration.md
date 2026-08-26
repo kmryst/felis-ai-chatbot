@@ -386,7 +386,7 @@ Retail Prices API 実測単価）が加わることが判明した（当時の�
 
 追記 #84 の 4「destroy は Day 5 の最終 teardown のみ」の**時期**は、[ADR-0020](./0020-credit-window-resource-strategy.md)
 の方針転換により「クレジット失効前の最終 teardown（[credit-window-execution-plan.md](../operations/credit-window-execution-plan.md)
-§9 = 2026-09-16）」に置き換わった。「夜間に destroy しない」という判断自体は不変（むしろ常時稼働の
+§9 = 2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4））」に置き換わった。「夜間に destroy しない」という判断自体は不変（むしろ常時稼働の
 前提として強化）。本文中の「CAE は毎日 destroy / 再作成する ephemeral 層」等の記述は起案時の前提の
 記録であり、書き換えない。
 

@@ -11,7 +11,7 @@ Accepted
 ## 決定内容
 
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-6 / §4-8 の「Day 3 / Day 4 の終業時に `az postgres flexible-server stop`」をやめ、`pgsql-felisaichatbot-dev`（B1ms）を**常時稼働**させる
-- ephemeral 層の毎日 destroy（時間課金を止める運用）は変えない（注記: この前提はその後 2 段階で変更された。private access 化で夜間 destroy をやめ = [ADR-0018 追記](./0018-postgresql-private-access-and-vnet-integration.md)、さらに [ADR-0020](./0020-credit-window-resource-strategy.md) の常時稼働方針で最終 destroy は [credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9（2026-09-16）に確定）
+- ephemeral 層の毎日 destroy（時間課金を止める運用）は変えない（注記: この前提はその後 2 段階で変更された。private access 化で夜間 destroy をやめ = [ADR-0018 追記](./0018-postgresql-private-access-and-vnet-integration.md)、さらに [ADR-0020](./0020-credit-window-resource-strategy.md) の常時稼働方針で最終 destroy は [credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9（2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4））に確定）
 - 750 時間の無料枠管理（消費状況の確認手段・リスク・未確定事項）は [azure-resource-inventory.md](../operations/azure-resource-inventory.md) の「12か月無料枠」節を正本とする
 
 ## 背景
@@ -47,7 +47,7 @@ Accepted
 
 - 計画書の改訂: §1（Day 3 行）/ §2-2 No.3（取りやめ）/ §3-3 / §3-6 / §4-1 / §4-8 / §6（成果物 3）/ §8
 - [restore-drill/observations.md](../verification/restore-drill/observations.md) の「Day 4 に取る差分（宿題）」は stop 前提だったため取りやめの注記を追記
-- プロジェクト終了時の destroy は不変。本 ADR は「日々の運用」の話であり、「プロジェクト終了時」の話ではない（時間軸の区別は台帳 §A。注記: 終了時 destroy の時期は当初「Day 5（計画書 §5-6）」→ [ADR-0020](./0020-credit-window-resource-strategy.md) により失効前 teardown = 新計画 §9 の 2026-09-16 へ変更。「本 ADR の stop しない判断」自体は ADR-0020 の常時稼働方針と整合し、むしろ前提として強化された）
+- プロジェクト終了時の destroy は不変。本 ADR は「日々の運用」の話であり、「プロジェクト終了時」の話ではない（時間軸の区別は台帳 §A。注記: 終了時 destroy の時期は当初「Day 5（計画書 §5-6）」→ [ADR-0020](./0020-credit-window-resource-strategy.md) により失効前 teardown = 新計画 §9 の 2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） へ変更。「本 ADR の stop しない判断」自体は ADR-0020 の常時稼働方針と整合し、むしろ前提として強化された）
 
 ## 関連
 
