@@ -113,7 +113,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 | # | 観測 | 採否 | 根拠 / 方法（採取の実装は #104） |
 | --- | --- | --- | --- |
 | 1 | autovacuum の**自然**発火 | **採用** | 合成では絶対に取れない（発火の瞬間を狙って作る合成と、閾値をワークロードが自然に越える観測は別物。閾値はテーブルによって別式で、カウンタ行は dead tuple 側の `50 + 0.2 × reltuples`、マーカーは insert 側の `1000 + 0.2 × reltuples` = §5-3 / §5-4）。`pg_stat_user_tables` の `n_dead_tup` / `last_autovacuum` / `autovacuum_count` をスナップショット採取 |
-| 2 | bloat の時系列（鋸歯） | **採用** | `pgstattuple` の定期採取。1 点の測定より説得力が桁違い。**通常の autovacuum の後に落ちるのは `dead_tuple_percent` だけで、`table_len` は縮まず `free_percent` が上がる**（領域は再利用のため テーブル内に保持され、OS へは返らない。OS へ返すのは `VACUUM FULL` / `pg_repack`。本プロジェクトは通常 VACUUM のみで、`VACUUM FULL` は実行しない）。この 3 系列の波形をそのまま取る |
+| 2 | bloat の時系列（鋸歯） | **採用** | `pgstattuple` の定期採取。1 点の測定より説得力が桁違い。**通常の autovacuum の後に落ちるのは `dead_tuple_percent` だけで、`table_len` は縮まず `free_percent` が上がる**（領域は再利用のためテーブル内に保持され、OS へは返らない。OS へ返すのは `VACUUM FULL` / `pg_repack`。本プロジェクトは通常 VACUUM のみで、`VACUUM FULL` は実行しない）。この 3 系列の波形をそのまま取る |
 | 3 | 監視閾値の実測レンジ | **採用** | CPU / メモリ / 接続数 / ストレージ / IOPS の分布から「p95 + マージン」で閾値を決める（旧計画 §7 の要求そのもの）。Azure Monitor メトリクスは Azure 側に 93 日保持されるため採取は日次エクスポートで足りる |
 | 4 | PITR 復元ウィンドウの拡大 | **採用** | サーバー再作成直後の今は幅がほぼない。**8/29 頃に保持 7 日の窓が満杯になり `earliestRestoreDate` が動き出す**（この「窓がスライドし始める瞬間」自体が時間でしか取れない観測）。2 回目ドリルで 24 時間以上前へ復元 |
 | 5 | バックアップ使用量の推移 | **採用** | 日次チェックで記録済みの項目を継続 + 無料枠 32GB との突き合わせ。保持 7 日（ADR-0011）の決定根拠を実測で裏付ける |
