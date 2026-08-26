@@ -29,8 +29,33 @@ yq -r '.jobs.probe.steps[0].run' "$workflow_file" > "$workdir/probe.sh"
 default_enforce="$(yq -r '.jobs.probe.env.ENFORCE' "$workflow_file" \
 	| sed -n "s/.*|| *'\([^']*\)'.*/\1/p")"
 [ -n "$default_enforce" ] || { echo "failed to parse ENFORCE default" >&2; exit 2; }
+# 系列別閾値も workflow の env: 定義から実際に読む。ここをテスト側でハードコードすると、
+# 「env: のキー名だけ改名して run ブロックの参照を直し忘れた（またはその逆）」という
+# 追随漏れをテストが素通ししてしまう（実運用では変数が空になり判定が壊れる）。
+# 実測: ハードコードしていた版では env: 名だけ旧名に戻した mutant が 17/17 pass した
+threshold_env() { # var_name
+	local v
+	v="$(yq -r ".jobs.probe.env.$1 // \"\"" "$workflow_file")"
+	[ -n "$v" ] && [ "$v" != "null" ] || {
+		echo "failed to read .jobs.probe.env.$1 from $workflow_file" >&2
+		exit 2
+	}
+	printf '%s' "$v"
+}
+heartbeat_max_age="$(threshold_env HEARTBEAT_MAX_AGE)"
+stats_max_age="$(threshold_env STATS_MAX_AGE)"
+pgstattuple_max_age="$(threshold_env PGSTATTUPLE_MAX_AGE)"
+
 echo "# workflow: $workflow_file"
 echo "# ENFORCE default (repository variable unset): $default_enforce"
+echo "# thresholds from workflow env: heartbeat=$heartbeat_max_age stats=$stats_max_age pgstattuple=$pgstattuple_max_age"
+
+# テストケースの値（120 / 700 / 1200 ...）は下の既定閾値を前提に書いてある。
+# 閾値そのものを変えたときにケースが黙って意味を失わないよう、ここで突き合わせる
+[ "$heartbeat_max_age" = "600" ] && [ "$stats_max_age" = "900" ] && [ "$pgstattuple_max_age" = "10800" ] || {
+	echo "thresholds changed in the workflow; update the test case values accordingly" >&2
+	exit 2
+}
 
 # curl の PATH shim: -o の出力先に fixture をコピーし、-w 相当の
 # "http_code time_total" を stdout に返す。STUB_CODE=000 は接続失敗を模す
@@ -65,7 +90,8 @@ run_case() {
 	PATH="$workdir/bin:$PATH" \
 		STUB_CODE="$http_code" STUB_BODY_FILE="$body_file" \
 		PROBE_ENABLED=true READYZ_URL="https://stub.invalid/readyz" \
-		MARKER_MAX_AGE=600 STATS_MAX_AGE=900 PGSTATTUPLE_MAX_AGE=10800 \
+		HEARTBEAT_MAX_AGE="$heartbeat_max_age" STATS_MAX_AGE="$stats_max_age" \
+		PGSTATTUPLE_MAX_AGE="$pgstattuple_max_age" \
 		ENFORCE="$enforce" GITHUB_STEP_SUMMARY="$summary" \
 		bash --noprofile --norc -e -o pipefail "$workdir/probe.sh" \
 		> "$workdir/out.log" 2>&1 || actual=$?
@@ -85,26 +111,34 @@ obs='{"status":"ok","db":"ok","obs":'
 run_case ".obs キー自体が無い（#104 未デプロイ相当）→ green" \
 	0 200 '{"status":"ok","db":"ok"}'
 run_case "全系列 null（採取開始前）→ green" \
-	0 200 "$obs"'{"marker_age_seconds":null,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
-run_case "marker のみ値あり・閾値内、他は null（ブートストラップ中）→ green" \
-	0 200 "$obs"'{"marker_age_seconds":120,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
-run_case "marker のみ値あり・閾値超過 → fail" \
-	1 200 "$obs"'{"marker_age_seconds":700,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+	0 200 "$obs"'{"heartbeat_age_seconds":null,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+run_case "heartbeat のみ値あり・閾値内、他は null（ブートストラップ中）→ green" \
+	0 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+run_case "heartbeat のみ値あり・閾値超過 → fail" \
+	1 200 "$obs"'{"heartbeat_age_seconds":700,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
 run_case "全系列に値があり全部閾値内 → green" \
-	0 200 "$obs"'{"marker_age_seconds":120,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
+	0 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
 run_case "stats だけ閾値超過（系列別に効く）→ fail" \
-	1 200 "$obs"'{"marker_age_seconds":120,"stats_age_seconds":1200,"pgstattuple_age_seconds":3600}}'
+	1 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":1200,"pgstattuple_age_seconds":3600}}'
+run_case "pgstattuple だけ閾値超過（系列別に効く）→ fail" \
+	1 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":300,"pgstattuple_age_seconds":11000}}'
+run_case "heartbeat のみ null（他 2 系列は値あり = その系列だけ skip）→ green" \
+	0 200 "$obs"'{"heartbeat_age_seconds":null,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
 run_case ".obs キーはあるが null（採取側デプロイ済みなのに鮮度クエリ失敗）→ fail" \
 	1 200 '{"status":"ok","db":"ok","obs":null}'
 run_case "HTTP 503 → fail" 1 503 '{"status":"unavailable","db":"unreachable"}'
 run_case "HTTP 000（接続失敗）→ fail" 1 000 '-'
 run_case "200 だが body が JSON object でない → fail" 1 200 'not json'
 run_case "非常口: ENFORCE=false なら閾値超過でも green（SLI 記録は継続）" \
-	0 200 "$obs"'{"marker_age_seconds":700,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}' false
+	0 200 "$obs"'{"heartbeat_age_seconds":700,"stats_age_seconds":null,"pgstattuple_age_seconds":null}}' false
 run_case "系列値が整数でも null でもない（契約外の応答）→ fail" \
-	1 200 "$obs"'{"marker_age_seconds":"abc","stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+	1 200 "$obs"'{"heartbeat_age_seconds":"abc","stats_age_seconds":null,"pgstattuple_age_seconds":null}}'
+run_case "stats が整数でも null でもない（契約外の応答）→ fail" \
+	1 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":"abc","pgstattuple_age_seconds":null}}'
+run_case "pgstattuple が整数でも null でもない（契約外の応答）→ fail" \
+	1 200 "$obs"'{"heartbeat_age_seconds":120,"stats_age_seconds":300,"pgstattuple_age_seconds":"abc"}}'
 run_case "系列値が負（クロックスキュー = 新鮮）→ green" \
-	0 200 "$obs"'{"marker_age_seconds":-5,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
+	0 200 "$obs"'{"heartbeat_age_seconds":-5,"stats_age_seconds":300,"pgstattuple_age_seconds":3600}}'
 
 
 echo

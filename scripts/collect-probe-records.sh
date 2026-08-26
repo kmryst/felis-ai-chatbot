@@ -24,6 +24,14 @@
 #      0 件になる。逆に `grep 'PROBE '` だと run ブロック内のコマンドエコー行まで拾って
 #      二重計上する。`grep -aoE 'PROBE ts=[0-9][^\r]*'` で実レコードだけを 1 件ずつ取る
 #   4. 集計対象は `event == "schedule"` のみ。`workflow_dispatch` の手動 probe を混ぜない
+#   5. PROBE レコードのフィールド名は Issue #133 で `code=` -> `http_code=` /
+#      `marker_age=` -> `heartbeat_age=` に改名した。**新旧どちらのログも読める**ように
+#      両方を受け付け、**出力の JSON キーは元ログに出ていた名前をそのまま使う**。
+#      改名前のログ（フェーズ 1 の窓）を再抽出したとき
+#      docs/verification/observation-phase1/probe-records.jsonl と 1 バイトも差が出ない
+#      ことが、あの 131 行を当時の名前のまま凍結してよい根拠そのものだから
+#      （新名へ正規化して出力すると、凍結済み証跡を再現できなくなる）。
+#      PROBE レコードが 1 件も取れなかった run の行だけは元ログに手掛かりが無いため新名で出す
 
 set -euo pipefail
 
@@ -169,8 +177,8 @@ while IFS= read -r run; do
 	if [[ -z $probe_lines ]]; then
 		jq -c --argjson job "${job_id:-null}" '
 			{run_id, created_at, conclusion, status, attempt, head_sha,
-			 job_id: $job, ts: null, code: null, latency_ms: null, obs: null,
-			 marker_age: null, stats_age: null, pgstattuple_age: null, enforce: null}' \
+			 job_id: $job, ts: null, http_code: null, latency_ms: null, obs: null,
+			 heartbeat_age: null, stats_age: null, pgstattuple_age: null, enforce: null}' \
 			<<<"$run" | emit
 	else
 		while IFS= read -r line; do
@@ -179,14 +187,22 @@ while IFS= read -r run; do
 				($line | ltrimstr("PROBE ") | [splits(" +")]
 					| map(capture("^(?<k>[^=]+)=(?<v>.*)$"))
 					| map({(.k): .v}) | add) as $f
+				# 出力キーは元ログのフィールド名に追随する（上のヘッダ 5）。
+				# 旧ログ: code / marker_age、新ログ: http_code / heartbeat_age
+				| (if ($f | has("http_code")) then "http_code" else "code" end) as $ck
+				| (if ($f | has("heartbeat_age")) then "heartbeat_age" else "marker_age" end) as $hk
 				| {
 					run_id, created_at, conclusion, status, attempt, head_sha,
 					job_id: $job,
-					ts: ($f.ts // null),
-					code: ($f.code // null),
+					ts: ($f.ts // null)
+				}
+				+ { ($ck): ($f[$ck] // null) }
+				+ {
 					latency_ms: ($f.latency_ms | num),
-					obs: ($f.obs // null),
-					marker_age: ($f.marker_age | num),
+					obs: ($f.obs // null)
+				}
+				+ { ($hk): ($f[$hk] | num) }
+				+ {
 					stats_age: ($f.stats_age | num),
 					pgstattuple_age: ($f.pgstattuple_age | num),
 					enforce: ($f.enforce // null)
