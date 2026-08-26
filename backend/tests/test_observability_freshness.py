@@ -26,7 +26,7 @@ def test_readyz_includes_per_series_freshness(client, monkeypatch):
 
     async def fake_freshness(database_url, timeout):
         return {
-            "marker_age_seconds": 42,
+            "heartbeat_age_seconds": 42,
             "stats_age_seconds": 130,
             "pgstattuple_age_seconds": 2400,
         }
@@ -38,7 +38,7 @@ def test_readyz_includes_per_series_freshness(client, monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["obs"] == {
-        "marker_age_seconds": 42,
+        "heartbeat_age_seconds": 42,
         "stats_age_seconds": 130,
         "pgstattuple_age_seconds": 2400,
     }
@@ -112,7 +112,7 @@ def test_freshness_connect_sets_statement_timeout(monkeypatch):
     )
     result = asyncio.run(db_module.fetch_observation_freshness("dsn", 2))
     assert result == {
-        "marker_age_seconds": 1,
+        "heartbeat_age_seconds": 1,
         "stats_age_seconds": 2,
         "pgstattuple_age_seconds": 3,
     }

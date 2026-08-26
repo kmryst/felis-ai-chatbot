@@ -143,7 +143,7 @@ class Settings:
     #（キー無しデプロイで LLM 課金経路が無認証公開される事故を構成ミスの側に倒す）
     chat_api_key: str = field(repr=False)
     # 緊急遮断フラグ。true で /chat を 404 にする（消費超過時の打ち切りスイッチ。
-    # credit-window-execution-plan.md §9）。/readyz・/health には影響しない
+    # credit-window-execution-plan.md §9）。/readyz・/livez には影響しない
     chat_disabled: bool = False
 
     @classmethod

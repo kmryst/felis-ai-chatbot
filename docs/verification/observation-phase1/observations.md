@@ -19,6 +19,27 @@
 > 本ファイルへの追記はすべて**失うと再取得できない証跡の保全**が目的で、
 > Azure・GitHub Actions・`obs.phase_config` のいずれにも書き込みを行っていない（読み取りのみ）。
 
+## 0. フィールド名の対応表（2026-08-26 の改名。Issue #133）
+
+2026-08-26 に観測系の識別子を業界標準語へ揃えた（`obs.marker` -> `obs.heartbeat` =
+heartbeat table、`code=` -> `http_code=` = curl の write-out 変数名）。
+**本ファイルと `probe-records.jsonl` の証跡は、当時の名前のまま残している。**
+
+| フェーズ 1 の証跡（旧名） | フェーズ 2 以降（新名） | 同一性 |
+| --- | --- | --- |
+| `marker_age` / `marker_age_seconds` | `heartbeat_age` / `heartbeat_age_seconds` | **同一の系列**（`obs.marker` を rename しただけで、テーブルもデータも連続している） |
+| `code` | `http_code` | **同一の値**（curl の `%{http_code}`） |
+| `obs.marker` | `obs.heartbeat` | 同一のテーブル（`ALTER TABLE ... RENAME`。migration `0004`） |
+| `MARKER_MAX_AGE` | `HEARTBEAT_MAX_AGE` | 同一の閾値（600 秒） |
+
+改名しない理由: `probe-records.jsonl`（131 行）は **抽出元の GitHub Actions ログとの
+再現性を保つ**ために凍結している。`scripts/collect-probe-records.sh` は元ログの
+`PROBE` 行から `k=v` を literal で抽出するため、JSONL 側だけ改名すると再抽出で
+復元できなくなる。スクリプト側は新旧どちらのフィールド名も読めるようにし、
+**出力キーは元ログに出ていた名前に追随する**ので、この窓を再抽出すれば
+既存の 131 行と一致する（改名後の 2026-08-26 に実測で確認済み）。
+同じ理由で `docs/verification/` 配下の過去の実測記録は当時の表記のまま残す。
+
 ## 1. デプロイ（2026-08-23）
 
 ### 1-1. plan の差分要約

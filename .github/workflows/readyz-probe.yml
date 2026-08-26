@@ -1,8 +1,8 @@
 # /readyz 外形監視（Issue #106。設計の正本: docs/operations/credit-window-execution-plan.md §5-3 / §3 の 7）
 #
 # - 5 分間隔で /readyz を外部視点から probe し、稼働率・レイテンシの SLI を蓄積する
-# - 併せて観測 3 系列（マーカー / 統計 / pgstattuple）の鮮度を**系列別に**判定する
-#   （束ねた 1 値では「マーカーだけ新しくて統計が止まっている」を見逃すため）
+# - 併せて観測 3 系列（heartbeat / 統計 / pgstattuple）の鮮度を**系列別に**判定する
+#   （束ねた 1 値では「heartbeat だけ新しくて統計が止まっている」を見逃すため）
 # - 鮮度ゲートは**既定で有効**。「まだ始まっていない」と「壊れた」を区別して判定する:
 #   - .obs キーが無い（採取側 #104 未デプロイ）→ skip（green）
 #   - .obs キーはあるが null（採取側はデプロイ済みなのに鮮度クエリが失敗）→ fail
@@ -52,8 +52,8 @@ jobs:
       # repository variable READYZ_URL で上書きする（terraform output から取得）
       READYZ_URL: ${{ vars.READYZ_URL || 'https://ca-felisaichatbot-dev.blackbush-a1db7f50.japaneast.azurecontainerapps.io/readyz' }}
       # 鮮度ゲートの系列別閾値（秒）。根拠は計画 §5-3（採取間隔の約 3 倍。
-      # マーカーのみ probe 間隔 5 分の 2 倍 = 10 分）
-      MARKER_MAX_AGE: "600"
+      # heartbeat のみ probe 間隔 5 分の 2 倍 = 10 分）
+      HEARTBEAT_MAX_AGE: "600"
       STATS_MAX_AGE: "900"
       PGSTATTUPLE_MAX_AGE: "10800"
       # 鮮度ゲートだけを強制停止する非常口（既定 true = ゲート有効）。
@@ -71,12 +71,12 @@ jobs:
           fi
           ts="$(date -u +%FT%T.%3NZ)"
           # SLI は 1 回の素の試行を記録する（リトライすると可用性の実測にならない）
-          code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
+          http_code_time=$(curl -sS -o /tmp/readyz-body.json -w '%{http_code} %{time_total}' \
             --max-time 30 "$READYZ_URL" || echo "000 30.000")
           # curl は失敗時にも -w の出力（000 …）を出すことがあり、その場合は
           # || のフォールバック文字列と連結される。先頭 2 フィールド（実測値
           # 優先）を採る（レビュー指摘対応。実測: 実 curl の timeout で確認済み）
-          read -r code latency_s _ <<<"$code_time"
+          read -r http_code latency_s _ <<<"$http_code_time"
           latency_ms=$(awk -v t="$latency_s" 'BEGIN { printf "%d", t * 1000 }')
 
           # .obs の状態を区別する（判定は冒頭コメントの表のとおり）:
@@ -86,7 +86,7 @@ jobs:
           #   invalid = 200 なのに body が JSON object でない（absent に化けさせない）
           obs_state="absent"
           obs_json="null"
-          if [ "$code" = "200" ]; then
+          if [ "$http_code" = "200" ]; then
             if ! jq -e 'type == "object"' /tmp/readyz-body.json >/dev/null 2>&1; then
               obs_state="invalid"
             elif [ "$(jq -r 'has("obs")' /tmp/readyz-body.json)" = "true" ]; then
@@ -98,21 +98,21 @@ jobs:
               fi
             fi
           fi
-          marker_age=$(jq -r '.marker_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
+          heartbeat_age=$(jq -r '.heartbeat_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
           stats_age=$(jq -r '.stats_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
           pgst_age=$(jq -r '.pgstattuple_age_seconds // "null"' <<<"$obs_json" 2>/dev/null || echo "null")
 
           # 機械可読レコード（集計はこの行を grep する。ts= が実測タイムスタンプ）
-          echo "PROBE ts=$ts code=$code latency_ms=$latency_ms obs=$obs_state marker_age=$marker_age stats_age=$stats_age pgstattuple_age=$pgst_age enforce=$ENFORCE"
+          echo "PROBE ts=$ts http_code=$http_code latency_ms=$latency_ms obs=$obs_state heartbeat_age=$heartbeat_age stats_age=$stats_age pgstattuple_age=$pgst_age enforce=$ENFORCE"
           {
-            echo "| ts | code | latency_ms | obs | marker_age | stats_age | pgstattuple_age |"
+            echo "| ts | http_code | latency_ms | obs | heartbeat_age | stats_age | pgstattuple_age |"
             echo "| --- | --- | --- | --- | --- | --- | --- |"
-            echo "| $ts | $code | $latency_ms | $obs_state | $marker_age | $stats_age | $pgst_age |"
+            echo "| $ts | $http_code | $latency_ms | $obs_state | $heartbeat_age | $stats_age | $pgst_age |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail=0
-          if [ "$code" != "200" ]; then
-            echo "::error::readyz probe failed: HTTP $code"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::readyz probe failed: HTTP $http_code"
             fail=1
           elif [ "$ENFORCE" != "true" ]; then
             echo "freshness gate disabled via OBS_FRESHNESS_ENFORCE; skipping gate."
@@ -144,7 +144,7 @@ jobs:
               fi
               return 0
             }
-            check marker "$marker_age" "$MARKER_MAX_AGE" || fail=1
+            check heartbeat "$heartbeat_age" "$HEARTBEAT_MAX_AGE" || fail=1
             check stats "$stats_age" "$STATS_MAX_AGE" || fail=1
             check pgstattuple "$pgst_age" "$PGSTATTUPLE_MAX_AGE" || fail=1
           fi

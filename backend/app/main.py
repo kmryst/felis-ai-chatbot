@@ -78,11 +78,16 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
+@app.get("/livez")
+async def livez() -> dict[str, str]:
     """liveness: プロセスが生きているかだけを返す。依存先（DB 等）は見ない。
 
     依存先を見ると、DB 障害時にコンテナ再起動ループを引き起こすため。
+
+    パス名は Kubernetes の標準に揃えている（liveness = /livez、readiness = /readyz の対）。
+    /healthz は v1.16 で deprecated され、公式に "use livez and readyz instead" と
+    書かれている。出典:
+    https://kubernetes.io/docs/reference/using-api/health-checks/
     """
     return {"status": "ok"}
 
@@ -92,7 +97,7 @@ async def readyz() -> JSONResponse:
     """readiness: トラフィックを受けられるか。DB 到達性を実際に確認する。
 
     DB に到達できない間は 503 を返し、トラフィックを受けない。
-    liveness（/health）とは役割が異なり、こちらが落ちてもプロセスは再起動されない。
+    liveness（/livez）とは役割が異なり、こちらが落ちてもプロセスは再起動されない。
     """
     db_ok = await check_database_ready(
         settings.database_url, settings.db_connect_timeout_seconds
@@ -141,7 +146,7 @@ def _enforce_chat_gate(
       「/chat が無い」側に倒す
     - キー不一致・未提示: 401。比較は secrets.compare_digest（タイミング攻撃対策の定石。
       このアプリの脅威モデルでは過剰気味だが、コストゼロなので定石に従う）
-    - /readyz・/health はこのゲートの対象外（外形監視と両立させる。#106）
+    - /readyz・/livez はこのゲートの対象外（外形監視と両立させる。#106）
     """
     # 最小長チェックは from_env（起動時）と二重に行う（防御の深さ。
     # from_env を経ない経路で短い / 空白のみのキーが settings に入っても閉じたままにする）

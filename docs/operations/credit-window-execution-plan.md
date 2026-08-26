@@ -81,14 +81,14 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 | ACR + CAE managed resources | 約 0.84 USD | ADR-0018 追記 #84（Retail Prices API 実測単価） |
 | ops 常駐（min_replicas 1） | 0.194〜0.648 USD | idle 適格 6 条件充足は実測済み、**単価の実適用は未確認**（ADR-0015 追記）。実適用は稼働 2〜3 日目の課金反映で確認し、本表を実測値に更新する |
 | PostgreSQL B1ms | 0〜0.624 USD | 無料枠 750h/月 内なら 0（private access での適用は台帳で「未確定」のまま。実課金で確認） |
-| serving / マーカー Job / スナップショット採取 / probe | ≒ 0〜0.1 USD | serving はスケールゼロ実測。Job は §5-3 の見積。ACA 月次無料枠（180,000 vCPU 秒 + 360,000 GiB 秒 + 200 万リクエスト）が先に吸収 |
+| serving / heartbeat Job / スナップショット採取 / probe | ≒ 0〜0.1 USD | serving はスケールゼロ実測。Job は §5-3 の見積。ACA 月次無料枠（180,000 vCPU 秒 + 360,000 GiB 秒 + 200 万リクエスト）が先に吸収 |
 | **合計** | **約 1.0〜2.1 USD/日** | 26.7 日で 27〜56 USD。期待値 ~1.5 USD/日 ≈ 40 USD |
 
 ## 2. スケジュール（日付は目安。失効 9/18 06:59Z が唯一の硬い締め切り）
 
 | 期間（目安） | フェーズ | 内容 |
 | --- | --- | --- |
-| 8/23〜8/24 | §4 仕込み | **/chat 保護（#107。(a) 開始の前提条件 = 先行ゲート。方式は §10-2 で決定済み）** → マーカー + スナップショット採取 #104 / 予算アラート #105 / 外形監視 #106 |
+| 8/23〜8/24 | §4 仕込み | **/chat 保護（#107。(a) 開始の前提条件 = 先行ゲート。方式は §10-2 で決定済み）** → heartbeat + スナップショット採取 #104 / 予算アラート #105 / 外形監視 #106 |
 | T_obs_start（目安 8/25）〜 +72h（目安 8/28） | §5 期間観測 (a) = **フェーズ 1（低負荷ベースライン）** | 日次チェック + §5-1 の観測群。**ドリル・負荷を混ぜないクリーンな 72h**（2026-08-23 ユーザー決定 = §5-4。開始・終了の定義は下の相対時刻ルール） |
 | 8/28 | PITR ドリル 1 回目 + 合成メンテナンステスト | フェーズ 1 完了後に実施（ベースラインを汚さない位置へ移動）。手順は旧計画 §4-3 / §4-6 のまま（変更点は §7-1） |
 | 8/29〜8/30 | **フェーズ 2a（高負荷 × B1ms）** = §5-5 | 負荷生成でクレジット枯渇・vacuum 追いつき・実 bloat を観測（最大 48h。観測できた時点で切り上げ可） |
@@ -99,7 +99,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 - **観測期間は日付固定ではなく相対時刻で定義する**（外部レビュー指摘による原則。日付は目安）:
   - **T_obs_start = #104 / #106 の E2E 成功時刻と #107 の実装完了時刻の最大値**（E2E の定義は §4）
   - **フェーズ 1 は T_obs_start + 72h**（2026-08-23 ユーザー決定。96h 推奨からの変更経緯と
-    比較表は §5-4 に保存）。72h あればカウンタ系の自然発火 ~86 回・マーカー insert-vacuum 2 回・
+    比較表は §5-4 に保存）。72h あればカウンタ系の自然発火 ~86 回・heartbeat insert-vacuum 2 回・
     日次周期 3 回・SLI ~864 点が入る（§5-4 の表）
   - 遅延時: 後続（PITR1 → フェーズ 2a → (b)+2b → PITR2）を同じ間隔のままスライドする。
     テールの余裕が約 14 日あるため、旧計画のような圧縮判断は当面不要。削る必要が生じた場合の
@@ -112,7 +112,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 
 | # | 観測 | 採否 | 根拠 / 方法（採取の実装は #104） |
 | --- | --- | --- | --- |
-| 1 | autovacuum の**自然**発火 | **採用** | 合成では絶対に取れない（発火の瞬間を狙って作る合成と、閾値をワークロードが自然に越える観測は別物。閾値はテーブルによって別式で、カウンタ行は dead tuple 側の `50 + 0.2 × reltuples`、マーカーは insert 側の `1000 + 0.2 × reltuples` = §5-3 / §5-4）。`pg_stat_user_tables` の `n_dead_tup` / `last_autovacuum` / `autovacuum_count` をスナップショット採取 |
+| 1 | autovacuum の**自然**発火 | **採用** | 合成では絶対に取れない（発火の瞬間を狙って作る合成と、閾値をワークロードが自然に越える観測は別物。閾値はテーブルによって別式で、カウンタ行は dead tuple 側の `50 + 0.2 × reltuples`、heartbeat は insert 側の `1000 + 0.2 × reltuples` = §5-3 / §5-4）。`pg_stat_user_tables` の `n_dead_tup` / `last_autovacuum` / `autovacuum_count` をスナップショット採取 |
 | 2 | bloat の時系列（鋸歯） | **採用** | `pgstattuple` の定期採取。1 点の測定より説得力が桁違い。**通常の autovacuum の後に落ちるのは `dead_tuple_percent` だけで、`table_len` は縮まず `free_percent` が上がる**（領域は再利用のためテーブル内に保持され、OS へは返らない。OS へ返すのは `VACUUM FULL` / `pg_repack`。本プロジェクトは通常 VACUUM のみで、`VACUUM FULL` は実行しない）。この 3 系列の波形をそのまま取る |
 | 3 | 監視閾値の実測レンジ | **採用** | CPU / メモリ / 接続数 / ストレージ / IOPS の分布から「p95 + マージン」で閾値を決める（旧計画 §7 の要求そのもの）。Azure Monitor メトリクスは Azure 側に 93 日保持されるため採取は日次エクスポートで足りる |
 | 4 | PITR 復元ウィンドウの拡大 | **採用** | サーバー再作成直後の今は幅がほぼない。**8/29 頃に保持 7 日の窓が満杯になり `earliestRestoreDate` が動き出す**（この「窓がスライドし始める瞬間」自体が時間でしか取れない観測）。2 回目ドリルで 24 時間以上前へ復元 |
@@ -131,7 +131,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 無人運転することであり、課金反映ラグ（§1-1）のため事後検知も遅れる。決定は §10-2。
 
 1. **/chat 保護（#107）** — 上記ゲート。方式は (a) API キー + (d) 緊急遮断フラグ併設で決定済み（§10-2）。実装完了が (a) 開始の条件
-2. **マーカー書き込み + 観測スナップショット採取（#104）** — 設計は §5-3
+2. **heartbeat 書き込み + 観測スナップショット採取（#104）** — 設計は §5-3
 3. **予算アラート（#105）** — 上限 90 USD（§8。2026-08-23 に 75 から更新 = §10-1）に対し
    **実績 45.00 / 67.50 / 81.00 USD（50% / 75% / 90%）+ 予測 90 USD（100%）の 4 段**。
    FreeTrial（invoice が立たない）で Budget がクレジット消費を捉えるかは**未実測** — #105 の
@@ -142,7 +142,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 **観測開始の定義（E2E 成功時刻）**: 「#104 / #106 が Close された」ではなく、次の 3 点が
 **実測で確認できた時刻**をもって各 Issue の E2E 成功とし、`T_obs_start` はその最大値（§2）:
 
-1. **全系列の完全性**: マーカー（1 分）/ 統計スナップショット（5 分）/ pgstattuple（1 時間）の
+1. **全系列の完全性**: heartbeat（1 分）/ 統計スナップショット（5 分）/ pgstattuple（1 時間）の
    3 系列すべてが設計間隔でデータを積んでいること
 2. **系列ごとの鮮度ゲート**が /readyz 応答に載り、外形監視が読めていること
 3. **意図的な欠落時の通知試験**: 採取をわざと止め、該当系列のゲートが実際に fail して
@@ -175,7 +175,7 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
   --query "{earliest: backup.earliestRestoreDate, state: state}" -o json
 # 採取ジョブの生存（無音失敗の一次防衛。§5-3）
-az containerapp job execution list -g rg-felisaichatbot-dev-tf -n <marker-job> \
+az containerapp job execution list -g rg-felisaichatbot-dev-tf -n <heartbeat-job> \
   --query "[?properties.status!='Succeeded'] | length(@)"
 # probe 成功率は GitHub Actions の失敗通知 + 週次集計
 # Service Health / 計画メンテ（§3 の 8）
@@ -201,8 +201,8 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 
 ### 5-3. 採取の設計（#104 の実装仕様。根拠つき）
 
-- **書き込み（観測対象を作る側）**: マーカー INSERT 1 行/分 + カウンタ行 UPDATE 1 回/分。
-  dead tuple の供給源はこの UPDATE（1,440 dead tuples/日）。マーカーテーブルは INSERT-only で
+- **書き込み（観測対象を作る側）**: heartbeat INSERT 1 行/分 + カウンタ行 UPDATE 1 回/分。
+  dead tuple の供給源はこの UPDATE（1,440 dead tuples/日）。heartbeat テーブルは INSERT-only で
   dead tuple がほぼ出ないため、効くのは **insert-vacuum 側の閾値 `1000 + 0.2 × reltuples`** であり、
   dead tuple 側の閾値 `50 + 0.2 × reltuples` ではない（両者は別の条件。詳細は §5-4）。
   閾値は `reltuples` の増加とともに上がるため、**発火間隔が日を追って延びる
@@ -224,18 +224,18 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
   `docs/verification/` に別途残すので問題ない）
 - **観測者効果の明記**: 採取自体も書き込み（5 分ごと数行 INSERT + 1 時間ごとのフルスキャン読み）
   であり、WAL / バックアップ / bloat の測定値に採取分が混入する。観測用テーブルを専用スキーマに
-  分離し、テーブル別の統計（`pg_stat_user_tables` はテーブル単位）で**マーカー系と観測系を
+  分離し、テーブル別の統計（`pg_stat_user_tables` はテーブル単位）で**heartbeat 系と観測系を
   分けて記録**することで、混入を定量化可能にする
 - **無音失敗の防止（最悪 =「3 日前から止まっていた」）**: 3 層で守る
   1. Job execution の失敗は日次チェック（§5-2）で数える
   2. **鮮度ゲート（系列ごと）**: /readyz の応答に **3 系列それぞれの最新レコード経過秒**を
      含める改修（#104/#106 で設計）を入れ、外形監視が系列別の閾値超過で workflow を fail させる
      → GitHub の失敗通知で即日検知（probe の生存確認と採取の生存確認を 1 本に束ねる）。
-     「マーカーだけ新しくて統計採取が 3 日前に止まっている」を防ぐため、**束ねた 1 値ではなく
-     系列別に判定**する。閾値: マーカー **10 分** / 統計スナップショット **15 分** /
+     「heartbeat だけ新しくて統計採取が 3 日前に止まっている」を防ぐため、**束ねた 1 値ではなく
+     系列別に判定**する。閾値: heartbeat **10 分** / 統計スナップショット **15 分** /
      pgstattuple **3 時間**。根拠: probe 間隔（5 分）以上であること + 採取間隔の約 3 倍 =
      一時的失敗 2 回まで許容し 3 回連続相当で fail（cron ジッタ・一過性エラーでの誤報防止。
-     マーカーは 1 分間隔だが 3 分では probe 間隔より短く判定不能のため probe 間隔の 2 倍 = 10 分）
+     heartbeat は 1 分間隔だが 3 分では probe 間隔より短く判定不能のため probe 間隔の 2 倍 = 10 分）
   3. 週次の集計（probe 成功率・Job 成功数）で取りこぼしを拾う
 
 ### 5-4. 観測期間の長さ: 分析と決定（**72h に決定。2026-08-23**）
@@ -276,7 +276,7 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 
 - **カウンタ行（UPDATE 毎分・N=1）**: 発火閾値 = 50 + 0.2×1 ≈ **50 dead tuples → 約 50 分周期で
   自然発火**（1 日 ~29 回）。複数回の発火は**数時間で**満たされる
-- **マーカーテーブル（INSERT 毎分・insert-vacuum）**: 閾値は
+- **heartbeat テーブル（INSERT 毎分・insert-vacuum）**: 閾値は
   `autovacuum_vacuum_insert_threshold + autovacuum_vacuum_insert_scale_factor × reltuples`
   = `1000 + 0.2 × reltuples`。**当初の予測は外れた。訂正の経緯を残す（当初 2026-08-23 / 訂正 2026-08-26）**:
   - **当初（誤）**: 閾値の `reltuples` を「**前回 vacuum 時点の行数**」として計算し、発火時刻を
@@ -286,7 +286,7 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
   - **原因**: `pg_class.reltuples` は VACUUM だけでなく **ANALYZE でも更新される**。
     PostgreSQL 17 公式は reltuples を
     "It is updated by `VACUUM`, `ANALYZE`, and a few DDL commands such as `CREATE INDEX`." と定義する。
-    マーカーテーブルは analyze 側の閾値 `50 + 0.1 × reltuples` を INSERT だけで頻繁に越えるため、
+    heartbeat テーブルは analyze 側の閾値 `50 + 0.1 × reltuples` を INSERT だけで頻繁に越えるため、
     `reltuples` は「前回 vacuum 時点の行数」ではなく **ほぼ現在行数に追随する**。
     つまり vacuum を待つ間も閾値が上がり続けるので、当初の計算は発火を早く見積もりすぎていた
   - **補正式**: 前回 vacuum 以降に挿入した行数 m が
@@ -301,7 +301,7 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 
 | 観測（§3 の #） | 律速 | 必要日数の下限 |
 | --- | --- | --- |
-| 1 autovacuum 発火・2 bloat 鋸歯・6 WAL・10 XID age | **書き込みレート**（上の計算のとおり現行の書き込み設計のままで充足） | カウンタ系は数時間。マーカーの伸びる曲線のみ日数比例（補正後: 2 点 = 3 日、3 点 = 4 日） |
+| 1 autovacuum 発火・2 bloat 鋸歯・6 WAL・10 XID age | **書き込みレート**（上の計算のとおり現行の書き込み設計のままで充足） | カウンタ系は数時間。heartbeat の伸びる曲線のみ日数比例（補正後: 2 点 = 3 日、3 点 = 4 日） |
 | 3 閾値レンジ・7 SLI・5 バックアップ推移・11 LA 取込 | **カレンダー（日内・日次周期）** | 周期 2〜3 回 = 2〜3 日で形は出る。日数は分布の n（SLI: 288 点/日）と p95 の安定を買う。**注**: ここで得る「閾値」はフェーズ 1 の負荷特性に対するもの（成果物の書き方は §5-4 = 閾値の数値でなく可観測性ループの実証を主張する） |
 | 4 PITR 窓の拡大・スライド開始 | **純カレンダー。ただしサーバー作成 8/22 起点で観測期間と独立に進行**（スライド開始は 8/29〜30 頃、日次チェックで受動的に取れる） | 観測期間の長さに依存しない（teardown が 8/31 以降なら捕捉可） |
 | PITR 2 回目の「24h+ 前へ復元」 | 純カレンダー | T_obs_start から 24h |
@@ -469,7 +469,7 @@ H3 の一次情報（[Compute options](https://learn.microsoft.com/en-us/azure/p
 
 ### 7-1. 変更点のみ
 
-- マーカーは #104 の常時書き込みの**実履歴**を使う（ドリルのために回し始めない）
+- heartbeat は #104 の常時書き込みの**実履歴**を使う（ドリルのために回し始めない）
 - 1 回目（8/28。**フェーズ 1 完了後**に移動 — ベースライン 72h をドリルの書き込みで汚さない）:
   復元ウィンドウが浅い状態での基準計測 + 合成メンテナンステスト（旧計画 §4-6。**合成は残す** —
   狙って再現できるのは合成だけで、阻害条件は 2026-08-19 にローカル実測済み。§3 の自然発火観測と
