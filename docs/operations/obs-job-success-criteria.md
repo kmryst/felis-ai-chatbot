@@ -79,3 +79,17 @@ $ psql "$DATABASE_URL" -X -At -F'|' -c "SELECT (ts AT TIME ZONE 'UTC')::date AS 
 - 一方、失敗の実駆動因（ACA 起動パイプライン）は日次で悪化傾向にあり、負荷 Job が同じ
   Container Apps environment に乗ることによる影響は**不確実（推測。定量根拠なし）**。
   フェーズ 2 の記録では §1 の基準値（失敗率 0.95% / 欠落 0 件）と §3 の日別件数を比較する
+
+## 5. 鮮度ゲートのスイッチ名の対応（ENFORCE / OBS_FRESHNESS_ENFORCE。#141）
+
+外形監視 workflow（`.github/workflows/readyz-probe.yml`）の鮮度ゲートでは、
+**job env の `ENFORCE` と repository variable の `OBS_FRESHNESS_ENFORCE` は同一のスイッチ**である
+（workflow が `ENFORCE: ${{ vars.OBS_FRESHNESS_ENFORCE || 'true' }}` と束ねており、既定 true = ゲート有効。
+運用上の設定・確認先は repository variable 側。
+[credit-window-execution-plan.md §4](./credit-window-execution-plan.md) の項目 4 参照）。
+`enforce` という語の選択自体はポリシー系ツールの標準語彙に沿っている
+（Kyverno の `validationFailureAction: Enforce / Audit`、Gatekeeper の `enforcementAction`）。
+
+注意: `scripts/test/readyz-probe-freshness-test.sh` が workflow 定義の `.jobs.probe.env.ENFORCE` を
+逐語パースして既定値を検証しているため、将来 workflow 側の名前を repository variable に揃える場合は
+workflow とテストスクリプトの 2 箇所を同時に修正する必要がある。

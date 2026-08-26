@@ -1,6 +1,7 @@
 # felis-ai-chatbot
 
-pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）を Azure 上に Terraform で構築しています。
+pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）。うち backend（FastAPI）と
+PostgreSQL、観測用 Job を Azure 上に Terraform で構築しています（frontend はローカル実行のみ）。
 成果物はアプリではなく、**その PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
 設定で終わらせずドリルとして実行し、実測値を証跡として残したこと**です。
 
