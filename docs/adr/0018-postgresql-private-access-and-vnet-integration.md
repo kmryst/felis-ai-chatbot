@@ -301,7 +301,7 @@ suffix は既存の非アクティブ revision と名前が衝突する。**衝�
 ### 何に変えたか
 
 `revision_suffix` の指定をやめ（Azure に一意な revision 名を自動生成させる）、DSN の sha256 先頭
-8 桁を **template 内の非 secret 環境変数 `DSN_REVISION_MARKER`** として serving / ops 両 Container App
+8 桁を **template 内の非 secret 環境変数 `DSN_CONFIG_CHECKSUM`** として serving / ops 両 Container App
 に持たせる（`terraform/ephemeral/main.tf`。アプリはこの変数を読まない）。これが正しく「DSN 変更 =
 新 revision」を担保する根拠は、変更の scope の違いにある
 （出典: 同 revisions ドキュメントの Change types 節）:
@@ -322,9 +322,9 @@ secret は `properties.configuration` にあり新 revision を作らないが�
   Azure 上に露出していた値。#84 追記 3 と同じ整理）。`nonsensitive()` はその明示
 - `azurerm_container_app_job.migrate` は revision の概念がなく従来どおり対象外（#84 追記 3）
 - 「revision 名から DSN ハッシュが読める」という副次効果は失われるが、同じ情報は revision の
-  環境変数 `DSN_REVISION_MARKER` を読めばよい
+  環境変数 `DSN_CONFIG_CHECKSUM` を読めばよい
 - 検証: `terraform validate` / ダミー変数での `terraform plan` で、両 Container App の template に
-  `DSN_REVISION_MARKER` が入り `revision_suffix` が未指定（known after apply）になることを確認
+  `DSN_CONFIG_CHECKSUM` が入り `revision_suffix` が未指定（known after apply）になることを確認
   （2026-08-22 追記時点。同日中にステップ B/C を実走し、実 apply での revision 生成
   （自動生成 suffix）と suffix 衝突時の ARM の挙動をどちらも実測で確定した。追記 #100 参照。
   Day 4 の戻し apply のみ未実施）
@@ -390,6 +390,26 @@ Retail Prices API 実測単価）が加わることが判明した（当時の�
 前提として強化）。本文中の「CAE は毎日 destroy / 再作成する ephemeral 層」等の記述は起案時の前提の
 記録であり、書き換えない。
 
+## 追記（2026-08-26。#133: 環境変数名を `DSN_REVISION_MARKER` から `DSN_CONFIG_CHECKSUM` へ改名）
+
+追記 #98 で導入した環境変数の**名前だけ**を `DSN_REVISION_MARKER` -> `DSN_CONFIG_CHECKSUM` に
+変える。判断内容（secret 更新を revision-scope の変更に化けさせる／`revision_suffix` を
+固定しない）も、値（`"dsn-" + sha256(DSN) の先頭 8 桁`）も変えていない。
+
+- **理由**: 「設定のハッシュを pod / revision 定義に埋めて、設定が変われば必ず作り直させる」のは
+  Helm 公式が `checksum/config` アノテーションとして文書化している標準パターン
+  （出典: <https://helm.sh/docs/howto/charts_tips_and_tricks/> ）。
+  `MARKER` は独自語で、しかも観測テーブル `obs.marker`（同 Issue で `obs.heartbeat` へ改名）と
+  同じ語を別の意味で使っていた
+- **影響**: 環境変数名の変更は revision-scope の変更なので、次の apply は
+  serving / ops とも新 revision を作る（この ADR が担保したい挙動そのもの）。
+  アプリはこの変数を読まないため、アプリ側の互換性影響は無い
+- 追記 #98 の本文は現行名に合わせて書き換えた（名前の対応が上のとおり 1 対 1 で、
+  旧名のまま残すと `terraform/ephemeral/main.tf` と食い違うため）。
+  一方 [vnet-cutover/observations.md](../verification/vnet-cutover/observations.md) の
+  実測記録は**当時の名前 `DSN_REVISION_MARKER` のまま**残している（実際に Azure 上で
+  観測された env 名の記録であり、書き換えると証跡でなくなるため）
+
 ## 関連
 
 - [ADR-0011](./0011-backup-retention-and-geo-redundancy.md) — 再作成でも保持 7 日の決定は不変（geo 冗長は本 ADR 起案時は無効のままの予定だったが、その後 [ADR-0019](./0019-enable-geo-redundant-backup.md) が本 ADR の再作成タイミングを利用して有効へ変更した）
@@ -398,3 +418,4 @@ Retail Prices API 実測単価）が加わることが判明した（当時の�
 - [day3-5-execution-plan.md](../operations/day3-5-execution-plan.md) §3-1 / §4
 - [vnet-integration-cutover.md](../operations/vnet-integration-cutover.md) — 移行手順の正本
 - Issue: #81 / #96（委任サブネットの service endpoint ドリフト解消）
+- Issue: #133（環境変数名の改名。上の追記）

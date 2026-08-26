@@ -249,11 +249,11 @@ az containerapp revision list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops \
   --revision <REV_PROBE1> --query "properties.template.containers[0].env"
 # → 確認して記録すること（クエリのパスは想定であり、実行時に実出力で確かめて必要なら直す）:
-#   - DATABASE_URL（secretRef が database-url を指す形）と DSN_REVISION_MARKER と
+#   - DATABASE_URL（secretRef が database-url を指す形）と DSN_CONFIG_CHECKSUM と
 #     REVISION_COLLISION_PROBE=1 の 3 つが並んでいること
 #   - secret の値そのものは絶対に出力しない。secretRef は参照名しか出ないはずだが、
 #     まず上記クエリの実出力で形式を確認し、値が展開される形のクエリは使わないこと
-# → DATABASE_URL / DSN_REVISION_MARKER のどちらかが消えていた場合は**ここで中止**し、
+# → DATABASE_URL / DSN_CONFIG_CHECKSUM のどちらかが消えていた場合は**ここで中止**し、
 #   2) 3) に進まない。ヘルプの記述と実挙動が食い違ったこと自体が記録に値する発見なので、
 #   observations.md に記録してから「後始末とゲート」（terraform apply で収束 →
 #   plan -detailed-exitcode exit 0）へ飛ぶ
@@ -298,7 +298,7 @@ az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 
 **判定表（結果に応じた Day 4 への含意。どちらに転んでも本 PR の変更で回避済みであることの確認）**:
 
-| 3) の結果 | 旧方式（`revision_suffix` = DSN ハッシュ固定）への含意 | 現方式（suffix 未指定・Azure が一意生成 + `DSN_REVISION_MARKER`）での扱い |
+| 3) の結果 | 旧方式（`revision_suffix` = DSN ハッシュ固定）への含意 | 現方式（suffix 未指定・Azure が一意生成 + `DSN_CONFIG_CHECKSUM`）での扱い |
 | --- | --- | --- |
 | エラーが返る | Day 4 の戻し apply（§4-5）が同じ衝突でブロックされていたことの実証になる | suffix を指定しないため衝突自体が発生しない |
 | 黙認され、古い内容のまま | 「元サーバーに戻したつもりで復元先を見続ける」= RTO / RPO の計測値が偽になっていたことの実証になる | 同上 |
@@ -309,7 +309,7 @@ az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 > `--set-env-vars` : Add or update environment variable(s) in container. **Existing environment
 > variables are not modified.** Space-separated values in 'key=value' format.
 
-既存の env（secret 参照の `DATABASE_URL` と `DSN_REVISION_MARKER`）を**消さずに**追加できる。
+既存の env（secret 参照の `DATABASE_URL` と `DSN_CONFIG_CHECKSUM`）を**消さずに**追加できる。
 対して `--replace-env-vars` は同ヘルプで
 "Replace environment variable(s) in container. **Other existing environment variables are
 removed.**" とされており、これを使うと ops の DB 接続が壊れるため**使わない**。
@@ -428,11 +428,11 @@ az postgres flexible-server restore \
 ```
 
 - 復元サーバーは**同じ VNet に入る**（public へは復元できない。ADR-0018 の出典参照）。
-  接続検証（`SELECT 1` / マーカー行数）は ops コンテナから、**復元先の FQDN を指す専用 DSN** で行う
+  接続検証（`SELECT 1` / heartbeat 行数）は ops コンテナから、**復元先の FQDN を指す専用 DSN** で行う
   （元サーバーの `DATABASE_URL` と混ぜない。手順は計画書 §4-3）
 - アプリ・ops を復元先へ向け替えるときは `TF_VAR_database_url` を更新して ephemeral 層を apply する。
   secret の更新は既存 revision に自動反映されないが、template 内の非 secret 環境変数
-  `DSN_REVISION_MARKER`（DSN ハッシュ）が変わるため apply が必ず新 revision を作る
+  `DSN_CONFIG_CHECKSUM`（DSN ハッシュ）が変わるため apply が必ず新 revision を作る
   （コードで担保。`terraform/ephemeral/main.tf` / ADR-0018 追記 #98）
 - 委任サブネットは `/27`（32 アドレス、Azure 予約 5 を除き実質 27。ADR-0018 追記）で、
   復元中の 2 台同居 + HA standby（新計画 §6）を見込んでも余白がある。それでも復元が失敗したら
