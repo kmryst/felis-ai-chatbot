@@ -144,7 +144,7 @@ resource "azurerm_container_app" "main" {
     # secret（database-url）の更新は既存 revision に自動反映されない（新しい revision の作成
     # または restart が必要。出典: https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets ）。
     # DSN が変わる apply（Day 4 の PITR 後の復元先への向け替え等）で新 revision の作成をコードで
-    # 担保するため、DSN のハッシュを template 内の非 secret 環境変数（DSN_REVISION_MARKER。下の
+    # 担保するため、DSN のハッシュを template 内の非 secret 環境変数（DSN_CONFIG_CHECKSUM。下の
     # container ブロック）として持たせる。revision_suffix への埋め込みは使わない: revision 名は
     # 一意必須（"Every revision in Container Apps is assigned a unique identifier."）で、非アクティブ
     # revision は最大 100 件保持されるため、Day 4 の 元サーバー → 復元先 → 元サーバー の往復では
@@ -189,10 +189,15 @@ resource "azurerm_container_app" "main" {
       # ハッシュは sha256 の先頭 8 桁のみで不可逆（DSN・パスワードは復元できない）。値自体は
       # 秘匿情報ではなく（従来は revision 名として Azure 上に露出していた値）、nonsensitive() は
       # その明示 + plan 出力を無用にマスクさせないため。
+      # 命名: 「設定のハッシュを pod / revision 定義に埋めて、設定変更で必ず再作成させる」のは
+      # Helm 公式が `checksum/config` アノテーションとして文書化しているパターン。
+      # 出典: https://helm.sh/docs/howto/charts_tips_and_tricks/
+      # （env 名を DSN_CONFIG_CHECKSUM としたのはこの標準語に接続するため。Issue #133。
+      #   値のプレフィクス "dsn-" は既存 revision との差分の意味を保つため変えていない）
       dynamic "env" {
-        for_each = var.database_url == "" ? [] : ["dsn-revision-marker"]
+        for_each = var.database_url == "" ? [] : ["dsn-config-checksum"]
         content {
-          name  = "DSN_REVISION_MARKER"
+          name  = "DSN_CONFIG_CHECKSUM"
           value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
         }
       }
@@ -207,7 +212,7 @@ resource "azurerm_container_app" "main" {
       }
 
       # 緊急遮断フラグ（値の変更は revision-scope なので必ず新 revision が作られ、
-      # 反映漏れが起きない = DSN_REVISION_MARKER と同じ理屈）
+      # 反映漏れが起きない = DSN_CONFIG_CHECKSUM と同じ理屈）
       env {
         name  = "CHAT_DISABLED"
         value = var.chat_disabled ? "true" : "false"
@@ -277,7 +282,7 @@ resource "azurerm_container_app" "ops" {
     # serving 側と同じ理由（secret 更新は既存 revision に自動反映されない）で、DSN 変更の apply が
     # 必ず新 revision を作るようにする。ops コンテナは Day 4 の RTO / RPO 計測経路そのもののため、
     # 古い revision が元サーバーの DSN を見続けると計測が偽になる。担保は serving 側と同じく
-    # 非 secret 環境変数 DSN_REVISION_MARKER（revision-scope。下の container ブロック）で行い、
+    # 非 secret 環境変数 DSN_CONFIG_CHECKSUM（revision-scope。下の container ブロック）で行い、
     # revision_suffix 固定は往復 apply での名前衝突のため使わない（ADR-0018 追記）
 
     # 1 の理由は resource 冒頭のコメント（0 宣言は実態と食い違い、idle 適格も外していた）
@@ -300,7 +305,7 @@ resource "azurerm_container_app" "ops" {
 
       # 新 revision 作成のコード担保（詳細コメントは serving 側の同名 env を参照）
       env {
-        name  = "DSN_REVISION_MARKER"
+        name  = "DSN_CONFIG_CHECKSUM"
         value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
       }
     }
@@ -319,7 +324,7 @@ resource "azurerm_container_app" "ops" {
 # 課金は実行中のレプリカ分のみ（Manual トリガーで放置中はゼロ）。
 # Job には revision の概念がなく（azurerm 5.1.0 の実スキーマでも template に revision_suffix なし。
 # 2026-08-22 に providers schema で確認）、実行のたびに新しい execution が作られるため、
-# Container App 側のような DSN_REVISION_MARKER によるコード担保は不要。secret 更新後の挙動
+# Container App 側のような DSN_CONFIG_CHECKSUM によるコード担保は不要。secret 更新後の挙動
 # （新 execution が更新後の値を読むか）は cutover 実測時に確認する（未実測）。
 resource "azurerm_container_app_job" "migrate" {
   count = var.ops_container_image == "" ? 0 : 1
@@ -385,7 +390,7 @@ resource "azurerm_container_app_job" "migrate" {
 # 設計の正本: docs/operations/credit-window-execution-plan.md §5-3）。
 # - cron_expression が azurerm 5.1.0 の schedule_trigger_config に存在することは
 #   `terraform providers schema -json` で確認済み（2026-08-23。必須属性は cron_expression のみ）
-# - 実行内容は ops イメージ内の /app/observability/collect.sql（マーカー INSERT +
+# - 実行内容は ops イメージ内の /app/observability/collect.sql（heartbeat INSERT +
 #   カウンタ UPDATE を毎分、統計スナップショットは分 % 5 = 0、pgstattuple は分 = 0 のみ）
 # - コスト目安: 実行数秒 × 1440 回/日 × active 単価 0.0000075 USD/秒 ≈ 0.05 USD/日前後
 #   + Consumption 無料枠吸収（#104 の受け入れ条件でデプロイ後に実測する）
