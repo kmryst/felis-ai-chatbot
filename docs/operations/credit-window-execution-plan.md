@@ -178,6 +178,9 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 az containerapp job execution list -g rg-felisaichatbot-dev-tf -n <heartbeat-job> \
   --query "[?properties.status!='Succeeded'] | length(@)"
 # probe 成功率は GitHub Actions の失敗通知 + 週次集計
+#   ※ 採取ジョブの execution 失敗件数は見張りの別指標であり、合否には使わない。
+#     合否は採取データの完全性で判定する（正本: obs-job-success-criteria.md。#104 / #131）。
+#     起動遅延型の失敗は DB のみで計数できる（同書 §3 のクエリ。日次推移の記録は #138）
 # Service Health / 計画メンテ（§3 の 8）
 az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
   --query "maintenanceWindow" -o json
@@ -406,6 +409,17 @@ H3 の一次情報（[Compute options](https://learn.microsoft.com/en-us/azure/p
 - 観測者効果の整理（§5-3）との整合: 採取側は不変のまま。負荷生成そのものは「観測対象の
   ワークロード」であって観測者ではない（フェーズラベルで分離されるため、フェーズ 1 の
   ベースラインを汚さない）
+
+#### 採取 Job への影響（#131 の切り分け結果。2026-08-26 追記）
+
+- **pgstattuple の採取コストはフェーズ 2 で悪化しない**: bloat 走査対象は `collect.sql` の
+  VALUES リストで `obs.heartbeat` / `obs.counter` の固定 2 テーブルのみで、`load` スキーマは
+  対象外。heartbeat の成長は 1,440 行/日 ≈ 63KB/日 で、55 秒の deadline に対して 4 桁以上の
+  余裕がある（実測根拠は #131）
+- obs Job の execution 失敗（`DeadlineExceeded`。フェーズ 1 で 0.95%）の実体は SQL ではなく
+  ACA 側のコンテナ起動パイプラインで、負荷 Job が同じ environment に乗ることによる影響は
+  **不確実（推測。定量根拠なし）**。フェーズ 2 の記録では失敗率 0.95% / データ欠落 0 件を
+  基準値として前後比較する（判定基準の正本: obs-job-success-criteria.md。日次推移は #138）
 
 #### コスト（§8 に反映済み）
 
