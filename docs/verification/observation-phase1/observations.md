@@ -623,10 +623,10 @@ rows with XIDs older than the age specified by the configuration parameter `auto
 anti-wraparound autovacuum が走る計算になる。結論は変わらず
 **本プロジェクトの期間では問題にならない**（2026-08-26 訂正）。
 
-> **未実測の前提**: この 2 億は `autovacuum_freeze_max_age` の**公式ドキュメント記載の既定値**であり、
-> 計画 §5-4 の実測表にある他の autovacuum パラメータと違って **本環境の `pg_settings` では実測していない**。
-> Azure Database for PostgreSQL flexible server 側で既定値が変えられている可能性を排除できていないため、
-> 現時点では実測値ではなく前提として扱う。teardown 前の 1 クエリで確認する。
+> **当初は未実測の前提だった（2026-08-26 に解消）**: この 2 億は `autovacuum_freeze_max_age` の
+> **公式ドキュメント記載の既定値**で、計画 §5-4 の実測表にある他の autovacuum パラメータと違って
+> 本環境の `pg_settings` では実測していなかった。**[§9-5](#9-5-autovacuum_freeze_max_age-の実測) で
+> `pg_settings` の実測値が 200000000 であることを確認した**ため、上の外挿は実測値に基づく。
 
 **閾値レンジ（§3 の 3）** — Azure Monitor、`--interval PT5M`、
 `--start-time 2026-08-23T08:16:00Z --end-time 2026-08-24T06:05:58Z`（**end-time を必ず指定**。
@@ -855,3 +855,209 @@ serving は `min_replicas 0` のため、5 分間隔の probe は**毎回 cold s
 - `min_replicas` を 1 にすれば cold start は消えて「アプリの可用性」に近い SLI になるが、
   常時課金になる。**この構成のまま限定を明記する**方針を取る（計画 §5-4 の
   「取り繕わない限定の明記」と同じ扱い）
+
+## 9. フェーズ 1 完走後の追補（2026-08-26 取得）
+
+**取得時刻: 2026-08-26T08:49Z 〜 08:54Z。すべて読み取りのみ**（Azure への書き込み・
+`.github/workflows/` の変更・probe の手動実行はいずれも行っていない）。
+本節は Issue #104 / #106 の受け入れ条件を判定するために取り直した実測値で、
+§8 の SLI（probe 側の値）に対して**採取側と課金側**を埋めるもの。
+
+### 9-1. 採取 3 系列の完全性（固定 72h 窓）
+
+窓の定義は §8-1 と同じ `[2026-08-23T08:16:19Z, 2026-08-26T08:16:19Z)`。
+ops コンテナ経由の psql（`SELECT` のみ）で取得した。
+
+```bash
+az containerapp exec -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --command bash
+# コンテナ内: psql "$DATABASE_URL" -At -F"|" で以下を実行（2026-08-26T08:51Z 取得）
+#   SELECT count(*), min(ts), max(ts) FROM obs.<series>
+#     WHERE ts >= '2026-08-23T08:16:19Z' AND ts < '2026-08-26T08:16:19Z';
+#   gap は lag(ts) OVER (ORDER BY ts) の差の分布
+```
+
+| 系列 | 設計間隔 | 名目件数 | 実測件数 | 取得率 | 最初 | 最後 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `obs.marker` | 1 分 | 4,320 | **4,320** | **100.0%** | 2026-08-23 08:16:19.691958+00 | 2026-08-26 08:15:52.752028+00 |
+| `obs.db_stats` | 5 分 | 864 | 773 | 89.5% | 2026-08-23 08:16:19.707919+00 | 2026-08-26 08:12:18.107579+00 |
+| `obs.table_stats`（distinct ts） | 5 分 | 864 | 773 | 89.5% | 同上 | 同上 |
+| `obs.bloat_stats`（distinct ts） | 1 時間 | 72 | **72** | **100.0%** | 同上 | 2026-08-26 07:54:18.422579+00 |
+
+gap の分布（連続する 2 レコードの ts の差）:
+
+| 系列 | 鮮度ゲートの閾値 | min gap | max gap | 閾値を超えた gap |
+| --- | --- | --- | --- | --- |
+| `obs.marker` | 600 秒 | 21.26 秒 | **99.28 秒** | **0 件** |
+| `obs.db_stats` | 900 秒 | — | **393.32 秒** | **0 件**（600 秒超も 0 件） |
+| `obs.bloat_stats` | 10,800 秒 | — | **3,677.18 秒** | **0 件**（7,200 秒超も 0 件） |
+
+- **マーカーは 72h 窓で 1 分も欠けていない**（4,320 / 4,320）。90 秒超の gap は 27 件あるが
+  最大でも 99.28 秒で、その分は次の gap が短くなって相殺されている（cron 起動時刻のゆらぎであり、
+  分の取りこぼしではない）。件数が名目と完全一致することがその裏付け
+- 5 分系列の 89.5% は §3-2 のラチェット（`max(ts) <= now() - interval '5 minutes'` による
+  経過時間ベース判定）の帰結で、**欠測ではなく実効間隔が約 5.6 分になっている**もの。
+  gap の最大 393.32 秒は鮮度ゲートの閾値 900 秒に対して十分内側にある
+- pgstattuple は 72 / 72 で完全。最大 gap 3,677.18 秒は設計 1 時間 + 77 秒
+
+### 9-2. execution status と採取データの完全性は別物である（実測での裏取り）
+
+§3-3 で 2 件だけ観測していた「SQL は完走しているのに execution は Failed」は、
+72h 窓では**恒常的に起きていた**。
+
+```console
+$ date -u +%FT%TZ
+2026-08-26T08:53:28Z
+$ az containerapp job execution list -g rg-felisaichatbot-dev-tf \
+    -n caj-felisaichatbot-dev-obs --query "length(@)"
+144        # 内訳: Succeeded 100（履歴上限。§3-4）/ Failed 43 / Running 1
+```
+
+| 項目 | 値 |
+| --- | --- |
+| 窓内の名目 execution 数 | 4,320 |
+| 窓内の Failed | **41**（0.95%） |
+| 窓外の Failed | 2 件（`2026-08-23T07:15:00Z` = §3-1 の構造的初回失敗 / `2026-08-26T08:17:00Z` = 窓の直後） |
+| 窓内の Succeeded | **数えられない**（履歴上限 100 で切られる。§3-4） |
+
+失敗の原因は Log Analytics の実測で 1 種類に収束する
+（`az rest` で `https://api.loganalytics.io/v1/workspaces/<workspace>/query` を叩いた。
+2026-08-26T08:53:58Z / 08:54:07Z 取得）:
+
+```kusto
+ContainerAppSystemLogs_CL
+| where TimeGenerated >= datetime(2026-08-23T08:16:19Z) and TimeGenerated < datetime(2026-08-26T08:16:19Z)
+| where Log_s has 'caj-felisaichatbot-dev-obs'
+| summarize c=count() by Reason_s
+```
+
+| `Reason_s` | 件数 |
+| --- | --- |
+| `SuccessfulCreate` | 4,924 |
+| `ProcessExited` | 4,277 |
+| `Completed` | 4,275 |
+| `PodDeletion` | 4,276 |
+| `AssigningReplica` | 4,312 |
+| **`DeadlineExceeded`** | **40** |
+| `SuccessfulDelete` | 323 |
+| `SawCompletedJob` | 24 |
+| `FailedDelete` | 1 |
+
+`ProcessExited` の exit code を同じ窓で集計すると:
+
+| exit code | 件数 |
+| --- | --- |
+| **0** | **4,277** |
+
+- **窓内の `ProcessExited` は 4,277 件すべてが exit 0**。§3-1 の exit 3（`relation "obs.marker"
+  does not exist`）は窓の外（07:15:00Z）にあり、窓内には 1 件もない
+- **窓内の Failed 41 件は `DeadlineExceeded`（`replicaTimeout: 55` 秒での打ち切り）に対応する**。
+  打ち切られた execution は exit code を残さないため、上の 4,277 件には現れない
+  （4,320 − 4,277 ≒ 43 が打ち切り側の規模感と整合する）
+- **それでも採取データは 1 件も欠けていない**（9-1 のマーカー 4,320 / 4,320）。
+  §3-3 の教訓「execution status と採取データの完全性は別物」は、2 件の逸話ではなく
+  **72h 窓 41 件の実測で裏が取れた**
+- 「毎分の execution が Succeeded」を受け入れ条件にすると、**データが完全でも 41 件で不合格になる**。
+  判定は採取データの完全性で行い、execution status は失敗件数と原因を別指標として記録するのが正しい
+
+### 9-3. azurerm provider の Schedule トリガー cron 記法（schema 確認）
+
+`terraform/ephemeral/main.tf` のコメントには「`terraform providers schema -json` で確認済み
+（2026-08-23）」とあったが、**出力そのものが記録に残っていなかった**ため取り直した。
+`providers schema` は state にもリモートにも触れない読み取り操作である。
+
+```console
+$ date -u +%FT%TZ
+2026-08-26T08:50:33Z
+$ terraform -chdir=terraform/ephemeral providers schema -json | jq '...'
+```
+
+azurerm **5.1.0**（`.terraform.lock.hcl` の固定版）の
+`azurerm_container_app_job` → `schedule_trigger_config`:
+
+| 属性 | 型 | 必須 | schema の description |
+| --- | --- | --- | --- |
+| `cron_expression` | string | **required** | （空） |
+| `parallelism` | number | optional | （空） |
+| `replica_completion_count` | number | optional | （空） |
+
+ブロック自体は `nesting_mode: list` / `max_items: 1`。
+
+- **schema から分かるのは「属性が存在し、必須で、string である」ことだけ**である。
+  記法（フィールド数・許容する特殊文字・タイムゾーン）を定める情報は schema には無く、
+  provider 側の validation も無い。レジストリのドキュメントも
+  "Cron formatted repeating schedule of a Cron Job." としか書いていない
+- したがって**記法は provider ではなく ARM 側の仕様**であり、確認は「provider が文字列を
+  そのまま渡すこと」と「渡した文字列が意図どおり動くこと」の 2 段で行う必要がある
+
+ARM 側に格納された値の読み取り（2026-08-26T08:50:46Z 取得）:
+
+```console
+$ az containerapp job show -g rg-felisaichatbot-dev-tf -n caj-felisaichatbot-dev-obs \
+    --query "{triggerType:properties.configuration.triggerType, cron:properties.configuration.scheduleTriggerConfig}" -o json
+{
+  "cron": { "cronExpression": "* * * * *", "parallelism": 1, "replicaCompletionCount": 1 },
+  "triggerType": "Schedule"
+}
+```
+
+- HCL に書いた `"* * * * *"` が **`cronExpression` へ無加工で入っている**（provider は素通しする）
+- **実挙動との突き合わせ**: 5 フィールドの標準 cron として毎分解釈されている。
+  9-1 のマーカーが 72h で 4,320 件ちょうど（= 4,320 分に 1 件ずつ）であることが、
+  記法の解釈が意図どおりであることの実測証拠になる。起動時刻の秒はゼロ
+  （`execution list` の `startTime` がすべて `:00`）で、タイムゾーンは UTC
+  （§1-2 のタイムラインと `startTime` が UTC で一致する）
+
+### 9-4. `Microsoft.App` メーターの再確認
+
+§6 の 2 / §7 で「無料付与枠に収まっているのか未反映なのか未検証」としていた点を、
+反映ラグ（台帳の記載で 1〜2 日）が明けたタイミングで取り直した。
+
+```console
+$ date -u +%FT%TZ
+2026-08-26T08:49:47Z
+$ SUB=$(az account show --query id -o tsv)
+$ az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Consumption/usageDetails?api-version=2024-08-01&\$filter=properties/usageStart%20ge%20'2026-08-19'%20and%20properties/usageEnd%20le%20'2026-08-27'&\$top=1000"
+# 77 レコード / nextLink なし
+```
+
+| 日付 (UTC) | 確定コスト (JPY) | 反映状態 |
+| --- | --- | --- |
+| 2026-08-23 | 49.748 | 確定（丸 1 日） |
+| 2026-08-24 | **49.807** | **確定（丸 1 日）** |
+| 2026-08-25 | **49.807** | **確定（丸 1 日）** |
+| 2026-08-26 | 8.301 | 部分反映（08:49Z 時点） |
+
+`consumedService` に出現した値は
+`Microsoft.CognitiveServices` / `Microsoft.ContainerRegistry` / `Microsoft.DBforPostgreSQL` /
+`Microsoft.Network` / `Microsoft.Storage` / `microsoft.operationalinsights` の 6 つで、
+**`Microsoft.App` は 1 レコードも無い**（Free メーターすら無い）。
+
+- 8/24 と 8/25 は**丸 1 日分が確定している**（ACR `Basic Registry Unit` 1.000008 /Day、
+  PostgreSQL `B1MS Compute - Free` 24 時間、`Standard IPv4 Static Public IP` 24 時間が揃っている）。
+  したがって**この 2 日については「反映ラグで見えていない」という説明はもう成り立たない**
+- obs Job（毎分 1,440 回/日）と probe による serving の cold start は、この 2 日間も
+  途切れずに動いていた。それでも**日額は 49.807 JPY で 8/23 とほぼ同一**であり、
+  課金レコード上、両者に由来する増分は現れていない
+- ただし**「課金が 0 である」ことを一次情報で確定できたわけではない**。
+  PostgreSQL は `- Free` メーターとして 0 円のレコードが出るのに対し、`Microsoft.App` は
+  **メーター自体が出ない**。無料付与枠に吸収されて 0 円のレコードすら生成されないのか、
+  Container Apps の usage record が別経路なのかを区別できる一次情報を取れていない（**未検証のまま**）
+- **obs Job 単体のコスト按分は原理的にできない**。`usageDetails` は
+  `resourceName`（= リソース単位）でしか分解できず、`Microsoft.App` のレコードが存在しない以上、
+  Job / serving / ops のどれについても行が無い。計画 §5-3 と #104 が想定した
+  「active 単価 × 実行秒数 × 1440/日」の検証は、**メーターが出るようになるまで実施できない**。
+  引き継ぎ先は Issue #115（cold start の active 課金の実測）
+
+### 9-5. `autovacuum_freeze_max_age` の実測
+
+§4-7 で「公式ドキュメント記載の既定値であり本環境では未実測」としていた値を取得した
+（9-1 と同じ psql セッション。2026-08-26T08:51Z）。
+
+```console
+=> SELECT setting FROM pg_settings WHERE name = 'autovacuum_freeze_max_age';
+200000000
+```
+
+Azure Database for PostgreSQL flexible server 側で既定値は変えられておらず、
+**§4-7 の外挿（約 1.5 万日で anti-wraparound autovacuum）は実測値に基づく**ものになった。
+§4-7 の「未実測の前提」の但し書きは解消する。
