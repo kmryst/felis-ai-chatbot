@@ -25,8 +25,8 @@ pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）を Azure 上�
 | PITR ドリル（RTO / RPO） | **未実測** — 2026-08-28 実施予定 |
 | ゾーン冗長 HA の failover ダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
 | General Purpose へのスケールのダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
-| 低負荷ベースライン観測（フェーズ 1、72h） | **完了** — 2026-08-23T08:16:19Z 起点の 72h を 2026-08-26T08:16:19Z に通過。稼働率・レイテンシ分布の最終値は採取後に確定 |
-| 外形監視の実効 coverage | **実測済み** — scheduled run 132 回 ÷ 期待 848 回 = 15.6% |
+| 低負荷ベースライン観測（フェーズ 1、72h） | **完了** — 2026-08-23T08:16:19Z 起点の固定 72h 窓。probe 131 点のうち `code=200` が 128 点（97.71%）、レイテンシ中央値 21.5 秒 / p90 24.3 秒 |
+| 外形監視の実効 coverage | **実測済み** — 固定 72h 窓で scheduled run 131 回 ÷ 名目 cron 機会 864 回 = 15.2%。最大無観測時間 102.8 分 |
 | 障害通知の到達 | **実測済み** — probe の run failure から 20 秒後に、GitHub の通知インボックスへ配送記録が生成された（メール受信の実証ではない） |
 | autovacuum の自然発火 | **実測済み** — 1 行を毎分 UPDATE するテーブルで 22.6 時間に 26 回（約 52 分周期） |
 | private access（VNet 統合）への切替 | **実測済み** — VNet 内経路の `/readyz` 200 と、作業端末からの到達不能を両方確認 |
@@ -56,6 +56,13 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
   「job status」と「採取データの完全性」は別物として扱う必要があります
 - **`gh run view --log` は failure run に対して 0 バイトを返す**（success では取得できる）。
   可用性 SLI の分子だけが黙って落ちます。REST の job logs 経由なら取得できます
+  （抽出は [scripts/collect-probe-records.sh](./scripts/collect-probe-records.sh) に固定しました）
+- **可用性 97.71% は「アプリの可用性」ではありません。**
+  serving は `min_replicas 0` なので probe は毎回 cold start を起こし、この SLI は実質
+  「cold start が curl の `--max-time` 以内に完了する率」です。保全したレコードで再計算すると、
+  タイムアウトを 30 秒から 25 秒にするだけで 97.71% → 91.60% に落ちます
+- **cron `*/5` に対して実際に起動したのは 15.2%。** 起動しなかった 733 機会は success とも
+  failure とも言えないため unknown として分母から外しています。72h の稼働率は測れていません
 
 ## もっと見る
 
