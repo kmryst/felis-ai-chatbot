@@ -1,6 +1,6 @@
 """/chat 保護ゲート（API キー + 緊急遮断フラグ。Issue #107）のテスト。
 
-- /chat のみ保護し、/health・/readyz は無認証のまま（外形監視 #106 と両立）
+- /chat のみ保護し、/livez・/readyz は無認証のまま（外形監視 #106 と両立）
 - キー未設定は fail-closed（404）: キーを配らないデプロイで LLM 課金経路が
   無認証公開される事故を「/chat が無い」側に倒す
 """
@@ -95,7 +95,7 @@ def test_readyz_and_health_not_gated_when_chat_disabled(
 
     monkeypatch.setattr(main_module, "check_database_ready", fake_ready)
 
-    assert raw_client.get("/health").status_code == 200
+    assert raw_client.get("/livez").status_code == 200
     res = raw_client.get("/readyz")
     assert res.status_code == 200
     # obs は #104（観測スナップショット）で追加された系列別鮮度。

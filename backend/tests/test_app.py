@@ -34,14 +34,14 @@ def client():
         yield c
 
 
-def test_health_returns_200(client):
-    res = client.get("/health")
+def test_livez_returns_200(client):
+    res = client.get("/livez")
     assert res.status_code == 200
     assert res.json() == {"status": "ok"}
 
 
 def test_readyz_returns_503_when_db_unreachable(client, monkeypatch):
-    """DB に到達できない場合は 503。/health は 200 のまま（liveness と分離）。"""
+    """DB に到達できない場合は 503。/livez は 200 のまま（liveness と分離）。"""
     unreachable = dataclasses.replace(
         main_module.settings,
         database_url="postgresql://x:x@127.0.0.1:1/nowhere",
@@ -51,13 +51,13 @@ def test_readyz_returns_503_when_db_unreachable(client, monkeypatch):
     res = client.get("/readyz")
     assert res.status_code == 503
     assert res.json() == {"status": "unavailable", "db": "unreachable"}
-    assert client.get("/health").status_code == 200
+    assert client.get("/livez").status_code == 200
 
 
 def test_request_id_is_honored_and_generated(client):
-    res = client.get("/health", headers={"X-Request-ID": "req-abc-123"})
+    res = client.get("/livez", headers={"X-Request-ID": "req-abc-123"})
     assert res.headers["x-request-id"] == "req-abc-123"
-    res2 = client.get("/health")
+    res2 = client.get("/livez")
     assert res2.headers["x-request-id"]  # 無ければ採番される
     assert res2.headers["x-request-id"] != "req-abc-123"
 

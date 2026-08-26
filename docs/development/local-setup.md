@@ -36,7 +36,7 @@ set -a && source ../.env && set +a   # DATABASE_URL 等を読み込む
 uv run uvicorn app.main:app --reload
 ```
 
-- `GET /health` — liveness（プロセス生存のみ。依存先は見ない。DB 停止中でも 200）
+- `GET /livez` — liveness（プロセス生存のみ。依存先は見ない。DB 停止中でも 200）
 - `GET /readyz` — readiness（DB へ `SELECT 1`。到達不能なら 503。接続 timeout は `DB_CONNECT_TIMEOUT_SECONDS`、既定 2 秒）
 - `DATABASE_URL` は必須。欠けていると起動時に即 fail する
 - `POST /chat` — チャット応答。LLM は既定でスタブ（[ADR-0004](../adr/0004-stub-llm-and-no-llm-in-ci.md)。API キー不要・実 LLM は呼ばない）。実 LLM（Azure OpenAI。[ADR-0009](../adr/0009-azure-openai-as-llm-provider.md)）を使う場合は `.env` に Azure 接続情報を設定し `LLM_PROVIDER=azure-openai` にする（CI・テストは常にスタブのまま）
