@@ -6,6 +6,7 @@
 
 - このリポジトリは**個人開発のポートフォリオ**であり、本番運用を想定した完成物ではない
 - **主成果物は PostgreSQL の Backup / PITR / Maintenance の設計・実施・記録**（[day3-5-execution-plan.md §0](./operations/day3-5-execution-plan.md)）であり、**それ以外は意図的にスコープ外**にしている
+- 本書は **Google SRE Book Chapter 32「The Evolving SRE Engagement Model」が定義する Production Readiness Review (PRR) の点検領域を参照した self-assessment** である。PRR は本来、SRE チームがサービスオーナー（開発チーム）のサービスをレビューして運用責任を引き受けるための engagement であり、**本プロジェクトで PRR を実施したわけではない**。参照しているのは点検領域の枠組みだけである
 - 本書は、足りていないことを隠さず、**理由と追跡先とともに提示する**ためのドキュメントである。「本番でそのまま使えますか？」に対して「使えません。差分はこれで、それぞれ理由と追跡先があります」と 1 枚で答えられる状態を作る
 
 ## 既存ドキュメントとの役割分担
@@ -18,6 +19,21 @@
 | **本書** | **本番との差分は何か（横断の状態一覧）** |
 
 本書の各行は「現状」「なぜ現状こうなのか（1 行）」「本番ならどうすべきか」「追跡先」だけを持つ。**事実の詳細（数値・手順・出典）は追跡先が正本**であり、本書には書かない。同じ事実を 2 箇所に書くと必ず片方が腐る（管理外リソース台帳を全リソース台帳へ統合した経緯 #76 と同じ論点）。追跡先が無い項目は「**追跡先なし**」と明記する。
+
+## PRR の点検領域と本書のカテゴリの対応
+
+参照した点検領域は次の 6 つ。本書の 7 カテゴリとの対応と、対応が無い（＝ self-assessment の穴だった）領域を明示する。
+
+| PRR の点検領域 | 本書のカテゴリ |
+| --- | --- |
+| System architecture and interservice dependencies | 1. ネットワーク境界 / 6. 構成管理（IaC のカバレッジ） |
+| Instrumentation, metrics, and monitoring | 4. 監視・運用 |
+| Emergency response | **対応が無かった** → 4. 監視・運用に行を追加 |
+| Capacity planning | **対応が無かった** → 4. 監視・運用に行を追加 |
+| Change management | 5. CI/CD・変更管理 |
+| Performance: availability, latency, and efficiency | 3. 可用性・冗長・DR |
+
+カテゴリ 2（認証・シークレット）とカテゴリ 7（アプリケーション: RAG / チャット）は、PRR の 6 領域の外側にある本書独自のカテゴリで、そのまま残す。
 
 ## 差分一覧
 
@@ -43,7 +59,7 @@
 
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
-| HA / 冗長構成 | 常設では無し。イベント計測として 2 日間（2026-09-09〜10 予定）で検証し、測ったら B1ms へ戻す（[credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §6） | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [credit-window-execution-plan.md §6](./operations/credit-window-execution-plan.md)（計測手法の正本は[旧計画 §5](./operations/day3-5-execution-plan.md)） / ADR はイベント計測の実施時に作成予定 |
+| HA / 冗長構成 | 常設では無し。イベント計測として 2 日間（2026-08-31〜09-01 予定）で検証し、測ったら B1ms へ戻す（[credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §6） | HA（GP ×2 台）の常設は課金が大きく、検証目的はフェイルオーバーの実測で足りる | 要件に応じたゾーン冗長 HA の常設 | [credit-window-execution-plan.md §6](./operations/credit-window-execution-plan.md)（計測手法の正本は[旧計画 §5](./operations/day3-5-execution-plan.md)） / ADR はイベント計測の実施時に作成予定 |
 | geo 冗長バックアップ | 有効へ確定（コード反映済み。実機反映は cutover の apply 時）。ただし geo リストアの手順整備・演習は未実施 | 無料枠の判明で 2 倍課金の前提が崩れ、作成時のみ設定可の制約を cutover の再作成で解消した。geo リストアは PITR 不可・RPO 最大 1 時間で主成果物に寄与しないため演習はスコープ外 | DR 要件に基づく geo リストア手順（ペアリージョン側 VNet 含む）の整備と定期演習 | [ADR-0019](./adr/0019-enable-geo-redundant-backup.md) / [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md) |
 | 長期保持（LTR） | 未使用（保持は 7 日のみ） | 要件（検証 3 日）< 復旧ウィンドウ（7 日）で、延長は無料枠超過リスクを増やすだけ | 保持要件（監査・コンプライアンス）に応じた LTR | [ADR-0011](./adr/0011-backup-retention-and-geo-redundancy.md)（選択肢 4 で却下） / [計画書 §9](./operations/day3-5-execution-plan.md) |
 | 読み取りレプリカ | 無し | 読み取り負荷分散・参照系分離の要件がない | 負荷・DR 要件に応じたレプリカ設計 | [計画書 §9](./operations/day3-5-execution-plan.md) |
@@ -55,6 +71,8 @@
 | --- | --- | --- | --- | --- |
 | 監視・アラート | 無し（Log Analytics 基盤と、指標・閾値根拠の表のみ） | Monitoring は面談で名指しされておらず、**時間不足なら削る筆頭**と計画に明記されている | メトリックアラート + 通知経路 + 初動 Runbook | [計画書 §7 / §1-2](./operations/day3-5-execution-plan.md) |
 | コスト監視 | 手動（CLI での残高・リソース確認を終業時に実施）。**Budget アラート導入は計画済み・実装待ち**（総消費上限 75 USD に対し 4 段閾値。2026-08-22 確定） | 当初 5 日間の検証では日次の手動見張りで足りる判断だった。常時稼働への転換（ADR-0020）で無人時間帯が生まれるため自動検知を導入する | Budget + コストアラートによる自動検知 | **Issue #105** / [credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §4 / §8 |
+| Emergency response（初動と応答体制） | Runbook・エスカレーション経路・オンコール体制のいずれも無し。障害検知は外形監視の workflow 失敗が GitHub の通知インボックスへ届く経路のみ（受け手は開発者本人 1 名、応答は在席時のみ） | 単独開発で 24/7 の応答主体が存在せず、主成果物（Backup / PITR / Maintenance / Monitoring / HA）のドリル実施を優先した。検知までは作ったが、検知後の手順は作っていない | 障害シナリオ別 Runbook・オンコールとエスカレーション・ポストモーテム運用 | **追跡先なし** |
+| Capacity planning | 計画としては無し。あるのは実測のみ（フェーズ 1 の低負荷ベースライン: WAL 生成レート・DB サイズ増加・接続数・ストレージ使用率、およびフェーズ 2 の高負荷比較） | 需要予測の元になる実トラフィックが存在せず、合成負荷から出した数字を「容量計画」と呼ぶと崩れる（同じ理由で監視閾値も「決めた」とは書いていない） | 需要予測とヘッドルーム方針、自然増・非自然増の分離、それに基づくスケールとコストの判断 | [credit-window-execution-plan.md §5-5](./operations/credit-window-execution-plan.md) / **Issue #112**（フェーズ 2 の負荷観測まで。予測は範囲外） |
 | リストア試験の継続性 | PITR ドリルは Day 4 の単発実測（定期・自動化なし） | 目的が「設計・実行した記録」であり、継続運用のフェーズがない | 定期リストア試験のスケジュール化と演習記録 | [計画書 §4](./operations/day3-5-execution-plan.md) |
 | LLM モデルの更改 | chat モデルは lifecycleStatus Legacy（廃止期限あり）。更改プロセスなし | 本検証期間の題材としては現行モデルで十分 | モデルライフサイクルの追跡と更改計画 | [ADR-0014](./adr/0014-keep-azure-openai-out-of-terraform.md)（「モデルの寿命」節） |
 

@@ -579,8 +579,24 @@ $ psql "$DATABASE_URL" -At -F"|" -c "SELECT id, phase, since FROM obs.phase_conf
 
 - `counter`（1 行 UPDATE / 分）が 22.6 時間で **26 回自然発火**（約 52 分周期）。
   設計時の予測「閾値 50 + 0.2×1 ≈ 50 → 約 50 分周期」と整合
-- `marker`（INSERT-only）は **1 回のみ**。閾値 `0.2×N + 1000` が N の増加とともに上がるため、
+- `marker`（INSERT-only）は **1 回のみ**。閾値
+  `autovacuum_vacuum_insert_threshold + autovacuum_vacuum_insert_scale_factor × reltuples`
+  = `1000 + 0.2 × reltuples` が行数の増加とともに上がるため、
   発火間隔が延びていく過程（計画 §3 の 1）はまだ 1 点しか取れていない
+- **この 1 点で当初の発火予測が外れたことが判明した（2026-08-26 訂正）**:
+  - **予測（当初）16.7h / 実測 20.5h**。観測開始 2026-08-23 07:16:18 →
+    `last_autovacuum` 2026-08-24 03:46:39 = 20 時間 30 分 21 秒
+  - **原因**: 当初は閾値の `reltuples` を「前回 vacuum 時点の行数」として計算していたが、
+    `pg_class.reltuples` は **ANALYZE でも更新される**。PostgreSQL 17 公式は
+    "It is updated by `VACUUM`, `ANALYZE`, and a few DDL commands such as `CREATE INDEX`." と定義する。
+    `marker` は analyze 側の閾値 `50 + 0.1 × reltuples` を INSERT だけで頻繁に越えるので、
+    `reltuples` はほぼ現在行数に追随し、vacuum を待つ間も閾値が上がり続ける
+  - **補正式と再計算**: 前回 vacuum 以降の INSERT 行数 m が
+    `m > 1000 + 0.2 × (前回 vacuum 時点の行数 + m)` で発火。初回は `0.8 m > 1000` →
+    m = 1250 行 = 1250 分 = **20.8h**。実測 20.5h と一致する
+    （実測がわずかに早いのは `reltuples` が直近 ANALYZE 時点の値で現在行数よりやや小さいため）
+  - **補正後の系列**: 発火間隔は公比 1.25 の等比列で **20.8h → 46.9h → 79.4h → 120.1h → 171.0h**。
+    フェーズ 1 の 72h で入る発火は **2 回**（当初計画の「3 回」は誤り。計画側も訂正済み）
 
 **WAL / DB サイズ / XID age（§3 の 6・10）** — `obs.db_stats` の最初と最後:
 
@@ -593,8 +609,20 @@ $ psql "$DATABASE_URL" -At -F"|" -c "SELECT id, phase, since FROM obs.phase_conf
 日額換算: WAL 約 **5.2 MiB/日** / DB サイズ約 **+0.64 MiB/日** / XID age 約 **+13,200/日**
 （いずれも 22.63 時間の差分を 24 時間へ線形換算した値。低負荷ベースライン下のレートであり、
 フェーズ 2 の高負荷では成り立たない）。
-XID の wraparound 閾値（20 億）まではこのレートで約 **15 万日**（2,000,000,000 ÷ 13,206）=
-**本プロジェクトの期間では問題にならない**（`autovacuum_freeze_max_age` の既定 2 億でも約 **1.5 万日**）。
+XID age についての当初の記述（「wraparound 閾値 20 億まで約 15 万日」）は**外挿の分母を取り違えていた**。
+20 億に到達する前に `autovacuum_freeze_max_age` による anti-wraparound autovacuum が走るため、
+**20 億には到達しない**。PostgreSQL 17 公式は
+"To ensure that this does not happen, autovacuum is invoked on any table that might contain unfrozen
+rows with XIDs older than the age specified by the configuration parameter `autovacuum_freeze_max_age`.
+(This will happen even if autovacuum is disabled.)" と定める。
+したがって外挿すべき分母は既定 2 億で、**約 1.5 万日**（200,000,000 ÷ 13,206）で
+anti-wraparound autovacuum が走る計算になる。結論は変わらず
+**本プロジェクトの期間では問題にならない**（2026-08-26 訂正）。
+
+> **未実測の前提**: この 2 億は `autovacuum_freeze_max_age` の**公式ドキュメント記載の既定値**であり、
+> 計画 §5-4 の実測表にある他の autovacuum パラメータと違って **本環境の `pg_settings` では実測していない**。
+> Azure Database for PostgreSQL flexible server 側で既定値が変えられている可能性を排除できていないため、
+> 現時点では実測値ではなく前提として扱う。teardown 前の 1 クエリで確認する。
 
 **閾値レンジ（§3 の 3）** — Azure Monitor、`--interval PT5M`、
 `--start-time 2026-08-23T08:16:00Z --end-time 2026-08-24T06:05:58Z`（**end-time を必ず指定**。

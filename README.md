@@ -1,13 +1,12 @@
 # felis-ai-chatbot
 
-AI チャットボットを題材に、その裏側で動くデータベース（PostgreSQL）を Azure 上に自分で構築し、
-バックアップ・復旧・保守・監視を実際に動かして、その結果を数値で記録している個人開発リポジトリです。
+pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）を Azure 上に Terraform で構築しています。
+成果物はアプリではなく、**その PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
+設定で終わらせずドリルとして実行し、実測値を証跡として残したこと**です。
 
 ## 対象ロールと、このリポジトリで示せること
 
 - **対象ロール**: DevOps Engineer / SRE / Platform Engineer / インフラエンジニア
-- **主成果物**: アプリではなく、**PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
-  設計・実行し、実測値と失敗をそのまま記録に残したこと**
 - **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps / ACR / VNet + Private DNS /
   Log Analytics を管理。DB は private access で、運用経路は VNet 内の ops コンテナに一本化
 - **可観測性**: `/readyz` の外形監視と、DB 内の観測 3 系列（1 分 / 5 分 / 1 時間）を継続採取。

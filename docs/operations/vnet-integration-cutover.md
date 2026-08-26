@@ -353,7 +353,7 @@ terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   #
 ## 4. 終業時の扱い（「毎日 destroy」を改める。ADR-0018 追記 2026-08-22）
 
 **ephemeral 層はカットオーバー後、失効前の最終 teardown（[credit-window-execution-plan.md](./credit-window-execution-plan.md)
-§9。2026-09-16 予定）まで destroy しない。** private access 化後は ops Container App / migration Job が
+§9。2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定）まで destroy しない。** private access 化後は ops Container App / migration Job が
 **唯一の DB アクセス経路**であり、夜間に ephemeral を destroy すると翌朝の PITR ドリルも疎通 probe も
 開始できないため（当初の判断根拠は ADR-0018 追記。その後 [ADR-0020](../adr/0020-credit-window-resource-strategy.md)
 の常時稼働方針 — 期間観測 (a) を止めない — でさらに強化された）。
