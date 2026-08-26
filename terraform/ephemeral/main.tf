@@ -405,7 +405,17 @@ resource "azurerm_container_app_job" "obs_collect" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   workload_profile_name        = "Consumption"
 
-  # 毎分実行のため 55 秒で必ず打ち切る（次回実行と重ねない）。psql 1 本は数秒で終わる想定
+  # 毎分実行のため 55 秒で必ず打ち切る（次回実行と重ねない）。psql 1 本は数秒で終わる想定。
+  #
+  # この値は意図的に上げない（Issue #131 の切り分け結果。2026-08-26 決定）:
+  # - DeadlineExceeded 失敗（フェーズ 1 で 0.95%）の実体は SQL ではなく ACA 側の
+  #   コンテナ起動パイプライン（起動遅延 or 完了イベント喪失）で、採取データの欠落は 0 件
+  # - 90〜110s へ延長すると毎分 cron と重なって同時 2 execution が併走し得る。
+  #   collect.sql のゲートは経過時間ベースなので二重採取は防げるが、heartbeat が
+  #   同一分に 2 行入り得て、分単位の完全性カウント（名目件数との一致判定）の意味が変わる
+  # - 完了イベント喪失型の失敗は timeout をいくら延ばしても救えない
+  # 合否は採取データの完全性で判定し、DeadlineExceeded は別指標として数える
+  # （正本: docs/operations/obs-job-success-criteria.md）
   replica_timeout_in_seconds = 55
   replica_retry_limit        = 0
 
