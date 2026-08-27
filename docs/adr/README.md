@@ -58,3 +58,4 @@
 | [0019](./0019-enable-geo-redundant-backup.md) | Accepted | geo 冗長バックアップを有効化する（無料枠の判明で 2 倍課金の前提が崩れ、cutover の再作成が最後の設定機会のため。ADR-0011 の geo 冗長部分のみ supersede） |
 | [0020](./0020-credit-window-resource-strategy.md) | Accepted | クレジット失効日を締め切りとした期間観測方針への転換（Day 4/5 のコスト最小化制約を組み替える） |
 | [0021](./0021-heartbeat-table-as-recovery-marker.md) | Accepted | `obs.heartbeat` への毎分書き込みを PITR の recovery marker と位置づける（負荷生成ではない。識別子は据え置き） |
+| [0022](./0022-import-azure-monitor-into-terraform.md) | Accepted | Azure Monitor の監視リソース 6 件（Action Group + メトリクスアラート 5）を terraform import で persistent 層へ移行する（ID 不変 = 発火試験の証跡を保全） |

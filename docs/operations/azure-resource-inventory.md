@@ -31,13 +31,13 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
-| Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**） | 管理外 | 触らない | **手動削除**（`terraform destroy` では消えない） | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
+| Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
 管理外にしたのは「Terraform で作ると自分の足を撃つ」もの（鶏と卵・destroy すると権限や認証が壊れる・据え置き判断。§B の理由区分）であり、いずれも寿命が長い。だから終了時の後片付けは **`terraform -chdir=terraform/ephemeral destroy` と `terraform -chdir=terraform/persistent destroy` の 2 本で済み、`az group delete` は不要**である（手順は「プロジェクト終了時の後片付け」節）。
 
-**ただし §B #10 / #11（Azure Monitor のリソース 6 件 = Action Group 1 + メトリクスアラート 5。2026-08-27 追加）はこの一致から外れる唯一の例外である。** これらは「管理外だが終了時に消す」side に属し、`terraform destroy` 2 本では消えない。**最終 teardown では手動削除の 1 手が追加で必要**になる（「プロジェクト終了時の後片付け」節に反映済み）。
+かつて §B #10 / #11（Azure Monitor のリソース 6 件 = Action Group 1 + メトリクスアラート 5）が「管理外だが終了時に消す」というこの一致から外れる唯一の例外だったが、**2026-08-27 に `terraform import` で persistent 層へ移行して例外は解消した**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)）。現在は管理外リソースに例外はなく、終了時の後片付けは `terraform destroy` 2 本（+ ロック解除）で完結する。
 
 ## サブスクリプションのリソースプロバイダー登録（手動側の前提作業）
 
@@ -98,33 +98,26 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 証跡（`docs/verification/`）がすべてコミット済みであることを確認してから実行する。
 
 ```bash
-# 1. Azure Monitor のリソース 6 件（§B #10 / #11 = メトリクスアラート 5 + Action Group 1）。
-#    Terraform 管理外のため destroy では消えない。
-#    PostgreSQL より先に消す（サーバー削除後にアラートだけ残ると orphan scope になるため）
-az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-low
-az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-critical
-az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80
-az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive
-az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-credits-remaining-low
-az monitor action-group delete -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email
-
-# 2. PostgreSQL の CanNotDelete ロックを解除（destroy が失敗するため）
+# 1. PostgreSQL の CanNotDelete ロックを解除（destroy が失敗するため）。
+#    Azure Monitor の 6 件（§B #10 / #11）は 2026-08-27 に Terraform 管理下（persistent 層）へ
+#    移行済み（Issue #151 / ADR-0022）のため、手動削除は不要。persistent 層の destroy が
+#    依存関係の逆順（アラート → Action Group → サーバー）で消す
 az lock delete --name lock-pgsql-source-cannotdelete \
   --resource pgsql-felisaichatbot-dev \
   --resource-group rg-felisaichatbot-dev-tf \
   --resource-type Microsoft.DBforPostgreSQL/flexibleServers
 
-# 3. Terraform 2 層を destroy
+# 2. Terraform 2 層を destroy
 terraform -chdir=terraform/ephemeral destroy
 terraform -chdir=terraform/persistent destroy
 
-# 4. 残存確認
+# 3. 残存確認
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（マネージド ID を除く）
 az monitor metrics alert list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず
 az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空になるはず
 ```
 
-- **手順 1 を飛ばすと、アラート 4 件がサブスクリプションに残り続ける。** `terraform plan` にも `terraform destroy` にも現れないため、気づく機会が無い（本台帳がその検出手段）
+- Azure Monitor の 6 件は Terraform 管理下のため、手順 2 の persistent destroy で消える（手動削除の一手は 2026-08-27 の移行で不要になった。Issue #151 / ADR-0022）
 - **`az group delete` は使わない**。§A の一覧のとおり、RG と中の管理外リソース（マネージド ID 等）は意図して残す（残しても $0）。サブスクリプションごと解約する場合のみこの限りではない
 - persistent 層の destroy 後、Log Analytics workspace は **soft delete 状態で最大 14 日残り、その後 30 日以内に purge される**（「After the soft-delete period, the workspace resource and its data are non-recoverable and queued for purge completely within 30 days.」出典: <https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace> ）。誤 destroy 時はこの 14 日間が復旧の窓になる（意図した destroy なら放置してよい）
 
@@ -158,8 +151,8 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 7 | ロール割当 2 件（Contributor / Storage Blob Data Contributor） | Role assignment | #3 / #5 のスコープ | destroy すると CI の権限が壊れる |
 | 8 | `id-felisaichatbot-dev` | User-assigned managed identity | RG `rg-felisaichatbot-dev-tf` / japaneast | 据え置き判断（ADR-0015。寿命の分離 + 職務分掌） |
 | 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
-| 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
-| 11 | メトリクスアラート 5 件（`alert-pgsql-storage-free-low` / `alert-pgsql-storage-free-critical` / `alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
+| 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
+| 11 | メトリクスアラート 5 件（`alert-pgsql-storage-free-low` / `alert-pgsql-storage-free-critical` / `alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
 
 理由区分の意味:
 
@@ -385,17 +378,9 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 2026-08-27 作成（Issue #145）。#11 のアラート 5 件すべてがこの 1 件を宛先にしている。
 
-- **なぜ管理外か**: 手動作成（az CLI）。ephemeral / persistent どちらの層にも属さず、**PostgreSQL より寿命を長くしたい**（destroy 中の事故も拾いたい）ため Terraform に入れていない。将来 Terraform 化する場合は persistent 層が適切
+- **管理区分**: **Terraform 管理下（persistent 層）**。当初は az CLI 手動作成の管理外（「PostgreSQL より寿命を長くしたい」判断）だったが、IaC の一貫性を優先して 2026-08-27 に `terraform import` で移行した（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID 不変）。コードは `terraform/persistent/main.tf`、受信者アドレスは `TF_VAR_alert_email_address`（`.env`）で渡す
 - **配送試験の制約**: `az monitor action-group test-notifications create` は CLI としては存在するが、本サブスクリプションでは API が `(Conflict) Free subscription not supported` を返して**実行できない**。配送の実証は #11 の実発火試験で代替した
-- **作り直す手順**:
-
-  ```bash
-  az monitor action-group create \
-    --name ag-felisaichatbot-dev-email \
-    --resource-group rg-felisaichatbot-dev-tf \
-    --short-name felisdev \
-    --action email opsmail <メールアドレス> useCommonAlertSchema
-  ```
+- **作り直す手順**: persistent 層の `terraform apply`（`TF_VAR_alert_email_address` の設定が前提）。az CLI では作らない（Terraform 管理下のリソースを az で作ると import が再度必要になる）。なお作り直すとリソース ID は同じでも発火履歴は引き継がれない
 
 - **確認コマンド**:
 
@@ -427,6 +412,12 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 2026-08-27 作成。`is_db_alive` / `cpu_credits_remaining` / `storage_percent` の 3 件は Issue #145、
 `storage_free` 系 2 件は Issue #148。メトリクス名は 5 件とも `az monitor metrics list-definitions` で
 実在と unit を確認してから使った（推測ではない）。
+
+**管理区分は Terraform 管理下（persistent 層）**: az CLI 作成分を 2026-08-27 に `terraform import` で
+移行した（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)）。**リソース ID は
+不変**のため、2026-08-27T05:17:38Z の実発火試験の証跡は移行後も有効。コードは
+`terraform/persistent/main.tf`。移行時の追随 apply（メタデータのみ）で条件の内部名は
+`cond0` → `Metric1` に変わったが、閾値・severity・条件・window / freq は不変（ADR-0022 に実測記録）。
 
 | メトリクス | unit | 定義上の集計 |
 | --- | --- | --- |
@@ -556,35 +547,9 @@ read-only への転落は瞬間値で決まるので、`Average` にすると窓
 
 ### 作り直す手順
 
-```bash
-RID=$(az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query id -o tsv)
-AG=$(az monitor action-group show -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email --query id -o tsv)
-
-# 主計器（絶対値）。10 GiB = 10737418240 B / 6 GiB = 6442450944 B
-az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-low \
-  --scopes "$RID" --condition "min storage_free < 10737418240" \
-  --window-size 15m --evaluation-frequency 5m --severity 2 --auto-mitigate true --action "$AG"
-
-az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-critical \
-  --scopes "$RID" --condition "min storage_free < 6442450944" \
-  --window-size 5m --evaluation-frequency 1m --severity 1 --auto-mitigate true --action "$AG"
-
-# 従計器（割合）。severity 3 = レポート級であることに注意（1 ではない）
-az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80 \
-  --scopes "$RID" --condition "avg storage_percent >= 80" \
-  --window-size 15m --evaluation-frequency 5m --severity 3 --auto-mitigate true --action "$AG"
-
-az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive \
-  --scopes "$RID" --condition "min is_db_alive < 1" \
-  --window-size 5m --evaluation-frequency 1m --severity 0 --auto-mitigate true --action "$AG"
-
-az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-credits-remaining-low \
-  --scopes "$RID" --condition "min cpu_credits_remaining < 30" \
-  --window-size 15m --evaluation-frequency 5m --severity 2 --auto-mitigate true --action "$AG"
-```
-
-閾値を書き換えるときは `--remove-conditions cond0 --add-condition "..."` の組で更新する
-（`az monitor metrics alert update` に `--condition` は無い）。
+persistent 層の `terraform apply` で 5 件とも再作成される（`TF_VAR_alert_email_address` の設定が前提。
+Issue #151 / ADR-0022）。az CLI では作らない。閾値・severity を書き換えるときも
+`terraform/persistent/main.tf` を編集して PR → apply で行う（az での直接変更は Terraform とのドリフトになる）。
 
 ### 確認コマンド
 
