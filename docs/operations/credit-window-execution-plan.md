@@ -594,8 +594,11 @@ B_rem = teardown 9/4 まで 4 日 × 2.1 = 8.4 として:
 1. 9/3: 観測データの最終エクスポート（観測テーブルのダンプ → `docs/verification/` 証跡化、
    probe ログ集計、Azure Monitor メトリクスの必要範囲エクスポート — **CPU Credits Remaining を含む**）
 2. 9/4: **外形監視の停止**（`gh variable set PROBE_ENABLED --body false` — FQDN が消えた後に
-   5 分ごとの fail 通知が永久に出続けるのを防ぐ）→ ephemeral destroy → persistent destroy
-   （旧計画 §5-6 の手順） → 残存リソースゼロ確認
+   5 分ごとの fail 通知が永久に出続けるのを防ぐ）→ **Azure Monitor のリソース 6 件の手動削除**
+   （メトリクスアラート 5 件 + Action Group 1 件。**Terraform 管理外なので destroy では消えない**。
+   PostgreSQL より先に消す。コマンドは
+   [azure-resource-inventory.md「プロジェクト終了時の後片付け」](./azure-resource-inventory.md#プロジェクト終了時の後片付け) が正本）
+   → ephemeral destroy → persistent destroy（旧計画 §5-6 の手順） → 残存リソースゼロ確認
 3. 9/5 以降: 課金反映ラグの分を待って最終コスト実測を記録（これも FinOps 証跡）
 
 - 失効 9/18 06:59Z まで**約 14 日のマージン**（72h 化の副産物）。teardown 失敗時の調査・再実行、
