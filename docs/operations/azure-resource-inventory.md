@@ -31,10 +31,13 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
+| Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 3 件（§B #10 / #11。Issue #145。**2026-08-27 作成・稼働中**） | 管理外 | 触らない | **手動削除**（`terraform destroy` では消えない） | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
 管理外にしたのは「Terraform で作ると自分の足を撃つ」もの（鶏と卵・destroy すると権限や認証が壊れる・据え置き判断。§B の理由区分）であり、いずれも寿命が長い。だから終了時の後片付けは **`terraform -chdir=terraform/ephemeral destroy` と `terraform -chdir=terraform/persistent destroy` の 2 本で済み、`az group delete` は不要**である（手順は「プロジェクト終了時の後片付け」節）。
+
+**ただし §B #10 / #11（Azure Monitor のアラート 4 件。2026-08-27 追加）はこの一致から外れる唯一の例外である。** これらは「管理外だが終了時に消す」side に属し、`terraform destroy` 2 本では消えない。**最終 teardown では手動削除の 1 手が追加で必要**になる（「プロジェクト終了時の後片付け」節に反映済み）。
 
 ## サブスクリプションのリソースプロバイダー登録（手動側の前提作業）
 
@@ -95,11 +98,30 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 証跡（`docs/verification/`）がすべてコミット済みであることを確認してから実行する。
 
 ```bash
+# 1. Azure Monitor のアラート 4 件（§B #10 / #11）。Terraform 管理外のため destroy では消えない。
+#    PostgreSQL より先に消す（サーバー削除後にアラートだけ残ると orphan scope になるため）
+az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80
+az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive
+az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-credits-remaining-low
+az monitor action-group delete -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email
+
+# 2. PostgreSQL の CanNotDelete ロックを解除（destroy が失敗するため）
+az lock delete --name lock-pgsql-source-cannotdelete \
+  --resource pgsql-felisaichatbot-dev \
+  --resource-group rg-felisaichatbot-dev-tf \
+  --resource-type Microsoft.DBforPostgreSQL/flexibleServers
+
+# 3. Terraform 2 層を destroy
 terraform -chdir=terraform/ephemeral destroy
 terraform -chdir=terraform/persistent destroy
+
+# 4. 残存確認
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（マネージド ID を除く）
+az monitor metrics alert list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず
+az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空になるはず
 ```
 
+- **手順 1 を飛ばすと、アラート 4 件がサブスクリプションに残り続ける。** `terraform plan` にも `terraform destroy` にも現れないため、気づく機会が無い（本台帳がその検出手段）
 - **`az group delete` は使わない**。§A の一覧のとおり、RG と中の管理外リソース（マネージド ID 等）は意図して残す（残しても $0）。サブスクリプションごと解約する場合のみこの限りではない
 - persistent 層の destroy 後、Log Analytics workspace は **soft delete 状態で最大 14 日残り、その後 30 日以内に purge される**（「After the soft-delete period, the workspace resource and its data are non-recoverable and queued for purge completely within 30 days.」出典: <https://learn.microsoft.com/en-us/azure/azure-monitor/logs/delete-workspace> ）。誤 destroy 時はこの 14 日間が復旧の窓になる（意図した destroy なら放置してよい）
 
@@ -133,6 +155,8 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（�
 | 7 | ロール割当 2 件（Contributor / Storage Blob Data Contributor） | Role assignment | #3 / #5 のスコープ | destroy すると CI の権限が壊れる |
 | 8 | `id-felisaichatbot-dev` | User-assigned managed identity | RG `rg-felisaichatbot-dev-tf` / japaneast | 据え置き判断（ADR-0015。寿命の分離 + 職務分掌） |
 | 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
+| 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
+| 11 | メトリクスアラート 3 件（`alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
 
 理由区分の意味:
 
@@ -343,6 +367,110 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（�
 - **固有のリスク・注意**:
   - 確認結果が 1 件より**多い**のは「誰かがこの ID に権限を足した」兆候（この ID の職務は ACR pull だけ）。**少ない（0 件）** なら Container App の pull が壊れる予兆。どちらも即調査する
   - #8 を再作成した場合、この割当は旧 principalId 宛てのまま残り**効かない**（assignee が Unknown と表示される）。#8 の手順どおり割当も作り直し、孤児の割当は削除する
+
+---
+
+## 10. Action Group `ag-felisaichatbot-dev-email`
+
+| 項目 | あるべき値 |
+| --- | --- |
+| resource ID | `/subscriptions/<sub>/resourceGroups/rg-felisaichatbot-dev-tf/providers/microsoft.insights/actionGroups/ag-felisaichatbot-dev-email` |
+| short name | `felisdev`（アラートメールの件名に入る。12 文字以内の制約あり） |
+| receiver | email `opsmail` → 本人のメールアドレス（`useCommonAlertSchema: true`） |
+| enabled | `true` |
+| location | `Global`（Action Group はリージョンを持たない） |
+
+2026-08-27 作成（Issue #145）。#11 のアラート 3 件すべてがこの 1 件を宛先にしている。
+
+- **なぜ管理外か**: 手動作成（az CLI）。ephemeral / persistent どちらの層にも属さず、**PostgreSQL より寿命を長くしたい**（destroy 中の事故も拾いたい）ため Terraform に入れていない。将来 Terraform 化する場合は persistent 層が適切
+- **配送試験の制約**: `az monitor action-group test-notifications create` は CLI としては存在するが、本サブスクリプションでは API が `(Conflict) Free subscription not supported` を返して**実行できない**。配送の実証は #11 の実発火試験で代替した
+- **作り直す手順**:
+
+  ```bash
+  az monitor action-group create \
+    --name ag-felisaichatbot-dev-email \
+    --resource-group rg-felisaichatbot-dev-tf \
+    --short-name felisdev \
+    --action email opsmail <メールアドレス> useCommonAlertSchema
+  ```
+
+- **確認コマンド**:
+
+  ```bash
+  az monitor action-group show -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email \
+    --query "{enabled:enabled, short:groupShortName, receivers:emailReceivers[].{name:name, status:status}}" -o json
+  ```
+
+  `enabled: true` / receiver の `status: Enabled` が期待値。**`status` が `Disabled` になっていたら通知が飛ばない**（受信者が Azure のメール内リンクから配信停止した場合にこうなる）
+
+- **固有のリスク・注意**:
+  - Action Group を消すと #11 の 3 件は**アラート自体は発火し続けるが通知が飛ばない**（沈黙する監視になる）。消すなら 3 件と同時に消す
+  - メール通知は月 1,000 通まで無料。それを超える量が飛ぶ状況は、閾値かワークロードのどちらかが壊れている兆候
+
+---
+
+## 11. メトリクスアラート 3 件（PostgreSQL 向け）
+
+すべて scope は PostgreSQL `pgsql-felisaichatbot-dev`、action は #10、`autoMitigate: true`（条件が解消したら自動でクローズ）。
+
+| 名前 | resource ID（RG `rg-felisaichatbot-dev-tf` / `providers/Microsoft.Insights/metricAlerts/` 配下） | メトリクス | 条件 | 集計 | window / freq | severity |
+| --- | --- | --- | --- | --- | --- | --- |
+| `alert-pgsql-storage-percent-80` | 同名 | `storage_percent` | `>= 80` | Average | PT15M / PT5M | 1 (Error) |
+| `alert-pgsql-is-db-alive` | 同名 | `is_db_alive` | `< 1` | Minimum | PT5M / PT1M | 0 (Critical) |
+| `alert-pgsql-cpu-credits-remaining-low` | 同名 | `cpu_credits_remaining` | `< 30` | Minimum | PT15M / PT5M | 2 (Warning) |
+
+2026-08-27 作成（Issue #145）。メトリクス名は 3 件とも `az monitor metrics list-definitions` で実在を確認してから使った（推測ではない）。
+
+### 閾値の根拠
+
+- **`storage_percent >= 80`**: 本サーバーは `storage.autoGrow` が **Disabled**（実測）。公式ドキュメントに「The server automatically switches to read-only mode when the storage usage reaches 95 percent, or when the available capacity is less than 5 GiB.」とある（<https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage>）。
+  **32 GiB では「空き 5 GiB 未満」= 使用 27 GiB = 84.375% が 95% より先に来る**ため、実効の read-only 転落点は約 **84.4%** である。80% はその手前で止めるための値だが、**余裕は約 4.4 ポイント（約 1.4 GiB）しかない**。高負荷実験の前にはこの余裕が十分かを都度見直す
+- **`is_db_alive < 1`**: 値は生存 = 1 / 不通 = 0 の 2 値。`< 1` は「1 でない」と同義
+- **`cpu_credits_remaining < 30`**: B1ms は Burstable。2026-08-27 に 12 時間分を実測したところ **313 で一定**（`cpu_credits_consumed` は全区間 0 = 完全にアイドル）。この 313 を満充電時の定常値とみなし、その約 10% を残枠切れの手前として 30 とした。**負荷実験で実際の消費速度を観測したら、この値は見直す前提の暫定値である**
+
+### 評価頻度・ウィンドウの根拠
+
+- `storage_percent` / `cpu_credits_remaining`: **PT15M / PT5M**。どちらも 1 分粒度で出るが、単発サンプルのノイズで誤検知しないよう 15 分平均（最小）で見る。評価頻度 5 分は検知遅れの上限を 5 分に抑えるため
+- `is_db_alive`: **PT5M / PT1M**。死活は最速で拾いたいので評価頻度は最短の 1 分。ウィンドウを 5 分にしたのは、このメトリクスに欠測区間が出ることがあり 1 分窓だと窓内にデータが無く評価スキップになりうるため
+
+### 作り直す手順
+
+```bash
+RID=$(az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query id -o tsv)
+AG=$(az monitor action-group show -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email --query id -o tsv)
+
+az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80 \
+  --scopes "$RID" --condition "avg storage_percent >= 80" \
+  --window-size 15m --evaluation-frequency 5m --severity 1 --auto-mitigate true --action "$AG"
+
+az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive \
+  --scopes "$RID" --condition "min is_db_alive < 1" \
+  --window-size 5m --evaluation-frequency 1m --severity 0 --auto-mitigate true --action "$AG"
+
+az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-credits-remaining-low \
+  --scopes "$RID" --condition "min cpu_credits_remaining < 30" \
+  --window-size 15m --evaluation-frequency 5m --severity 2 --auto-mitigate true --action "$AG"
+```
+
+### 確認コマンド
+
+```bash
+az monitor metrics alert list -g rg-felisaichatbot-dev-tf -o json \
+  | python3 -c "
+import json,sys
+for a in json.load(sys.stdin):
+    c=a['criteria']['allOf'][0]
+    print(a['name'], a['enabled'], 'sev'+str(a['severity']), c['metricName'], c['operator'], c['threshold'], c['timeAggregation'], a['windowSize'], a['evaluationFrequency'])
+"
+```
+
+**期待値は上の表のとおり 3 行**。とくに `threshold` が 80 / 1 / 30 であることを見る（下記のとおり、試験のために一時的に下げる運用があるため）。
+
+### 固有のリスク・注意
+
+- **閾値を一時的に下げて発火試験をしたら、必ず戻す。** 下げたままだと誤検知が続き、やがてメールを無視するようになる（アラート疲れ）。試験のたびに上の確認コマンドで戻ったことを確認する
+- `is_db_alive` は**安全に発火させられない**（サーバーを落とす必要がある）ため、実発火試験を実施していない。この 1 件については「同一 Action Group を使う他の 2 件で配送が実証できているので、通知経路は生きているはず」という**間接的な確証しかない**。ルール自体の評価が正しく走るかは未検証である
+- scope の PostgreSQL を destroy すると、アラートは scope が消えた状態で残る。「プロジェクト終了時の後片付け」節のとおり **PostgreSQL より先に消す**
 
 ---
 
