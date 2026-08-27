@@ -212,6 +212,11 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 
 ### 5-3. 採取の設計（#104 の実装仕様。根拠つき）
 
+> **この毎分の書き込みの位置づけ**: PITR の復旧時点を確定させるための
+> **recovery marker**（既知の書き手）であり、autovacuum / bloat を駆動する**負荷生成ではない**。
+> 正本は [ADR-0021](../adr/0021-heartbeat-table-as-recovery-marker.md)。
+> 負荷生成（churn generator）は §5-5 の別装置（#112 / PR #120。未マージ）。
+
 - **書き込み（観測対象を作る側）**: heartbeat INSERT 1 行/分 + カウンタ行 UPDATE 1 回/分。
   dead tuple の供給源はこの UPDATE（1,440 dead tuples/日）。heartbeat テーブルは INSERT-only で
   dead tuple がほぼ出ないため、効くのは **insert-vacuum 側の閾値 `1000 + 0.2 × reltuples`** であり、
@@ -347,8 +352,10 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 #### 成果物の主張の書き方（2026-08-23 決定。取り繕わない限定の明記）
 
 - 監視（成果物 5 の Monitoring）: 「監視の閾値を決めた」とは**書かない**。
-  「**可観測性のループを構築し、アラート発火を実証した。閾値はこの負荷特性（フェーズ 1 =
-  毎分 1 件の合成負荷）に対するものであり、実トラフィックでは取り直す**」と書く。
+  「**可観測性のループを構築し、アラート発火を実証した。閾値はこの書き込み特性（フェーズ 1 =
+  毎分 1 行の recovery marker + カウンタ 1 行 UPDATE。負荷生成ではない）に対するものであり、
+  実トラフィックでは取り直す**」と書く（位置づけの正本は
+  [ADR-0021](../adr/0021-heartbeat-table-as-recovery-marker.md)）。
   前者は突っ込まれると崩れ、後者は崩れない
 - RTO 実測値（成果物 2 の Restore）: 必ず「**この値は主にプロビジョニング時間であり、
   データ量に対するスケールは未検証**」を併記する（現データは極小のため、復元時間の
@@ -637,7 +644,9 @@ B_rem = teardown 9/4 まで 4 日 × 2.1 = 8.4 として:
   高負荷レンジとの前後比較（§5-5）**。当初の「最低 7 日」根拠は §5-4 の分析で「大部分が自分で
   課した制約」と判明し、以下の記録は当時の判断として残す。当時の最低 7 日（= 168h）の根拠:
   我々の書き込みレートで autovacuum の発火を複数回・バックアップの日次周期・probe の日内変動を
-  各複数回含むこと。営業日変動のない合成負荷のため週次の季節性は考慮不要
+  各複数回含むこと。営業日変動のない一定レートの書き込み（recovery marker 1 行/分 +
+  カウンタ 1 行 UPDATE/分。負荷生成ではない = [ADR-0021](../adr/0021-heartbeat-table-as-recovery-marker.md)）
+  のため週次の季節性は考慮不要
 - 採取先は DB 内観測テーブル・間隔は 5 分（pgstattuple のみ 1 時間）（§5-3 に根拠と観測者効果）
 - teardown は 9/4 目安（§9。72h 化で失効まで約 14 日のマージン。当初 9/16 → §5-4 の決定で前倒し）
 - 外部レビュー反映（2026-08-23）: 観測期間は日付固定でなく**相対時刻**（現行は T_obs_start + 72h。§2）、
