@@ -386,8 +386,11 @@ resource "azurerm_container_app_job" "migrate" {
 }
 
 
-# 観測ワークロード + スナップショット採取 Job（Issue #104。Schedule トリガー・毎分。
-# 設計の正本: docs/operations/credit-window-execution-plan.md §5-3）。
+# recovery marker の刻み + スナップショット採取 Job（Issue #104。Schedule トリガー・毎分。
+# 設計の正本: docs/operations/credit-window-execution-plan.md §5-3。
+# 位置づけの正本: docs/adr/0021-heartbeat-table-as-recovery-marker.md — 毎分の書き込みは
+# PITR の復旧時点を確定させる recovery marker であり、負荷生成ではない。負荷生成
+# （churn generator）は Issue #112 / PR #120 の別 Job で、2026-08-27 時点で未マージ）。
 # - cron_expression が azurerm 5.1.0 の schedule_trigger_config に存在することは
 #   `terraform providers schema -json` で確認済み（2026-08-23。必須属性は cron_expression のみ）
 # - 実行内容は ops イメージ内の /app/observability/collect.sql（heartbeat INSERT +

@@ -1,5 +1,9 @@
--- 観測ワークロード + スナップショット採取（Issue #104。毎分の cron Job から実行）
+-- recovery marker の刻み + スナップショット採取（Issue #104。毎分の cron Job から実行）
 -- 設計の正本: docs/operations/credit-window-execution-plan.md §5-3
+-- 位置づけの正本: docs/adr/0021-heartbeat-table-as-recovery-marker.md
+--   毎分の書き込みは PITR の復旧時点を確定させるための recovery marker であり、
+--   autovacuum / bloat を駆動する負荷生成ではない（負荷生成 = churn generator は
+--   Issue #112 / PR #120 の別装置で、2026-08-27 時点で未マージ）。
 --   - heartbeat INSERT + カウンタ UPDATE: 毎分（観測される側の書き込み）
 --   - 統計スナップショット: 5 分間隔 / pgstattuple: 1 時間間隔（フルスキャンを伴うため）
 -- 間隔の判定は「前回採取からの経過時間」で行う（外部レビュー指摘の反映）。
@@ -25,6 +29,9 @@ BEGIN;
 
 -- 1) heartbeat（毎分）。一定間隔で 1 行だけ書き、最新行との時刻差から遅れを測る
 --    heartbeat table パターン（代表例: Percona Toolkit の pt-heartbeat）。
+--    ただし pt-heartbeat の本来の用途は replication lag の計測（親が書き子で時刻差を取る）で、
+--    本テーブルは replica も lag も持たず、同じ機構を PITR の復旧時点確定
+--    （known-writer / recovery marker）へ転用したものである（正本: docs/adr/0021-...md）。
 --    命名の根拠は migrations/versions/0004_rename_obs_marker_to_heartbeat.py
 INSERT INTO obs.heartbeat DEFAULT VALUES;
 
