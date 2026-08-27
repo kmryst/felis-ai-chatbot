@@ -439,7 +439,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 ### ストレージ監視の主計器は `storage_free`（絶対値）である
 
-**Azure が read-only へ落とす条件は「割合 **または** 絶対値」の OR** である（公式・逐語）。
+**Azure が read-only へ落とす条件は「割合 または 絶対値」の OR** である（公式・逐語）。
 
 > The server automatically switches to read-only mode when the storage usage reaches 95 percent,
 > or when the available capacity is less than 5 GiB.
