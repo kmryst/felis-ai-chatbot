@@ -221,3 +221,153 @@ resource "azurerm_log_analytics_workspace" "main" {
   # 取込暴走時のコスト上限ガード（変数コメント参照）
   daily_quota_gb = var.log_analytics_daily_quota_gb
 }
+
+# ---------------------------------------------------------------------------
+# Azure Monitor（Action Group / メトリクスアラート。Issue #151 で az CLI 作成分を import）
+# ---------------------------------------------------------------------------
+
+# 監視リソースは persistent 層に置く。scope（監視対象）が PostgreSQL Flexible Server
+# （この層のリソース）であり、寿命をそれに一致させるため。ephemeral 層は destroy /
+# 再作成される層なので、そこに置くとアラートも一緒に消える（Log Analytics workspace を
+# この層に置いたのと同じ理由。ADR-0016）。
+# 6 件とも 2026-08-27 に az CLI で作成したものを **削除せず terraform import で取り込んだ**
+# （Issue #151）。2026-08-27T05:17:38Z の実発火試験の証跡（台帳 §B #11）が既存の
+# リソース ID に紐づいており、作り直すと ID が変わって証跡の対象が消えるため。
+# 閾値・severity・条件の設計値と根拠の正本は docs/operations/azure-resource-inventory.md §B #10 / #11。
+# ここのコメントは配置と import の判断のみを持ち、値の根拠は台帳に寄せる。
+
+# メール通知の Action Group。#11 のアラート 5 件すべてがこの 1 件を宛先にしている。
+# 受信者アドレスはコードに書かず TF_VAR_alert_email_address（.env）で渡す。
+resource "azurerm_monitor_action_group" "email" {
+  name                = "ag-felisaichatbot-dev-email"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  short_name          = "felisdev"
+
+  email_receiver {
+    name                    = "opsmail"
+    email_address           = var.alert_email_address
+    use_common_alert_schema = true
+  }
+}
+
+# 死活監視（最重要）: is_db_alive が 1 を下回ったら Sev0。
+resource "azurerm_monitor_metric_alert" "pgsql_is_db_alive" {
+  name                = "alert-pgsql-is-db-alive"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  scopes              = [azurerm_postgresql_flexible_server.main.id]
+  description         = "PostgreSQL server not responding (is_db_alive < 1)"
+  severity            = 0
+  window_size         = "PT5M"
+  frequency           = "PT1M"
+  auto_mitigate       = true
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "is_db_alive"
+    aggregation      = "Minimum"
+    operator         = "LessThan"
+    threshold        = 1
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# ストレージ監視の主計器（早期警告）: 空き 10 GiB 未満で Sev2（台帳 §B #11）。
+resource "azurerm_monitor_metric_alert" "pgsql_storage_free_low" {
+  name                = "alert-pgsql-storage-free-low"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  scopes              = [azurerm_postgresql_flexible_server.main.id]
+  description         = "storage_free < 10 GiB (10737418240 bytes). Sev2 ticket-level. Azure switches the server to read-only when available capacity < 5 GiB; this fires with 5 GiB of headroom left. Threshold is a design value derived from the 5 GiB read-only condition (no primary source for 10 GiB) and is provisional until consumption rate is measured under load."
+  severity            = 2
+  window_size         = "PT15M"
+  frequency           = "PT5M"
+  auto_mitigate       = true
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "storage_free"
+    aggregation      = "Minimum"
+    operator         = "LessThan"
+    threshold        = 10737418240 # 10 GiB
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# ストレージ監視の主計器（危機）: 空き 6 GiB 未満で Sev1。read-only 転落（空き 5 GiB）の
+# 1 GiB 手前のため、Sev2 より速い周期（PT5M / PT1M）で見る（台帳 §B #11）。
+resource "azurerm_monitor_metric_alert" "pgsql_storage_free_critical" {
+  name                = "alert-pgsql-storage-free-critical"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  scopes              = [azurerm_postgresql_flexible_server.main.id]
+  description         = "storage_free < 6 GiB (6442450944 bytes). Sev1 page-level: only 1 GiB above the 5 GiB read-only threshold. Faster cadence (PT5M/PT1M) than the Sev2 rule because the remaining headroom is small. Threshold is a design value derived from the 5 GiB read-only condition (no primary source for 6 GiB) and is provisional until consumption rate is measured under load."
+  severity            = 1
+  window_size         = "PT5M"
+  frequency           = "PT1M"
+  auto_mitigate       = true
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "storage_free"
+    aggregation      = "Minimum"
+    operator         = "LessThan"
+    threshold        = 6442450944 # 6 GiB
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# B1ms のバーストクレジット枯渇の早期警告: 30 を下回ったら Sev2（定常時実測 max 313。台帳 §B #11）。
+resource "azurerm_monitor_metric_alert" "pgsql_cpu_credits_remaining_low" {
+  name                = "alert-pgsql-cpu-credits-remaining-low"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  scopes              = [azurerm_postgresql_flexible_server.main.id]
+  description         = "B1ms burst credits nearly exhausted (<30 of observed steady-state max 313)"
+  severity            = 2
+  window_size         = "PT15M"
+  frequency           = "PT5M"
+  auto_mitigate       = true
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "cpu_credits_remaining"
+    aggregation      = "Minimum"
+    operator         = "LessThan"
+    threshold        = 30
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# 補助計器（Sev3 へ格下げ済み・削除しない）: 2026-08-27T05:17:38Z の実発火試験の証跡が
+# このルールに紐づいている（格下げの経緯は description と台帳 §B #11）。
+resource "azurerm_monitor_metric_alert" "pgsql_storage_percent_80" {
+  name                = "alert-pgsql-storage-percent-80"
+  resource_group_name = data.azurerm_resource_group.dev.name
+  scopes              = [azurerm_postgresql_flexible_server.main.id]
+  description         = "DEMOTED to Sev3 (report-level) on 2026-08-27. Superseded as the primary storage gauge by alert-pgsql-storage-free-low / -critical, which measure the absolute quantity the read-only condition is actually defined on (available capacity < 5 GiB). Note the percent denominator is the usable ~31.20 GiB (used 4.10 + free 27.10), not the provisioned 32 GiB, so 5 GiB free = 83.97% and the 95% condition is unreachable in this configuration. Kept, not deleted: the 2026-08-27T05:17:38Z real-fire evidence is attached to this rule."
+  severity            = 3
+  window_size         = "PT15M"
+  frequency           = "PT5M"
+  auto_mitigate       = true
+
+  criteria {
+    metric_namespace = "Microsoft.DBforPostgreSQL/flexibleServers"
+    metric_name      = "storage_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThanOrEqual"
+    threshold        = 80
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
