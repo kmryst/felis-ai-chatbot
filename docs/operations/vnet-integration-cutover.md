@@ -420,13 +420,16 @@ az postgres flexible-server restore \
   -g rg-felisaichatbot-dev-tf \
   --name pgsql-felisaichatbot-dev-restored \
   --source-server pgsql-felisaichatbot-dev \
-  --restore-time "<T_target (ISO8601 UTC)>" \
+  --restore-time "<復元指定時刻 (ISO8601 UTC)>" \
   --no-wait \
   --vnet vnet-felisaichatbot-dev \
   --subnet snet-felisaichatbot-dev-pgsql \
   --private-dns-zone felisaichatbot-dev.private.postgres.database.azure.com
 ```
 
+- `--restore-time` に渡す「**復元指定時刻**」は、どの時点の状態へ戻すかを指す時刻であり、
+  復元を発行した時刻でも接続が回復した時刻でもない（PostgreSQL の `recovery_target_time` に対応。
+  定義と出典は計画書 §4-3 冒頭の「時刻記法」）
 - 復元サーバーは**同じ VNet に入る**（public へは復元できない。ADR-0018 の出典参照）。
   接続検証（`SELECT 1` / heartbeat 行数）は ops コンテナから、**復元先の FQDN を指す専用 DSN** で行う
   （元サーバーの `DATABASE_URL` と混ぜない。手順は計画書 §4-3）
