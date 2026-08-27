@@ -31,13 +31,13 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
-| Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 3 件（§B #10 / #11。Issue #145。**2026-08-27 作成・稼働中**） | 管理外 | 触らない | **手動削除**（`terraform destroy` では消えない） | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
+| Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**） | 管理外 | 触らない | **手動削除**（`terraform destroy` では消えない） | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
 管理外にしたのは「Terraform で作ると自分の足を撃つ」もの（鶏と卵・destroy すると権限や認証が壊れる・据え置き判断。§B の理由区分）であり、いずれも寿命が長い。だから終了時の後片付けは **`terraform -chdir=terraform/ephemeral destroy` と `terraform -chdir=terraform/persistent destroy` の 2 本で済み、`az group delete` は不要**である（手順は「プロジェクト終了時の後片付け」節）。
 
-**ただし §B #10 / #11（Azure Monitor のアラート 4 件。2026-08-27 追加）はこの一致から外れる唯一の例外である。** これらは「管理外だが終了時に消す」side に属し、`terraform destroy` 2 本では消えない。**最終 teardown では手動削除の 1 手が追加で必要**になる（「プロジェクト終了時の後片付け」節に反映済み）。
+**ただし §B #10 / #11（Azure Monitor のリソース 6 件 = Action Group 1 + メトリクスアラート 5。2026-08-27 追加）はこの一致から外れる唯一の例外である。** これらは「管理外だが終了時に消す」side に属し、`terraform destroy` 2 本では消えない。**最終 teardown では手動削除の 1 手が追加で必要**になる（「プロジェクト終了時の後片付け」節に反映済み）。
 
 ## サブスクリプションのリソースプロバイダー登録（手動側の前提作業）
 
@@ -98,8 +98,11 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 証跡（`docs/verification/`）がすべてコミット済みであることを確認してから実行する。
 
 ```bash
-# 1. Azure Monitor のアラート 4 件（§B #10 / #11）。Terraform 管理外のため destroy では消えない。
+# 1. Azure Monitor のリソース 6 件（§B #10 / #11 = メトリクスアラート 5 + Action Group 1）。
+#    Terraform 管理外のため destroy では消えない。
 #    PostgreSQL より先に消す（サーバー削除後にアラートだけ残ると orphan scope になるため）
+az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-low
+az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-critical
 az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80
 az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive
 az monitor metrics alert delete -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-credits-remaining-low
@@ -156,7 +159,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 8 | `id-felisaichatbot-dev` | User-assigned managed identity | RG `rg-felisaichatbot-dev-tf` / japaneast | 据え置き判断（ADR-0015。寿命の分離 + 職務分掌） |
 | 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
 | 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
-| 11 | メトリクスアラート 3 件（`alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
+| 11 | メトリクスアラート 5 件（`alert-pgsql-storage-free-low` / `alert-pgsql-storage-free-critical` / `alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | 手動作成（az CLI）。**最終 teardown で手動削除が必要** |
 
 理由区分の意味:
 
@@ -380,7 +383,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | enabled | `true` |
 | location | `Global`（Action Group はリージョンを持たない） |
 
-2026-08-27 作成（Issue #145）。#11 のアラート 3 件すべてがこの 1 件を宛先にしている。
+2026-08-27 作成（Issue #145）。#11 のアラート 5 件すべてがこの 1 件を宛先にしている。
 
 - **なぜ管理外か**: 手動作成（az CLI）。ephemeral / persistent どちらの層にも属さず、**PostgreSQL より寿命を長くしたい**（destroy 中の事故も拾いたい）ため Terraform に入れていない。将来 Terraform 化する場合は persistent 層が適切
 - **配送試験の制約**: `az monitor action-group test-notifications create` は CLI としては存在するが、本サブスクリプションでは API が `(Conflict) Free subscription not supported` を返して**実行できない**。配送の実証は #11 の実発火試験で代替した
@@ -404,34 +407,152 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
   `enabled: true` / receiver の `status: Enabled` が期待値。**`status` が `Disabled` になっていたら通知が飛ばない**（受信者が Azure のメール内リンクから配信停止した場合にこうなる）
 
 - **固有のリスク・注意**:
-  - Action Group を消すと #11 の 3 件は**アラート自体は発火し続けるが通知が飛ばない**（沈黙する監視になる）。消すなら 3 件と同時に消す
+  - Action Group を消すと #11 の 5 件は**アラート自体は発火し続けるが通知が飛ばない**（沈黙する監視になる）。消すなら 5 件と同時に消す
   - メール通知は月 1,000 通まで無料。それを超える量が飛ぶ状況は、閾値かワークロードのどちらかが壊れている兆候
 
 ---
 
-## 11. メトリクスアラート 3 件（PostgreSQL 向け）
+## 11. メトリクスアラート 5 件（PostgreSQL 向け）
 
 すべて scope は PostgreSQL `pgsql-felisaichatbot-dev`、action は #10、`autoMitigate: true`（条件が解消したら自動でクローズ）。
 
 | 名前 | resource ID（RG `rg-felisaichatbot-dev-tf` / `providers/Microsoft.Insights/metricAlerts/` 配下） | メトリクス | 条件 | 集計 | window / freq | severity |
 | --- | --- | --- | --- | --- | --- | --- |
-| `alert-pgsql-storage-percent-80` | 同名 | `storage_percent` | `>= 80` | Average | PT15M / PT5M | 1 (Error) |
+| `alert-pgsql-storage-free-critical` | 同名 | `storage_free` | `< 6442450944`（6 GiB） | Minimum | PT5M / PT1M | 1 (Error) |
+| `alert-pgsql-storage-free-low` | 同名 | `storage_free` | `< 10737418240`（10 GiB） | Minimum | PT15M / PT5M | 2 (Warning) |
 | `alert-pgsql-is-db-alive` | 同名 | `is_db_alive` | `< 1` | Minimum | PT5M / PT1M | 0 (Critical) |
 | `alert-pgsql-cpu-credits-remaining-low` | 同名 | `cpu_credits_remaining` | `< 30` | Minimum | PT15M / PT5M | 2 (Warning) |
+| `alert-pgsql-storage-percent-80` | 同名 | `storage_percent` | `>= 80` | Average | PT15M / PT5M | **3 (Informational)** |
 
-2026-08-27 作成（Issue #145）。メトリクス名は 3 件とも `az monitor metrics list-definitions` で実在を確認してから使った（推測ではない）。
+2026-08-27 作成。`is_db_alive` / `cpu_credits_remaining` / `storage_percent` の 3 件は Issue #145、
+`storage_free` 系 2 件は Issue #148。メトリクス名は 5 件とも `az monitor metrics list-definitions` で
+実在と unit を確認してから使った（推測ではない）。
+
+| メトリクス | unit | 定義上の集計 |
+| --- | --- | --- |
+| `storage_free` | **Bytes** | Average / Maximum / Minimum |
+| `storage_used` | Bytes | Average / Maximum / Minimum |
+| `storage_percent` | Percent | Average / Maximum / Minimum |
+| `txlogs_storage_used` | Bytes | Average / Maximum / Minimum |
+| `is_db_alive` | Count | Average / Maximum / Minimum |
+| `cpu_credits_remaining` | Count | Average / Maximum / Minimum |
+
+### ストレージ監視の主計器は `storage_free`（絶対値）である
+
+**Azure が read-only へ落とす条件は「割合 **または** 絶対値」の OR** である（公式・逐語）。
+
+> The server automatically switches to read-only mode when the storage usage reaches 95 percent,
+> or when the available capacity is less than 5 GiB.
+> — <https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage> 「Disk full conditions」
+
+本サーバーの実測（2026-08-27T05:17Z、`az monitor metrics list`）は次のとおりで、
+**`storage_percent` の分母は provision した 32 GiB ではない**。
+
+```text
+storage_used  4,399,088,708 B = 4.10 GiB
+storage_free 29,102,668,731 B = 27.10 GiB
+合計                            31.20 GiB   ← これが分母
+4.10 / 31.20 = 13.14%                       ← storage_percent 実測 13.1309% と一致
+```
+
+| 状態 | 空き | storage_percent |
+| --- | --- | --- |
+| 現在（2026-08-27） | 27.10 GiB | 13.13% |
+| `alert-pgsql-storage-free-low`（Sev2） | 10.00 GiB | 67.95% |
+| `alert-pgsql-storage-percent-80`（Sev3） | 6.24 GiB | 80.00% |
+| `alert-pgsql-storage-free-critical`（Sev1） | 6.00 GiB | 80.77% |
+| **read-only 転落（空き 5 GiB 未満）** | 5.00 GiB | **83.97%** |
+| 95% 条件 | 1.56 GiB | 95.00% |
+
+**この構成では 95% 条件は永久に発動しない**（先に空き 5 GiB 条件に当たる）。
+つまり `storage_percent >= 95` 系のルールは存在しない破断点を指す。
+そのため主計器を**破断条件と同じ単位（バイト）の `storage_free`** に切り替えた。理由は 3 点。
+
+1. **計器の単位を破断条件の単位に合わせる**。read-only の条件は絶対値で定義されている
+2. 分母 31.20 GiB が非自明なので、percent 値からは「あと何 GiB 書けるか」が読み取れない
+3. **tier を General Purpose へ変更する予定**があり、構成が変わると percent 閾値は黙って意味が変わる。
+   絶対値の閾値は構成変更に対して意味が変わらない（read-only 条件の 5 GiB が変わらないため）
+
+なお #145 で本節に書いた「32 GiB では空き 5 GiB = 84.375%」という記述は**分母を 32 GiB と誤ったもの**で、
+実測に基づく正しい値は上表の **83.97%** である（差は小さいが、分母を実測で確定させたのが Issue #148 の出発点）。
+
+### 2 段構えにしている理由
+
+Rob Ewaschuk "My Philosophy on Alerting"（page 用の厳しい条件と、ticket / レポート用の緩い条件を分ける）に倣い、
+同じ故障モード（ストレージ枯渇）に対して**severity の違う 2 本**を張っている。
+
+- **Sev2 `alert-pgsql-storage-free-low`（空き 10 GiB）** = ticket。read-only まで **まだ 5 GiB** ある段階で気づく。
+  この時点なら「不要データの削除」「storage のスケールアップ」「実験の中断」のどれでも間に合う
+- **Sev1 `alert-pgsql-storage-free-critical`（空き 6 GiB）** = page。read-only まで **あと 1 GiB**。至急対応
 
 ### 閾値の根拠
 
-- **`storage_percent >= 80`**: 本サーバーは `storage.autoGrow` が **Disabled**（実測）。公式ドキュメントに「The server automatically switches to read-only mode when the storage usage reaches 95 percent, or when the available capacity is less than 5 GiB.」とある（<https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage>）。
-  **32 GiB では「空き 5 GiB 未満」= 使用 27 GiB = 84.375% が 95% より先に来る**ため、実効の read-only 転落点は約 **84.4%** である。80% はその手前で止めるための値だが、**余裕は約 4.4 ポイント（約 1.4 GiB）しかない**。高負荷実験の前にはこの余裕が十分かを都度見直す
+- **`storage_free < 10 GiB` / `< 6 GiB`（新設 2 件）**:
+  **この 10 GiB / 6 GiB という値そのものには一次情報の出典がない。設計値であり暫定値である。**
+  一次情報があるのは read-only 転落の **5 GiB** だけで、そこから「余裕 5 GiB」「余裕 1 GiB」と逆算した。
+  **見直しの条件: フェーズ 2（高負荷）で単位時間あたりのストレージ消費速度を実測すること。**
+  消費速度が分かって初めて「この余裕が何分の猶予に相当するか」が言えるようになり、
+  そこで初めて 10 / 6 が妥当かを判断できる。それまでは根拠のある数字として扱わない
+- **`storage_percent >= 80`（既存・Sev3 へ格下げ）**: 上表のとおり空き 6.24 GiB に相当し、
+  新設 2 件の間に挟まる。**冗長だが削除していない**（下記「格下げの理由」）
 - **`is_db_alive < 1`**: 値は生存 = 1 / 不通 = 0 の 2 値。`< 1` は「1 でない」と同義
-- **`cpu_credits_remaining < 30`**: B1ms は Burstable。2026-08-27 に 12 時間分を実測したところ **313 で一定**（`cpu_credits_consumed` は全区間 0 = 完全にアイドル）。この 313 を満充電時の定常値とみなし、その約 10% を残枠切れの手前として 30 とした。**負荷実験で実際の消費速度を観測したら、この値は見直す前提の暫定値である**
+- **`cpu_credits_remaining < 30`**: B1ms は Burstable。2026-08-27 に 12 時間分を実測したところ **313 で一定**
+  （`cpu_credits_consumed` は全区間 0 = 完全にアイドル）。この 313 を満充電時の定常値とみなし、
+  その約 10% を残枠切れの手前として 30 とした。**負荷実験で実際の消費速度を観測したら見直す暫定値である**
+
+### `alert-pgsql-storage-percent-80` を「削除せず格下げ」した理由
+
+- **削除しない**: 2026-08-27T05:17:38Z の実発火 → 05:32:44Z 自動解消（受信確認済み）という
+  **通知経路の実証記録がこのルールに紐づいている**。ルールを消すと証跡の対象が消える
+- **Sev1 → Sev3 に下げる**: 同じ故障モードに page 級のルールが 2 本ある状態は、片方が
+  「先に鳴るがより意味の薄いほう」になる。percent は上記のとおり分母が非自明で、tier 変更で黙って意味が変わる。
+  Ewaschuk の言う「percent 単独のルールはレポートに格下げする」に倣い、**日次レポート級の Sev3** とした。
+  ストレージ枯渇で人を叩き起こす役は `alert-pgsql-storage-free-critical`（Sev1）が持つ
+- Azure 側の `description` にも格下げの事実と理由を書いてある（`az monitor metrics alert show` で読める）
+
+### `txlogs_storage_used` を「今は監視しない」と判断した理由
+
+**メトリクスは実在する**（unit Bytes / Average・Maximum・Minimum）。2026-08-27 の実測値は
+**469,762,048 B = 448 MiB で、観測区間を通じて一定**（アイドルのため）。**アラートは作っていない。**
+
+判断の根拠:
+
+1. **WAL は同じ provision 済みストレージを食う**ので、WAL の増加は `storage_free` の減少として
+   既に新設 2 件に映る。公式・逐語:
+   > This storage holds database files, temporary files, transaction logs, and PostgreSQL server logs.
+   > — <https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage>
+
+   read-only 転落の条件は「available capacity」で定義されており、それを直接測るのが `storage_free` である。
+   **消費者が WAL か heap かは転落条件に関係しない**ので、枯渇そのものの検知に別ルールは要らない
+2. **autogrow の FAQ はこのサーバーには当たらない。** 公式・逐語:
+   > Storage autogrow isn't triggered when you have high WAL usage.
+   > — <https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage-premium-ssd>
+   > （「Limitations and considerations of storage autogrow」節）
+
+   これは「autogrow を有効にしていても WAL 起因の逼迫では自動拡張が助けてくれない」という警告である。
+   本サーバーは `storage.autoGrow` が **Disabled**（実測）なので、そもそも当てにしている自動拡張がない。
+   **この FAQ は今アラートを増やす理由にはならない**
+3. **閾値を置く根拠が今はない。** フェーズ 2（高負荷）が後回しになったため、
+   アイドル時の 448 MiB 一定という値しか持っていない。ここから閾値を決めても設計値ですらない当てずっぽうになる。
+   ルールを増やせばルール単位の月額課金とアラート疲れのコストだけが確実に増える
+
+**いつ作るか: フェーズ 2（高負荷）を開始する前。** 開始前に WAL の増加速度を実測し、
+「`txlogs_storage_used` が `storage_used` のうちどれだけを占めるか」を測った上で閾値を決める。
+**`storage.autoGrow` を Enabled にする場合、または tier を General Purpose へ変更する場合も、
+上記 2 の前提が変わるので同時に再判断する。**
 
 ### 評価頻度・ウィンドウの根拠
 
-- `storage_percent` / `cpu_credits_remaining`: **PT15M / PT5M**。どちらも 1 分粒度で出るが、単発サンプルのノイズで誤検知しないよう 15 分平均（最小）で見る。評価頻度 5 分は検知遅れの上限を 5 分に抑えるため
-- `is_db_alive`: **PT5M / PT1M**。死活は最速で拾いたいので評価頻度は最短の 1 分。ウィンドウを 5 分にしたのは、このメトリクスに欠測区間が出ることがあり 1 分窓だと窓内にデータが無く評価スキップになりうるため
+| アラート | window / freq | 集計 | 理由 |
+| --- | --- | --- | --- |
+| `alert-pgsql-storage-free-low` | PT15M / PT5M | Minimum | 既存 `storage_percent` / `cpu_credits_remaining` と同じ刻み。ticket 級なので検知遅れ 5 分で十分 |
+| `alert-pgsql-storage-free-critical` | PT5M / PT1M | Minimum | page 級。read-only まで 1 GiB しかない段階なので、`is_db_alive` と同じ最短の刻みにして検知遅れを 1 分に詰める |
+| `alert-pgsql-storage-percent-80` / `cpu_credits_remaining` | PT15M / PT5M | Average / Minimum | 単発サンプルのノイズで誤検知しないよう 15 分で集計。評価頻度 5 分は検知遅れの上限を 5 分に抑えるため |
+| `alert-pgsql-is-db-alive` | PT5M / PT1M | Minimum | 死活は最速で拾いたいので評価頻度は最短の 1 分。ウィンドウを 5 分にしたのは、このメトリクスに欠測区間が出ることがあり 1 分窓だと窓内にデータが無く評価スキップになりうるため |
+
+**`storage_free` の集計に `Minimum` を選んだ理由**: 見たいのは「窓のあいだで空きが最も少なかった瞬間」である。
+read-only への転落は瞬間値で決まるので、`Average` にすると窓内の一時的な落ち込みが平均に埋もれる。
+`storage_free` はディスクのゲージ値でスパイク性のノイズを持たないため、`Minimum` にしても誤検知は増えない。
 
 ### 作り直す手順
 
@@ -439,9 +560,19 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 RID=$(az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query id -o tsv)
 AG=$(az monitor action-group show -g rg-felisaichatbot-dev-tf -n ag-felisaichatbot-dev-email --query id -o tsv)
 
+# 主計器（絶対値）。10 GiB = 10737418240 B / 6 GiB = 6442450944 B
+az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-low \
+  --scopes "$RID" --condition "min storage_free < 10737418240" \
+  --window-size 15m --evaluation-frequency 5m --severity 2 --auto-mitigate true --action "$AG"
+
+az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-free-critical \
+  --scopes "$RID" --condition "min storage_free < 6442450944" \
+  --window-size 5m --evaluation-frequency 1m --severity 1 --auto-mitigate true --action "$AG"
+
+# 従計器（割合）。severity 3 = レポート級であることに注意（1 ではない）
 az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-storage-percent-80 \
   --scopes "$RID" --condition "avg storage_percent >= 80" \
-  --window-size 15m --evaluation-frequency 5m --severity 1 --auto-mitigate true --action "$AG"
+  --window-size 15m --evaluation-frequency 5m --severity 3 --auto-mitigate true --action "$AG"
 
 az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-is-db-alive \
   --scopes "$RID" --condition "min is_db_alive < 1" \
@@ -452,25 +583,44 @@ az monitor metrics alert create -g rg-felisaichatbot-dev-tf -n alert-pgsql-cpu-c
   --window-size 15m --evaluation-frequency 5m --severity 2 --auto-mitigate true --action "$AG"
 ```
 
+閾値を書き換えるときは `--remove-conditions cond0 --add-condition "..."` の組で更新する
+（`az monitor metrics alert update` に `--condition` は無い）。
+
 ### 確認コマンド
 
 ```bash
 az monitor metrics alert list -g rg-felisaichatbot-dev-tf -o json \
   | python3 -c "
 import json,sys
-for a in json.load(sys.stdin):
+for a in sorted(json.load(sys.stdin), key=lambda x: x['name']):
     c=a['criteria']['allOf'][0]
     print(a['name'], a['enabled'], 'sev'+str(a['severity']), c['metricName'], c['operator'], c['threshold'], c['timeAggregation'], a['windowSize'], a['evaluationFrequency'])
 "
 ```
 
-**期待値は上の表のとおり 3 行**。とくに `threshold` が 80 / 1 / 30 であることを見る（下記のとおり、試験のために一時的に下げる運用があるため）。
+**期待値は上の表のとおり 5 行**。とくに次の 3 点を見る（試験のために一時的に閾値を動かす運用があるため）。
+
+- `threshold` が **10737418240 / 6442450944 / 80 / 1 / 30**
+- `storage_free` 系 2 件の `timeAggregation` が **Minimum**（`Average` になっていたら誤り）
+- `alert-pgsql-storage-percent-80` の severity が **3**（1 に戻っていたら誤り）
 
 ### 固有のリスク・注意
 
-- **閾値を一時的に下げて発火試験をしたら、必ず戻す。** 下げたままだと誤検知が続き、やがてメールを無視するようになる（アラート疲れ）。試験のたびに上の確認コマンドで戻ったことを確認する
-- `is_db_alive` は**安全に発火させられない**（サーバーを落とす必要がある）ため、実発火試験を実施していない。この 1 件については「同一 Action Group を使う他の 2 件で配送が実証できているので、通知経路は生きているはず」という**間接的な確証しかない**。ルール自体の評価が正しく走るかは未検証である
-- scope の PostgreSQL を destroy すると、アラートは scope が消えた状態で残る。「プロジェクト終了時の後片付け」節のとおり **PostgreSQL より先に消す**
+- **閾値を一時的に動かして発火試験をしたら、必ず戻す。** `storage_free` 系は `LessThan` なので、
+  試験では閾値を**現在値より大きく**して発火させる（#145 の percent / cpu credits は逆に下げて発火させた）。
+  戻し忘れると誤検知が続き、やがてメールを無視するようになる（アラート疲れ）。
+  試験のたびに上の確認コマンドで戻ったことを確認する
+- **10 GiB / 6 GiB は一次情報のない設計値（暫定）である。** フェーズ 2 でストレージ消費速度を実測するまで、
+  この 2 つの数字を「検証済みの値」として扱わない
+- **`txlogs_storage_used` のアラートは未作成。** フェーズ 2 開始前に作る（上記の判断節）
+- `is_db_alive` は**安全に発火させられない**（サーバーを落とす必要がある）ため、実発火試験を実施していない。
+  この 1 件については「同一 Action Group を使う他の 4 件で配送が実証できているので、通知経路は生きているはず」という
+  **間接的な確証しかない**。ルール自体の評価が正しく走るかは未検証である
+- scope の PostgreSQL を destroy すると、アラートは scope が消えた状態で残る。
+  「プロジェクト終了時の後片付け」節のとおり **PostgreSQL より先に消す**
+- **tier を General Purpose へ変更したら本節を見直す。** 絶対値の閾値（read-only の 5 GiB）は変わらないが、
+  ストレージサイズが変われば「10 GiB の余裕が何時間分か」は変わる。
+  `storage_percent` 側の意味（分母）も同時に変わる
 
 ---
 
