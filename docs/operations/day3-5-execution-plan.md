@@ -240,14 +240,30 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
 
 ### 4-2. ドリル準備: 復旧点を判定できるデータを作る
 
-- seed データ（気象庁データ）を投入した上で、**1 分おきにタイムスタンプ行を insert する heartbeat テーブル**を 30 分以上回す。これが RPO 判定の物差しになる（実測 RPO は `T1 −「復旧後に残っている最後の heartbeat」`。復旧目標時刻 `T_target` と最後の heartbeat の差は**復元点精度**であり、RPO とは別物として記録する。式と標本化誤差の注記は §4-3 の 6〜7）
+- seed データ（気象庁データ）を投入した上で、**1 分おきにタイムスタンプ行を insert する heartbeat テーブル**を 30 分以上回す。これが RPO 判定の物差しになる（実測 RPO は `T1 −「復旧後に残っている最後の heartbeat」`。**復元指定時刻**（`--restore-time` に渡す時刻。§4-3 冒頭の「時刻記法」参照）と最後の heartbeat の差は**復元点精度**であり、RPO とは別物として記録する。式と標本化誤差の注記は §4-3 の 6〜7）
 - WAL バックアップを確実に発生させるため、heartbeat 稼働中は他の書き込みも通常どおり行う
 
 ### 4-3. ドリル本番（すべての時刻を UTC で記録）
 
+**時刻記法**: `T0` / `T1` は本ドリル内だけのタイムライン印で、直下の 1〜2 で定義する
+（対応する業界標準のパラメータ名は無いため、定義付きの独自記法として残す）。
+一方、**どの時点の状態へ戻すか**を指す時刻には独自記号を使わず「**復元指定時刻**」と書く。
+これは実在する標準名を持つ概念であり、次の 2 つがそのまま対応する:
+
+- Azure CLI `az postgres flexible-server restore` の引数 **`--restore-time`**
+  （"The point in time in UTC to restore from (ISO8601 format)"。
+  出典: <https://learn.microsoft.com/en-us/cli/azure/postgres/flexible-server> ）
+- PostgreSQL のパラメータ **`recovery_target_time`**
+  （"the time stamp up to which recovery will proceed"。
+  出典: <https://www.postgresql.org/docs/17/runtime-config-wal.html> の Recovery Target 節）
+
+復元指定時刻は、復元を**発行した時刻**（下の 4）とも、接続が**回復した時刻**（下の 5）とも別物である。
+なお `docs/verification/` 配下の過去の実測記録は当時の表記のまま残す運用（ADR-0015 の
+「**改名はしない**」節と同じ理由）のため、記録側と本計画書とで表記が分かれ得る。
+
 1. `T0`: 正常状態を記録（各テーブルの行数・heartbeat 最新時刻）
 2. `T1`: 破壊を実行（例: `DROP TABLE documents;`）。実行時刻を記録
-3. 復旧目標時刻 `T_target = T1 の 1 分前` を決める
+3. **復元指定時刻**を決める（`= T1 の 1 分前`）
 4. 復元を **`--no-wait` で非同期発行**し、発行時刻を記録する（同期実行だと CLI が完了までブロックし、1 分間隔の計測が成立しない）:
 
    ```bash
@@ -257,7 +273,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
      -g rg-felisaichatbot-dev-tf \
      --name pgsql-felisaichatbot-dev-restored \
      --source-server pgsql-felisaichatbot-dev \
-     --restore-time "<T_target (ISO8601 UTC)>" \
+     --restore-time "<復元指定時刻 (ISO8601 UTC)>" \
      --no-wait \
      --vnet vnet-felisaichatbot-dev \
      --subnet snet-felisaichatbot-dev-pgsql \
@@ -298,14 +314,14 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
    # 出力（各行 = 1 試行）はターミナルログごと証跡（§4-4）に残す
    ```
 
-6. **RPO 実測（実損失）**: `T1 −（復元サーバーに残っている最新 heartbeat 時刻）`。RPO は「障害時点（T1）からどれだけのデータが失われたか」なので、意図的に 1 分手前を指定した分も含めて T1 起点で計算する（RPO の定義: [Business continuity concepts](https://learn.microsoft.com/en-us/azure/reliability/concept-business-continuity-high-availability-disaster-recovery)）。破壊したテーブルが `T_target` 時点の内容で存在することを行数で確認
-7. **復元点精度（RPO とは別に記録）**: `T_target −（復元サーバーの最新 heartbeat 時刻）`。指定した時刻をどこまで正確に再現できたかの値であり、RPO と混ぜない。heartbeat は 1 分間隔のため、両値とも最大 1 分の標本化誤差を含む（この注記ごと証跡に書く）
+6. **RPO 実測（実損失）**: `T1 −（復元サーバーに残っている最新 heartbeat 時刻）`。RPO は「障害時点（T1）からどれだけのデータが失われたか」なので、意図的に 1 分手前を指定した分も含めて T1 起点で計算する（RPO の定義: [Business continuity concepts](https://learn.microsoft.com/en-us/azure/reliability/concept-business-continuity-high-availability-disaster-recovery)）。破壊したテーブルが**復元指定時刻**の内容で存在することを行数で確認
+7. **復元点精度（RPO とは別に記録）**: `復元指定時刻 −（復元サーバーの最新 heartbeat 時刻）`。指定した時刻をどこまで正確に再現できたかの値であり、RPO と混ぜない。heartbeat は 1 分間隔のため、両値とも最大 1 分の標本化誤差を含む（この注記ごと証跡に書く）
 8. アプリの向け替え: `.env` の `TF_VAR_database_url` のホスト部を復元先 FQDN に変えて export し直し（[vnet-integration-cutover.md](./vnet-integration-cutover.md) §0-2）、`terraform -chdir=terraform/ephemeral apply` する。**Container Apps の secret 更新は既存 revision に自動反映されない**（"An updated or deleted secret doesn't automatically affect existing revisions in your app"。出典: <https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets> ）が、template 内の非 secret 環境変数 `DSN_CONFIG_CHECKSUM`（DSN ハッシュ。`terraform/ephemeral/main.tf`）が revision-scope の変更であるため、DSN が変わる apply は serving / ops とも必ず新 revision を作る（コードで担保。ADR-0018 追記 #98。イメージタグは `.env` の `DEPLOY_SHA` = ステップ B で push 済みの SHA のまま変えない — [vnet-integration-cutover.md](./vnet-integration-cutover.md) §0-2 の注意のとおり、HEAD から再計算すると未 push タグで `ErrImagePull` になる）。**新 revision が稼働してから** `/readyz` → `/chat` を確認し、その成功時刻をアプリ回復時刻として記録する（古い revision の応答を拾うと元サーバーへの接続成功を誤計測する）。migration Job は revision を持たず実行ごとに secret を読み直す想定（**未実測のまま**。cutover ステップ B/C では secret の更新が発生しなかったため測れず、この Day 4 の向け替え後の Job 実行が初の実測になる）
 9. 注意（§2-1 No.3 と [Limits](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-limits) の restore 節より）: 復元は**新サーバー作成**である。private access（ADR-0018）では firewall 規則は存在せず、代わりに (a) 復元サーバーが同一 VNet・委任サブネットに入ること、(b) private DNS zone に復元サーバーの名前が登録され ops コンテナから解決できること、を接続回復の確認手順に含めて計測する。委任サブネットは /27（32 − Azure 予約 5 = 実質 27 アドレス。ADR-0018 追記）で、復元中は一時的に 2 台が同居する（[vnet-integration-cutover.md](./vnet-integration-cutover.md) 末尾の注意）
 
 ### 4-4. ドリル証跡（`docs/verification/restore-drill/`）
 
-`2026-08-XX-pitr-drill.md` に以下を残す: タイムライン表（T0 / T1 / T_target / restore 発行 / 接続回復 / アプリ回復）、実行コマンド全文と出力、**RTO / RPO（実損失）の実測値と復元点精度**（§4-3 の 5〜7）、引っかかった点、次にやるなら変える点。
+`2026-08-XX-pitr-drill.md` に以下を残す: タイムライン表（T0 / T1 / 復元指定時刻 / restore 発行 / 接続回復 / アプリ回復）、実行コマンド全文と出力、**RTO / RPO（実損失）の実測値と復元点精度**（§4-3 の 5〜7）、引っかかった点、次にやるなら変える点。
 
 ### 4-5. ドリル後始末
 
