@@ -87,7 +87,8 @@ RUN apt-get update \
 # alembic upgrade head が WORKDIR /app 直下の alembic.ini（script_location = %(here)s/migrations）を読む
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations
-# 観測ワークロード + スナップショット採取の SQL（#104。cron Job が psql -f で実行）
+# recovery marker の刻み + スナップショット採取の SQL（#104。cron Job が psql -f で実行。
+# 毎分の書き込みは PITR の復旧時点を確定させる marker であり負荷生成ではない = ADR-0021）
 COPY observability ./observability
 
 USER app

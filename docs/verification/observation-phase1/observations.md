@@ -40,6 +40,14 @@ heartbeat table、`code=` -> `http_code=` = curl の write-out 変数名）。
 既存の 131 行と一致する（改名後の 2026-08-26 に実測で確認済み）。
 同じ理由で `docs/verification/` 配下の過去の実測記録は当時の表記のまま残す。
 
+**読み方の注記（2026-08-27 追記。本文は書き換えていない）**: 本記録が「低負荷ベースライン」と呼ぶ
+区間の書き込みは、毎分 1 行の heartbeat INSERT + カウンタ 1 行 UPDATE のみである。これは
+**PITR の復旧時点を確定させるための recovery marker**（既知の書き手）であり、autovacuum / bloat を
+駆動する**負荷生成ではない**（負荷生成 = churn generator は Issue #112 / PR #120 の別装置で、
+2026-08-27 時点で未マージ）。位置づけの正本は
+[ADR-0021](../../adr/0021-heartbeat-table-as-recovery-marker.md)。
+**本文の測定値・表記（「低負荷ベースライン」を含む）は当時のまま残し、書き換えない。**
+
 ## 1. デプロイ（2026-08-23）
 
 ### 1-1. plan の差分要約
