@@ -53,3 +53,13 @@ variable "log_analytics_daily_quota_gb" {
   type        = number
   default     = 1
 }
+
+variable "alert_email_address" {
+  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email）のメール受信者。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_email_address 環境変数（.env）で渡す"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email_address))
+    error_message = "alert_email_address はメールアドレス形式で指定してください。"
+  }
+}
