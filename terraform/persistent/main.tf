@@ -178,7 +178,48 @@ resource "azurerm_postgresql_flexible_server" "main" {
   lifecycle {
     # zone は未指定（Azure の自動割当に任せる）。Day 5 のフェイルオーバーで primary zone が
     # 入れ替わっても Terraform が元の zone へ戻そうとしないよう ignore する（provider docs 推奨）。
-    ignore_changes = [zone]
+    #
+    # high_availability も ignore する（Issue #155）。HA failover ドリルでは
+    # tier 昇格（B1ms → GP）→ zone-redundant HA 有効化 → planned / forced failover →
+    # HA 無効化 → Burstable 復帰 を **すべて az CLI で操作する**。az CLI を使うのは
+    # forced failover が Terraform では表現できないため（azurerm 5.1.0 の
+    # internal/services/postgres/postgresql_flexible_server_resource.go に "Forced" の
+    # 文字列が 1 件も存在せず、扱えるのは PlannedFailover のみ。2026-08-28 確認）。
+    #
+    # ignore しないと、ドリル中（実環境 HA 有効 / コードに high_availability ブロック無し）に
+    # terraform apply すると **HA が無効化される**。同ファイルでの機序:
+    #   - high_availability は Optional のみで Computed が無い（L282-301）
+    #   - Read が remote の HA を state に書く（L839。flatten は Disabled のときだけ
+    #     空リストを返す L1370-1386）→「config に無い + state にある」= 削除差分
+    #   - apply で expandFlexibleServerHighAvailabilityForPatch([]) が Mode: Disabled を
+    #     PATCH する（L1047、L1345-1351）
+    #   - provider のガード（L947-）はすり抜ける。「zone と
+    #     high_availability.0.standby_availability_zone の交換以外を弾く」条件は、
+    #     上の ignore_changes = [zone] により d.HasChange("zone") が false になり入らない
+    # 「ドリル中は apply しない」という運用ルールだけでは provider が止めてくれないため、
+    # コード側でガードを持つ。
+    #
+    # provider の公式 docs も zone と high_availability[0].standby_availability_zone の
+    # 両方の ignore を推奨している（azurerm v5.1.0 website docs。2026-08-28 に開いて確認:
+    # https://github.com/hashicorp/terraform-provider-azurerm/blob/v5.1.0/website/docs/r/postgresql_flexible_server.html.markdown ）。
+    # high_availability ブロックごと ignore すれば、ネストされた standby_availability_zone も
+    # 同時にカバーされる。
+    #
+    # 【この ignore のリスク】HA の drift が plan に一切現れなくなる。誰かが az CLI で HA を
+    # 消しても、Azure 側の障害で HA が落ちても plan は無言になる。**HA の状態監視は
+    # Terraform 以外の手段で持つ必要がある**（az postgres flexible-server show
+    # --query highAvailability の定期確認等）。
+    #
+    # 【sku_name は絶対に ignore しない】tier の差分は「今 GP に上がっている」ことを plan が
+    # 教える唯一の計器であり、ドリル後に B1ms へ戻し忘れた場合の検知手段（課金に直結）。
+    # ドリル中に plan が exit 2 になるのは正しい挙動。
+    #
+    # 【判断保留】ドリル後にこの ignore を外すかどうかは未決。外さないなら
+    # 「HA は恒久的に az CLI 管理」という設計判断になり、ADR に記録が必要。
+    ignore_changes = [
+      zone,
+      high_availability,
+    ]
   }
 
   # VNet link が完成する前にサーバー作成を始めると名前解決の結線ができず失敗し得るため、
