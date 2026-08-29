@@ -59,3 +59,4 @@
 | [0020](./0020-credit-window-resource-strategy.md) | Accepted | クレジット失効日を締め切りとした期間観測方針への転換（Day 4/5 のコスト最小化制約を組み替える） |
 | [0021](./0021-heartbeat-table-as-recovery-marker.md) | Accepted | `obs.heartbeat` への毎分書き込みを PITR の recovery marker と位置づける（負荷生成ではない。識別子は据え置き） |
 | [0022](./0022-import-azure-monitor-into-terraform.md) | Accepted | Azure Monitor の監視リソース 6 件（Action Group + メトリクスアラート 5）を terraform import で persistent 層へ移行する（ID 不変 = 発火試験の証跡を保全） |
+| [0023](./0023-no-second-granularity-downtime-measurement.md) | Accepted | HA ドリルの downtime を秒粒度で測らず 10 秒間隔で測る（RTO 目標 3 時間 と公称 60〜120 秒 は桁が 2 つ違い判定が変わらない。1 秒間隔は `/readyz` のハング時にプローブが積み上がる） |
