@@ -179,6 +179,8 @@ Owner）で、スコープは `billingAccounts/{BA}/billingProfiles/{BP}` への
 ```bash
 # コスト（反映ラグあり = 前日以前の確定分を見る、と明記して記録する）
 #   balanceSummary（旧計画 §8 のコマンド）→ estimated の日次差分を記録
+#   内訳が要るときは usageDetails でメーター別に集約する
+#   （手順の正本は台帳「750 時間の消費状況の確認手段」節。無料枠 750h の消費もこれで見る）
 # バックアップ / 復元ウィンドウ
 az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
   --query "{earliest: backup.earliestRestoreDate, state: state}" -o json
@@ -520,6 +522,18 @@ H3 の一次情報（[Compute options](https://learn.microsoft.com/en-us/azure/p
 | フェーズ 2 のストレージ増分（WAL・バックアップ。**未実測**） | 1 USD | 3 USD（見積。実測で更新） |
 | Azure OpenAI（保護後の RAG 検証・ドリル） | 5 USD | 10 USD |
 | **合計** | **51 USD** | **72 USD** |
+
+**実績（2026-08-30 取得。usageDetails のメーター別集約。手順は[台帳](./azure-resource-inventory.md)「750 時間の消費状況の確認手段」節）**:
+
+| 区間 | 実測 |
+| --- | --- |
+| 8/19〜8/29 の累計消費 | **4.88 USD**（estimatedBalance 195.12 / originalAmount 200.00 と整合） |
+| 定常バーンレート | **約 0.30 USD/日**（8/23〜8/27 の日次実績。HA ドリルの 8/28 を除く） |
+| 8/28（HA ドリル日） | 2.68 USD（GP D2ds_v5 への一時昇格 12 vCore-hour = `vCore` メーター 1.464 USD を含む単発） |
+
+- **§1-3 の想定（期待 1.5 / ワースト 2.1 USD/日）に対して実績は約 1/5〜1/7**。上限 90 USD に対する逼迫は無い
+- 費目の内訳（8 月合計 USD）: `vCore` 1.464（8/28 単発） / `Basic Registry Unit` 1.305（ACR） / `Standard IPv4 Static Public IP` 0.829（CAE の custom VNet managed resources。本プロジェクトに NAT Gateway は無い = ADR-0018 の 4） / `Standard vCPU Active Usage` 0.692 + `Standard vCPU Idle Usage` 0.089 + `Standard Memory Active/Idle Usage` 0.365（Container Apps） / `Private Zone` 0.115 + `Private Queries` 0.009（Private DNS） / Azure OpenAI 0.014 / その他 0.0005。**PostgreSQL は compute / storage とも `- Free` メーターで 0**
+- §5-2 の中間チェックポイントは形骸化しているが、**想定外の消費の早期検知**として維持する（§8-1 の結論を変更しない）
 
 （参考: 7 日案時代の積み上げは期待 69 / ワースト 96 — 72h 化でワーストでも上限 90 の内側に収まった）
 

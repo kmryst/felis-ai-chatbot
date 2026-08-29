@@ -30,7 +30,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
 | Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
@@ -75,16 +75,29 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 ### 750 時間の消費状況の確認手段
 
 - Azure Portal の Subscription 画面にある free services grid（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/check-free-service-usage> ）
-- CLI では Microsoft.Consumption の usageDetails を `az rest` で叩く経路があるはずだが**未実測**（`az consumption usage list` は PretaxCost が None で使えないことを 2026-08-21 に実測済み。[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）。初回確認時に検証して本節を更新する
-- **課金データの反映には 1〜2 日程度の遅延がある**（2026-08-21 の実測でも当日分は未反映。同 §8）。日次の見張りではなく、数日おきの確認でよい
+- **CLI では Microsoft.Consumption の usageDetails を `az rest` で叩く**（2026-08-24 に経路を確立し、2026-08-30 に再取得して追認。`az consumption usage list` は PretaxCost が None で使えないことを 2026-08-21 に実測済み。[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）。subscription ID はハードコードせず毎回 CLI で取得する:
+
+  ```bash
+  SUB=$(az account show --query id -o tsv)
+  az rest --method get --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.Consumption/usageDetails?api-version=2023-05-01&\$filter=properties/usageStart%20ge%20'2026-08-01'%20and%20properties/usageEnd%20le%20'2026-08-31'&metric=actualcost&\$top=1000" -o json
+  # 応答に nextLink があればたどってページングし、.value[] を集約する
+  # 無料枠の消費: properties.meterName == "B1MS Compute - Free" の quantity（unitOfMeasure = "1 Hour"）を日別に合計
+  # 課金の内訳: properties.meterName ごとに costInUSD を合計
+  ```
+
+- **2026-08 の消費実績（2026-08-30 取得）: `B1MS Compute - Free` 合計 192 時間 / 750 時間（25.6%）。コストは 0 USD**。日次内訳は 8/21 = 18h（サーバー作成 05:59Z 以降）、8/22〜8/27 = 各 24h、8/28 = 21h、8/29 = 9h（反映途中）。`Storage Data Stored - Free` も全額 0 USD で、**PostgreSQL は compute / storage とも課金 0**
+- **SKU 変更中は `B1MS Compute - Free` メーターが計上されない**（2026-08-30 取得の実測）。8/28 に HA ドリルで B1ms → GP D2ds_v5 → B1ms と往復した日は同メーターが 21h（24h ではない）で、差分の 3h 相当は `vCore` メーター側（GP、無料枠対象外）に出ている。**無料枠時間の欠測ではない**ので、往復した日の 24h 未満は異常として扱わない
+- **課金データの反映には 1〜2 日程度の遅延がある**（2026-08-21 の実測に加え、2026-08-30 時点でも 8/29 分が部分計上であることを追認。[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）。日次の見張りではなく、数日おきの確認でよい
 
 ### リスクと未確定事項（「確定」と書かない）
 
 - **Day 4 の PITR ドリルでは復元先としてもう 1 台の B1ms が一時的に立つ**。2 台分の稼働時間が 750 時間に合算されるなら当月分を超え得る。超えた場合も**超過分はクレジットから引かれるだけで実支出は $0**（クレジット失効 2026-09-18 まで）
+- **2026-08 の実績では超過リスクは無い**: 8/30 取得時点で 192 / 750 時間（本節「750 時間の消費状況の確認手段」）。仮に月末まで連続稼働し、PITR ドリルの復元先 1 台が合算されるとしても 750 時間には届かない
 - **未確定**（公式に明文を確認できていない事項。確定として扱わない）:
   - 複数台の B1ms を並行稼働させたとき 750 時間が**合算**されるのか
   - **停止中**の時間が 750 時間を消費するか（停止中もストレージ・バックアップストレージの課金自体は継続する。計画書 §2-1 No.6）
   - 原文の「32 GB」が GB / GiB のどちらの厳密解釈か
+  - 上記のうち**合算**と**停止中**の 2 件は、今後の PITR ドリル（復元先としてもう 1 台の B1ms が一時的に立つ）で実測できる見込みがある。**ドリル実施までは未確定のまま扱う**
 - **無料枠の終了は 2027-08 頃**（サインアップ 2026-08-19 から 12 か月。「Your free services and quantities expire at the end of 12 months.」出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
 
 ## 従量課金へのアップグレード（判断期限 2026-09-18）

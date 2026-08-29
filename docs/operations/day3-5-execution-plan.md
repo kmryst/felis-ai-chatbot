@@ -460,7 +460,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（�
 ## 8. コスト見張り
 
 - **全リソースの一覧（管理区分・寿命・課金）・12か月無料枠・プロジェクト終了時の後片付け・再現手順（revive runbook）の正本は [azure-resource-inventory.md](./azure-resource-inventory.md)**。本節は Day 3〜5 の毎日の見張り手順のみを持つ
-- **宿題（2026-08-23 頃）**: PostgreSQL 無料枠 **750 時間の消費状況を初回確認**する（手段は台帳の「750 時間の消費状況の確認手段」節。課金データの反映に 1〜2 日程度かかるため、常時稼働開始（8/21）から 2 日後の 8/23 頃に見る）
+- **宿題（2026-08-23 頃）→ 実施済み**: PostgreSQL 無料枠 750 時間の消費状況の初回確認は 2026-08-24 に実施（[フェーズ 1 実測記録 §5](../verification/observation-phase1/observations.md)）、2026-08-30 に再取得して追認した。**手段と実績の正本は台帳の「750 時間の消費状況の確認手段」節**（本節には数値を持たない）
 - **クレジット残の確認**（Day 3 に実測して確立した手段。2026-08-21）: CLI では Microsoft.Consumption の credits/balanceSummary API を billing profile 経由で叩く。以下をそのまま実行する（billing account / profile 名は ARM の識別子だが、public リポジトリにはハードコードせず毎回 CLI で取得する）:
 
   ```bash
