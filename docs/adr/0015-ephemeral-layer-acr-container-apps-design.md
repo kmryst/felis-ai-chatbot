@@ -8,6 +8,12 @@ Accepted
 
 （**Log Analytics workspace の配置（ephemeral 層）のみ [ADR-0016](./0016-log-analytics-workspace-in-persistent-layer.md) により persistent 層へ変更された**。設定値（PerGB2018 / 保持 30 日 / 日次取込上限 1 GB）と他の決定はすべて引き続き有効）
 
+（**選択肢 2-(a) の serving のスケールゼロ（min_replicas 0）は [ADR-0025](./0025-serving-min-replicas-1-for-sli-integrity.md)
+により min_replicas 1 へ変更された**。cold start が外形監視の可用性 SLI を汚染し、probe 失敗 3 件が
+すべて偽陽性だったことが 2026-08-30 の実測で確定したため。walking skeleton 段階の「コールドスタート
+遅延は許容する」という前提の変化であり、本 ADR の他の決定は引き続き有効。ops の min_replicas 1 は
+追記 #100 のとおり）
+
 （**選択肢 4-(a)（egress IP を PostgreSQL firewall rule で許可 + IP 変動のリスク受容）と、7 の
 「outbound_ip_addresses 依存の 2 段階 apply」は [ADR-0018](./0018-postgresql-private-access-and-vnet-integration.md)
 （private access / VNet 統合）により不要化された**。egress IP は DB の到達制御に使われなくなり、
