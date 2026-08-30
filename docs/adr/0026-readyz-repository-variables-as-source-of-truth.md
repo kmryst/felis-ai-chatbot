@@ -20,8 +20,8 @@ URL は `https://<host>/readyz` だけを許可し、未設定・不正値は fa
 `OBS_FRESHNESS_ENFORCE=false` は probe と SLI 記録を継続したまま鮮度ゲートだけを止める。
 
 `READYZ_URL` は `terraform/ephemeral` の安定 FQDN output `container_app_fqdn` から組み立てる。
-CAE を再作成する場合は、probe 停止 → apply → 新 URL の直接検証 → repository variable 更新 →
-probe 再開の順序を守る。
+CAE と DB を再作成する場合は、probe 停止 → apply → 新 URL の DB 到達性検証 → repository variable
+更新 → Alembic migration 成功 → `/readyz` の `.obs` 契約検証 → probe 再開の順序を守る。
 
 ## 背景
 

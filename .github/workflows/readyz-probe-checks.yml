@@ -1,0 +1,55 @@
+# readyz-probe 固有の静的検査と境界テスト。
+# schedule / workflow_dispatch 専用の本体 workflow には PR イベントを混ぜず、
+# 対象ファイルが変わった PR だけで実行する。
+
+name: readyz-probe checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/readyz-probe.yml"
+      - ".github/workflows/readyz-probe-checks.yml"
+      - "scripts/test/readyz-probe-freshness-test.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readyz-probe-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  # actionlint 1.7.12 / ShellCheck 0.11.0 を含む公式イメージを digest 固定する。
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+jobs:
+  readyz-probe-checks:
+    name: actionlint, ShellCheck, and boundary tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Lint readyz workflows
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -w /repo \
+            "$ACTIONLINT_IMAGE" \
+            -color \
+            .github/workflows/readyz-probe.yml \
+            .github/workflows/readyz-probe-checks.yml
+
+      - name: ShellCheck boundary test
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/repo:ro" \
+            -w /repo \
+            --entrypoint shellcheck \
+            "$ACTIONLINT_IMAGE" \
+            scripts/test/readyz-probe-freshness-test.sh
+
+      - name: Run boundary test
+        run: scripts/test/readyz-probe-freshness-test.sh

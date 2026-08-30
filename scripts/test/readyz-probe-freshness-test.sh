@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# readyz-probe.yml の鮮度ゲート判定ロジックの境界テスト（ローカル実行。Issue #106）
+# readyz-probe.yml の鮮度ゲート判定ロジックの境界テスト（PR CI / ローカル。Issue #106）
 #
 # 方式: workflow の run ブロックを yq で「逐語」抽出し、curl を PATH shim で
 # 差し替えて実行する。抽出実行なのでテスト対象と出荷物が乖離しない。

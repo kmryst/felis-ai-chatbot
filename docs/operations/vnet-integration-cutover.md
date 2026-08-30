@@ -181,9 +181,9 @@ terraform -chdir=terraform/ephemeral apply
 ```
 
 - CAE は workload profiles + custom VNet になったため作成時間が伸びる可能性がある（実測して記録）
-- apply 後は Terraform の安定 FQDN output から URL を組み立て、repository variable を更新してから
-  外形監視を再開する。`READYZ_URL` の更新前に `PROBE_ENABLED=true` へ戻してはならない
-  （CAE 再作成でサフィックスが変わった場合、旧 URL への probe が失敗し続けるため）。
+- apply 後は Terraform の安定 FQDN output から URL を組み立て、repository variable を更新する。
+  この時点では新 DB に obs schema が無いため、`PROBE_ENABLED=false` を維持する。外形監視の再開は
+  §3-1 の migration 成功と `/readyz` の `.obs` 契約確認後にだけ行う。
 
 ```bash
 (
@@ -198,9 +198,7 @@ curl --fail-with-body --silent --show-error "$readyz_url" |
 
 gh variable set READYZ_URL --body "$readyz_url"
 test "$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')" = "$readyz_url"
-test "$(gh variable list --json name,value --jq '.[] | select(.name == "OBS_FRESHNESS_ENFORCE") | .value')" = "true"
-gh variable set PROBE_ENABLED --body true
-test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "true"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
 )
 ```
 
@@ -208,9 +206,64 @@ test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_EN
 
 ```bash
 # 3-1. Alembic マイグレーション（Manual Job を起動して完了を待つ）
-az containerapp job start -g rg-felisaichatbot-dev-tf -n caj-felisaichatbot-dev-migrate
-az containerapp job execution list -g rg-felisaichatbot-dev-tf -n caj-felisaichatbot-dev-migrate -o table
-# → Status: Succeeded を確認。失敗時はログを見る（Log Analytics: ContainerAppConsoleLogs_CL）
+(
+set -euo pipefail
+
+migration_job="caj-felisaichatbot-dev-migrate"
+migration_execution="$(
+  az containerapp job start \
+    -g rg-felisaichatbot-dev-tf \
+    -n "$migration_job" \
+    --query name \
+    -o tsv
+)"
+test -n "$migration_execution"
+
+# 履歴一覧の別 execution を成功と誤認しないよう、今起動した名前だけを最大 12.5 分待つ。
+migration_status=""
+for _ in {1..150}; do
+  migration_status="$(
+    az containerapp job execution show \
+      -g rg-felisaichatbot-dev-tf \
+      -n "$migration_job" \
+      --job-execution-name "$migration_execution" \
+      --query properties.status \
+      -o tsv
+  )"
+  case "$migration_status" in
+    Succeeded) break ;;
+    Failed)
+      echo "migration execution $migration_execution failed; inspect ContainerAppConsoleLogs_CL" >&2
+      exit 1
+      ;;
+    *) sleep 5 ;;
+  esac
+done
+if [ "$migration_status" != "Succeeded" ]; then
+  echo "migration execution $migration_execution did not succeed within 12.5 minutes" >&2
+  exit 1
+fi
+
+# migration 後の契約を満たすまで probe は再開しない。3系列が未採取で値が null でもよいが、
+# obs schema 未作成・クエリ失敗を示す .obs=null やキー欠落は拒否する。
+readyz_url="$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')"
+test "$readyz_url" = \
+  "https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "OBS_FRESHNESS_ENFORCE") | .value')" = "true"
+curl --fail-with-body --silent --show-error "$readyz_url" |
+  jq -e '
+    .status == "ok" and
+    .db == "ok" and
+    (.obs | type == "object") and
+    (.obs | has("heartbeat_age_seconds") and
+      has("stats_age_seconds") and
+      has("pgstattuple_age_seconds"))
+  ' >/dev/null
+
+gh variable set PROBE_ENABLED --body true
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "true"
+)
 
 # 3-2. psql 対話経路（ops コンテナ）
 # ops は min_replicas = 1 の常駐構成（2026-08-22 是正。ADR-0015 追記）。exec は Running

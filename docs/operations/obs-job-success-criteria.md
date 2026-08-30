@@ -95,4 +95,6 @@ fail-closed にする。これにより変数名の誤記や削除が「正常�
 
 `scripts/test/readyz-probe-freshness-test.sh` は3変数の job env mapping に fallback が無いことを
 逐語検証し、未設定・不正値が curl 前に失敗する境界ケースも実行する。workflow の変数名や検証順序を
-変更する場合は、このテストも同じ PR で更新する。
+変更する場合は、このテストも同じ PR で更新する。`.github/workflows/readyz-probe-checks.yml` は
+本体 workflow・このテスト・CI workflow 自身の変更時に、actionlint / ShellCheck と境界テストを
+PR check として実行する。

@@ -22,7 +22,8 @@
 #       xargs -I{} gh run view {} --log | grep '^PROBE '
 # - GitHub Actions の schedule は起動遅延があり厳密な等間隔にならない（既知の仕様）。
 #   集計は必ずレコード内の実測タイムスタンプ ts= を基準にする
-# - 判定ロジックの境界テスト: scripts/test/readyz-probe-freshness-test.sh（ローカル実行）
+# - 判定ロジックの境界テスト: scripts/test/readyz-probe-freshness-test.sh
+#   （readyz-probe-checks.yml の PR CI とローカルで実行）
 name: readyz-probe
 
 on:
@@ -47,7 +48,7 @@ jobs:
       # PROBE_ENABLED: teardown 前は false、稼働中は true。
       PROBE_ENABLED: ${{ vars.PROBE_ENABLED }}
       # READYZ_URL: revision 固有でない安定 FQDN を Terraform output から設定する。
-      # ephemeral 再作成後は必ず vnet-integration-cutover.md §2 の順序で更新する。
+      # ephemeral 再作成後は必ず vnet-integration-cutover.md §2 / §3-1 の順序で更新する。
       READYZ_URL: ${{ vars.READYZ_URL }}
       # 鮮度ゲートの系列別閾値（秒）。根拠は計画 §5-3（採取間隔の約 3 倍。
       # heartbeat のみ probe 間隔 5 分の 2 倍 = 10 分）

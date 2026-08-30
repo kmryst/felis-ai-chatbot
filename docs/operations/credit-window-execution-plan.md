@@ -867,8 +867,9 @@ B_rem = teardown **9/15** まで 15 日 × 2.1 = **31.5** として（以前は 
    = メトリクスアラート 5 + Action Group 1 は 2026-08-27 に persistent 層へ import 済みのため
    （Issue #151 / ADR-0022）、persistent destroy が依存の逆順で消す。手動削除の一手は不要）
    → 残存リソースゼロ確認。3 つの repository variables は削除せず、`PROBE_ENABLED=false` を維持する。
-   後日再作成する場合は `READYZ_URL` を新しい Terraform output へ更新して疎通確認した後にのみ
-   `PROBE_ENABLED=true` へ戻す（順序の正本は `vnet-integration-cutover.md` §2）
+   後日再作成する場合は `READYZ_URL` を新しい Terraform output へ更新し、migration 成功と
+   `/readyz` の `.obs` 契約を確認した後にのみ `PROBE_ENABLED=true` へ戻す
+   （順序の正本は `vnet-integration-cutover.md` §2 / §3-1）
 3. 9/16 以降: 課金反映ラグの分を待って最終コスト実測を記録（これも FinOps 証跡）。**失効 9/18T06:59Z までに完了する必要がある**（失効後はサブスクリプション無効化で取得自体ができない）
 
 - **マージンは 2 層に分かれる**（2026-08-30 の作業窓再設定 = §10-5 による。以前の「約 14 日」は
