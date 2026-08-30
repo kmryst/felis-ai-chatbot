@@ -219,9 +219,15 @@ PostgreSQL compute が無料枠で 0（想定表では最大費目 0.624 USD/日
 | 1 | #107 デプロイ済み（/chat が外部から 401 / 404） | 外部から実測 |
 | 2 | #104 デプロイ済み・3 系列すべてが設計間隔で積まれている | obs テーブルの実データ |
 | 3 | 意図的欠落の通知試験に成功（上記 3） | GitHub 失敗通知の受信 → 復旧 green |
-| 4 | **鮮度ゲートが有効のまま**（`OBS_FRESHNESS_ENFORCE` が未設定または true。既定 true = 手動設定は不要。#116） | `gh variable list` で false 上書きが残っていないこと。ゲートは採取データの有無で自動発動する（未採取 = null の系列は skip、採取が止まった系列は age 超過で fail）ため、**一度も動いたことがない系列は skip され続け検知できない — 項目 2 の実データ確認が通っていることが無音失敗検知の前提** |
-| 5 | `PROBE_ENABLED` が true（既定 true）のまま | `gh variable list` |
-| 6 | `obs.phase_config` が 'baseline' | SELECT で確認 |
+| 4 | **鮮度ゲートが有効**（必須 repository variable `OBS_FRESHNESS_ENFORCE=true`。#116 / #175） | `gh variable list --json name,value` で値が `true`。ゲートは採取データの有無で自動発動する（未採取 = null の系列は skip、採取が止まった系列は age 超過で fail）ため、**一度も動いたことがない系列は skip され続け検知できない — 項目 2 の実データ確認が通っていることが無音失敗検知の前提** |
+| 5 | 必須 repository variable `PROBE_ENABLED=true` | `gh variable list --json name,value` で値が `true` |
+| 6 | 必須 repository variable `READYZ_URL` が現行の安定 FQDN を指す | 下記の一致確認コマンド |
+| 7 | `obs.phase_config` が 'baseline' | SELECT で確認 |
+
+```bash
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')" = \
+  "https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz"
+```
 
 ## 5. 期間観測 (a)（フェーズ 1 = T_obs_start + 72h。目安 8/25〜8/28。定義は §2）
 
@@ -860,7 +866,9 @@ B_rem = teardown **9/15** まで 15 日 × 2.1 = **31.5** として（以前は 
    → ephemeral destroy → persistent destroy（旧計画 §5-6 の手順。Azure Monitor の 6 件
    = メトリクスアラート 5 + Action Group 1 は 2026-08-27 に persistent 層へ import 済みのため
    （Issue #151 / ADR-0022）、persistent destroy が依存の逆順で消す。手動削除の一手は不要）
-   → 残存リソースゼロ確認
+   → 残存リソースゼロ確認。3 つの repository variables は削除せず、`PROBE_ENABLED=false` を維持する。
+   後日再作成する場合は `READYZ_URL` を新しい Terraform output へ更新して疎通確認した後にのみ
+   `PROBE_ENABLED=true` へ戻す（順序の正本は `vnet-integration-cutover.md` §2）
 3. 9/16 以降: 課金反映ラグの分を待って最終コスト実測を記録（これも FinOps 証跡）。**失効 9/18T06:59Z までに完了する必要がある**（失効後はサブスクリプション無効化で取得自体ができない）
 
 - **マージンは 2 層に分かれる**（2026-08-30 の作業窓再設定 = §10-5 による。以前の「約 14 日」は

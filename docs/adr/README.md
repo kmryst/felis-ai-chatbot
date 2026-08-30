@@ -62,3 +62,4 @@
 | [0023](./0023-no-second-granularity-downtime-measurement.md) | Accepted | HA ドリルの downtime を秒粒度で測らず 10 秒間隔で測る（RTO 目標 3 時間 と公称 60〜120 秒 は桁が 2 つ違い判定が変わらない。1 秒間隔は `/readyz` のハング時にプローブが積み上がる） |
 | [0024](./0024-readyz-freshness-not-completeness.md) | Accepted | `/readyz` の鮮度判定に完全性の検査を持ち込まない（`/readyz` = 「いまの鮮度」／obs テーブルの gap 集計 = 「完全性」。gap スキャンは `statement_timeout` 2 秒の予算を食い、Issue #114 で避けた「観測系の問題が可用性 SLI の欠測に化ける」構造を作り直す） |
 | [0025](./0025-serving-min-replicas-1-for-sli-integrity.md) | Accepted | serving を min_replicas 1 へ変更し cold start による可用性 SLI の汚染を排除する（ADR-0015 の serving スケールゼロのみ上書き。probe 失敗 3 件がすべて偽陽性 = 可用性 97.71% は障害 0 件だった実測を根拠とする） |
+| [0026](./0026-readyz-repository-variables-as-source-of-truth.md) | Accepted | `readyz-probe` の実行設定を必須 repository variables に一本化し、未設定・不正値を probe 前に fail-closed にする |

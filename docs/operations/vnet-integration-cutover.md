@@ -99,6 +99,18 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 ## 1. persistent 層の再作成（PostgreSQL が作り直される）
 
 ```bash
+# 必須 repository variables は削除しない。切替中の想定内エラーを通知し続けないよう、
+# 先に外形監視だけを止める（OBS_FRESHNESS_ENFORCE の役割とは混ぜない）
+(
+set -euo pipefail
+gh variable set PROBE_ENABLED --body false
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
+)
+```
+
+停止確認の成功後に、次の plan / apply へ進む。
+
+```bash
 # plan で「pgsql が destroy → create（replace）される」「firewall rule が destroy される」
 # 「VNet / subnet ×2 / private DNS zone / VNet link が add される」
 # 「geo_redundant_backup_enabled が false → true になる（replace 要因のひとつ。ADR-0019）」
@@ -169,8 +181,28 @@ terraform -chdir=terraform/ephemeral apply
 ```
 
 - CAE は workload profiles + custom VNet になったため作成時間が伸びる可能性がある（実測して記録）
-- apply 後の検証: `curl -i https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz`
-  が 200 / `db: "ok"` を返すこと（= VNet 内経路での `SELECT 1` 開通）
+- apply 後は Terraform の安定 FQDN output から URL を組み立て、repository variable を更新してから
+  外形監視を再開する。`READYZ_URL` の更新前に `PROBE_ENABLED=true` へ戻してはならない
+  （CAE 再作成でサフィックスが変わった場合、旧 URL への probe が失敗し続けるため）。
+
+```bash
+(
+set -euo pipefail
+
+readyz_url="https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz"
+
+# repository variable へ反映する前に新 URL 自体を検証する。
+# HTTP 200 / db: "ok"（= VNet 内経路での SELECT 1 開通）を確認する
+curl --fail-with-body --silent --show-error "$readyz_url" |
+  jq -e '.status == "ok" and .db == "ok"' >/dev/null
+
+gh variable set READYZ_URL --body "$readyz_url"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')" = "$readyz_url"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "OBS_FRESHNESS_ENFORCE") | .value')" = "true"
+gh variable set PROBE_ENABLED --body true
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "true"
+)
+```
 
 ## 3. ops 結線（マイグレーションと psql 経路の確認）
 

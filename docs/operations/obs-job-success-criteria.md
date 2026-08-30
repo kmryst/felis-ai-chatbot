@@ -80,16 +80,19 @@ $ psql "$DATABASE_URL" -X -At -F'|' -c "SELECT (ts AT TIME ZONE 'UTC')::date AS 
   Container Apps environment に乗ることによる影響は**不確実（推測。定量根拠なし）**。
   フェーズ 2 の記録では §1 の基準値（失敗率 0.95% / 欠落 0 件）と §3 の日別件数を比較する
 
-## 5. 鮮度ゲートのスイッチ名の対応（ENFORCE / OBS_FRESHNESS_ENFORCE。#141）
+## 5. 鮮度ゲートの必須 repository variable（#141 / #175）
 
-外形監視 workflow（`.github/workflows/readyz-probe.yml`）の鮮度ゲートでは、
-**job env の `ENFORCE` と repository variable の `OBS_FRESHNESS_ENFORCE` は同一のスイッチ**である
-（workflow が `ENFORCE: ${{ vars.OBS_FRESHNESS_ENFORCE || 'true' }}` と束ねており、既定 true = ゲート有効。
-運用上の設定・確認先は repository variable 側。
-[credit-window-execution-plan.md §4](./credit-window-execution-plan.md) の項目 4 参照）。
-`enforce` という語の選択自体はポリシー系ツールの標準語彙に沿っている
-（Kyverno の `validationFailureAction: Enforce / Audit`、Gatekeeper の `enforcementAction`）。
+外形監視 workflow（`.github/workflows/readyz-probe.yml`）の鮮度ゲートは、job env と
+repository variable の両方で `OBS_FRESHNESS_ENFORCE` に統一する。この変数は必須で、通常時は
+`true`、誤検知が続く障害対応中など鮮度ゲートだけを止める場合は `false` とする。
+`false` でも `/readyz` probe と SLI レコードは継続する。probe 全体の停止は別の必須変数
+`PROBE_ENABLED` が担う。
 
-注意: `scripts/test/readyz-probe-freshness-test.sh` が workflow 定義の `.jobs.probe.env.ENFORCE` を
-逐語パースして既定値を検証しているため、将来 workflow 側の名前を repository variable に揃える場合は
-workflow とテストスクリプトの 2 箇所を同時に修正する必要がある。
+3 つの必須変数と確認方法は
+[credit-window-execution-plan.md §4](./credit-window-execution-plan.md) のチェックリストを正本とする。
+未設定値、および 2 つのスイッチの `true` / `false` 以外は、curl や停止判定より前に workflow を
+fail-closed にする。これにより変数名の誤記や削除が「正常停止」や「ゲート無効」に化けない。
+
+`scripts/test/readyz-probe-freshness-test.sh` は3変数の job env mapping に fallback が無いことを
+逐語検証し、未設定・不正値が curl 前に失敗する境界ケースも実行する。workflow の変数名や検証順序を
+変更する場合は、このテストも同じ PR で更新する。
