@@ -30,7 +30,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **`Microsoft.App` のメーターが `usageDetails` に 1 件も現れず単体の課金按分ができない**（無料付与枠に吸収されているのか usage record が出ないのかは未検証 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md)。追跡は Issue #115） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **2026-08-27 分から `microsoft.app` のメーターが `usageDetails` に現れるようになり、リソース単位の按分ができる**（2026-08-30 取得。**8/26 以前は 1 件も無い**という当時の実測 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md) は誤りではなく、前提のほうが変わった）。8 月合計 **1.145 USD**（`Standard vCPU Active` 0.692 / `Standard vCPU Idle` 0.089 / `Standard Memory Idle` 0.185 / `Standard Memory Active` 0.180）。リソース別の累計は `ca-felisaichatbot-dev` 0.455 / `ca-felisaichatbot-dev-ops` 0.279 / `caj-felisaichatbot-dev-obs` 0.412。**8/27 に出始めた理由は未検証**（`- Free` 対のメーターが 1 件も無く、無料付与枠の消費過程を `usageDetails` から観測できない。月次付与枠の使い切りは**推測**であって確認していない）。**平常運転の日額は確定していない**: 8/28 は HA ドリル日かつ測定用 Monitor の停止忘れ（約 14h）で汚染、8/29 はその残り（推定 ~0.5h・終了時刻未確認）を含む。追跡は Issue #115（同 Issue のコールドスタートコスト実測は、外形監視 probe が設計頻度で動いていないため未達） |
 | Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
@@ -85,9 +85,35 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
   # 課金の内訳: properties.meterName ごとに costInUSD を合計
   ```
 
+- **`consumedService` は大文字小文字が混在する**（2026-08-30 取得の実測）。同一の API 応答に `Microsoft.Network` と `microsoft.network`、`Microsoft.Insights` と `microsoft.insights` が**両方**現れ、Container Apps は `microsoft.app`（lowercase）のみ、Log Analytics は `microsoft.operationalinsights`（lowercase）のみだった。**サービス単位で集約するときは case-insensitive に正規化しないと、同じサービスが 2 行に割れて見落とす**（`jq` なら `ascii_downcase`）。メーター単位（`meterName`）での集約にはこの問題は出ていないが、確認していないので前提にしない
 - **2026-08 の消費実績（2026-08-30 取得）: `B1MS Compute - Free` 合計 192 時間 / 750 時間（25.6%）。コストは 0 USD**。日次内訳は 8/21 = 18h（サーバー作成 05:59Z 以降）、8/22〜8/27 = 各 24h、8/28 = 21h、8/29 = 9h（反映途中）。`Storage Data Stored - Free` も全額 0 USD で、**PostgreSQL は compute / storage とも課金 0**
 - **SKU 変更中は `B1MS Compute - Free` メーターが計上されない**（2026-08-30 取得の実測）。8/28 に HA ドリルで B1ms → GP D2ds_v5 → B1ms と往復した日は同メーターが 21h（24h ではない）で、差分の 3h 相当は `vCore` メーター側（GP、無料枠対象外）に出ている。**無料枠時間の欠測ではない**ので、往復した日の 24h 未満は異常として扱わない
 - **課金データの反映には 1〜2 日程度の遅延がある**（2026-08-21 の実測に加え、2026-08-30 時点でも 8/29 分が部分計上であることを追認。[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）。日次の見張りではなく、数日おきの確認でよい
+
+### 2026-08 の課金内訳（consumedService 別。2026-08-30 取得）
+
+上のコマンドの応答（162 レコード / 1 ページ / nextLink なし。期間は 2026-08-19〜08-29 で **8/29 は反映途中**）を
+`consumedService` で case-insensitive に集約した値。**この表は 8 月分の累計であり、日額ではない**。
+
+| consumedService | 8 月合計 (USD) | 主なメーター |
+| --- | --- | --- |
+| `Microsoft.DBforPostgreSQL` | 1.4640 | `B1MS Compute - Free` 0 / `Storage Data Stored - Free` 0 / **`vCore` 1.464**（8/28 の HA ドリルで GP D2ds_v5 へ一時昇格した分。無料枠対象外） |
+| `Microsoft.ContainerRegistry` | 1.3047 | `Basic Registry Unit`（0.145 USD/日） |
+| `microsoft.app` | 1.1454 | `Standard vCPU Active/Idle Usage`・`Standard Memory Active/Idle Usage`（**8/27 分から出現**。§A の ephemeral 行） |
+| `microsoft.network` | 0.8380 | `Standard IPv4 Static Public IP` 0.8293（**CAE が custom VNet で立てる managed resources。本プロジェクトに NAT Gateway は存在しない** = ADR-0018 の 4 / ADR-0015 で却下済み） / `Private Queries` 0.0087 / 他は Free メーター |
+| `Microsoft.Network` | 0.1148 | `Private Zone`（private DNS zone） |
+| `Microsoft.CognitiveServices` | 0.0144 | gpt 4.1 mini 各種 / text-embedding-3-small |
+| `Microsoft.Storage` | 0.0003 | `All Other Operations` / 他は Free メーター |
+| `Microsoft.Insights` / `microsoft.insights` | 0 | `Emails` / `Alerts Metric Monitored` |
+| `microsoft.operationalinsights` | 0 | `Analytics Logs Data Ingestion` |
+| **合計** | **4.8816** | クレジット `estimatedBalance` 195.12 / `originalAmount` 200.00（同日取得の balanceSummary）と整合 |
+
+日次合計（全サービス、USD）: 8/19 0.0144 / 8/20 0 / 8/21 0.1188 / 8/22 0.1820 /
+8/23 0.3036 / 8/24 0.3039 / 8/25 0.3039 / 8/26 0.3039 / 8/27 0.3115 / 8/28 **2.6830** / 8/29 0.3566（反映途中）。
+
+- **8/28 は平常日ではない**: HA フェイルオーバードリル（B1ms → GP D2ds_v5 → B1ms）に加え、ドリル後に測定用 Monitor を約 14 時間止め忘れて serving を warm に保ち続けた。**8/29 にもその残り（推定 ~0.5h。正確な終了時刻は未確認）が及んでいる**
+- **ACA が課金され始めた 8/27 以降で、汚染のない日は 1 日も無い**。したがって本台帳は「平常運転の日額」を確定値として持たない（日額の扱いは [credit-window-execution-plan.md](./credit-window-execution-plan.md) §1-3）
+- **無料枠は暦月単位**（PostgreSQL 750 時間は本書「12か月無料枠」節、ACA の付与枠は月次 = 計画書 §1-3）。**9 月に入ると 0 からリセット**されるため、8 月末の実績（特に 8/27 から ACA が課金され始めた状態）をそのまま 9 月へ外挿しない
 
 ### リスクと未確定事項（「確定」と書かない）
 
