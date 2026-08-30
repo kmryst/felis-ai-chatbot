@@ -22,8 +22,7 @@
 #       xargs -I{} gh run view {} --log | grep '^PROBE '
 # - GitHub Actions の schedule は起動遅延があり厳密な等間隔にならない（既知の仕様）。
 #   集計は必ずレコード内の実測タイムスタンプ ts= を基準にする
-# - 判定ロジックの境界テスト: scripts/test/readyz-probe-freshness-test.sh
-#   （readyz-probe-checks.yml の PR CI とローカルで実行）
+# - 判定ロジックの境界テスト: scripts/test/readyz-probe-freshness-test.sh（ローカル実行）
 name: readyz-probe
 
 on:
