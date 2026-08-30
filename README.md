@@ -11,7 +11,8 @@ PostgreSQL、観測用 Job を Azure 上に Terraform で構築しています�
 - **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps / ACR / VNet + Private DNS /
   Log Analytics を管理。DB は private access で、運用経路は VNet 内の ops コンテナに一本化
 - **可観測性**: `/readyz` の外形監視と、DB 内の観測 3 系列（1 分 / 5 分 / 1 時間）を継続採取。
-  可用性と freshness を good events / total events の比として系列別に判定
+  これらは operational signal であり、user-facing SLI / SLO の定義と未決定事項は
+  [SLO document](./docs/operations/slo/slo-document.md) に分離
 - **変更管理**: Issue / Branch / PR / 必須ラベル / CI ガードレール。ルールは
   [CONTRIBUTING.md](./CONTRIBUTING.md)、AI Agent 向けの作業ルールは [CLAUDE.md](./CLAUDE.md)
 - **公開している弱点**: 本番運用に足りていないものを理由と追跡先つきで 1 枚に集約
@@ -60,8 +61,11 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
   可用性 SLI の分子だけが黙って落ちます。REST の job logs 経由なら取得できます
   （抽出は [scripts/collect-probe-records.sh](./scripts/collect-probe-records.sh) に固定しました）
 - **可用性 97.71% は「アプリの可用性」ではありません。**
-  serving は `min_replicas 0` なので probe は毎回 cold start を起こし、この SLI は実質
-  「cold start が curl の `--max-time` 以内に完了する率」です。保全したレコードで再計算すると、
+  フェーズ 1 当時は serving が `min_replicas 0` だったため probe は毎回 cold start を起こし、
+  この観測値は実質「cold start が curl の `--max-time` 以内に完了する率」です。
+  現在の Terraform と Azure runtime は [ADR-0025](./docs/adr/0025-serving-min-replicas-1-for-sli-integrity.md)
+  により `min_replicas 1` であり、変更前後は同じ系列として比較できません。
+  フェーズ 1 の保全レコードで再計算すると、
   タイムアウトを 30 秒から 25 秒にするだけで 97.71% → 91.60% に落ちます
 - **cron `*/5` に対して実際に起動したのは 15.2%。** 起動しなかった 733 機会は success とも
   failure とも言えないため unknown として分母から外しています。72h の稼働率は測れていません
@@ -69,6 +73,7 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 ## もっと見る
 
 - [docs/production-readiness.md](./docs/production-readiness.md): 本番運用との差分（理由と追跡先つき）
+- [docs/operations/slo/slo-document.md](./docs/operations/slo/slo-document.md): user-facing SLI / SLO、error budget、および review procedure の入口
 - [docs/adr/README.md](./docs/adr/README.md): 設計判断（ADR）。撤回した判断も削除せず残しています
 - [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md): フェーズ 1 の実測記録・食い違い・未検証項目
 - [docs/operations/credit-window-execution-plan.md](./docs/operations/credit-window-execution-plan.md): 進行中のフェーズ計画（PITR ドリル / HA / teardown）

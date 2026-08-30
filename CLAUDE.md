@@ -18,6 +18,7 @@ Issue / PR 駆動の開発フローと CI ガードレールが最初から有�
 - `.github/labels.yml`: ラベル一覧の正本。
 - `docs/adr/`: 設計判断（ADR）の正本。運用ルールは `docs/adr/README.md`。
 - `docs/operations/branch-protection.md`: main ブランチ保護設定の記録。
+- `docs/operations/slo/`: user-facing SLI / SLO、error budget policy、measurement / review procedure の正本。
 
 内容が衝突する場合は、共通運用は `CONTRIBUTING.md` を優先する。
 
