@@ -152,10 +152,13 @@ resource "azurerm_container_app" "main" {
     # suffix を指定しなければ Azure が一意な名前を自動生成する。
     # 出典: https://learn.microsoft.com/en-us/azure/container-apps/revisions
 
-    # スケールゼロ（min_replicas = 0）: 無リクエスト時にレプリカ 0 まで縮退し、
-    # コンピュート課金を止める（§8 のコスト方針。ADR-0015）。walking skeleton に
-    # 常駐は不要で、コールドスタートの遅延は許容する。
-    min_replicas = 0
+    # min_replicas 1（当初 0 = スケールゼロ。2026-08-30 変更 = ADR-0025）: min_replicas 0 の
+    # cold start（AssigningReplica→ContainerStarted p50 15.45s / max 39.78s、n=172）が外形監視の
+    # 可用性 SLI を汚染し、probe 失敗 3 件がすべて「アプリは正常起動していたのに --max-time 30 が
+    # 先に諦めた」偽陽性だったことが実測で確定したため、観測期間中は 1 レプリカ常駐に切り替える。
+    # ADR-0015 の「コールドスタートの遅延は許容する」は walking skeleton 段階の前提であり、
+    # 外形監視で SLI を蓄積する現フェーズでは成り立たない（前提の変化。ADR-0025 が正本）。
+    min_replicas = 1
     # 検証用に 1 レプリカで十分。上限も 1 に固定してスケールアウト課金の芽を残さない。
     max_replicas = 1
 
