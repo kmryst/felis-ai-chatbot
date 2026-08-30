@@ -60,3 +60,4 @@
 | [0021](./0021-heartbeat-table-as-recovery-marker.md) | Accepted | `obs.heartbeat` への毎分書き込みを PITR の recovery marker と位置づける（負荷生成ではない。識別子は据え置き） |
 | [0022](./0022-import-azure-monitor-into-terraform.md) | Accepted | Azure Monitor の監視リソース 6 件（Action Group + メトリクスアラート 5）を terraform import で persistent 層へ移行する（ID 不変 = 発火試験の証跡を保全） |
 | [0023](./0023-no-second-granularity-downtime-measurement.md) | Accepted | HA ドリルの downtime を秒粒度で測らず 10 秒間隔で測る（RTO 目標 3 時間 と公称 60〜120 秒 は桁が 2 つ違い判定が変わらない。1 秒間隔は `/readyz` のハング時にプローブが積み上がる） |
+| [0024](./0024-readyz-freshness-not-completeness.md) | Accepted | `/readyz` の鮮度判定に完全性の検査を持ち込まない（`/readyz` = 「いまの鮮度」／obs テーブルの gap 集計 = 「完全性」。gap スキャンは `statement_timeout` 2 秒の予算を食い、Issue #114 で避けた「観測系の問題が可用性 SLI の欠測に化ける」構造を作り直す） |

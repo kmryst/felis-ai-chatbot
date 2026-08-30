@@ -40,6 +40,13 @@ async def check_database_ready(database_url: str, connect_timeout_seconds: int) 
 
 # 3 系列の鮮度クエリ（Issue #104。/readyz が返し、外形監視 #106 が系列別に判定する。
 # 設計と閾値の根拠は docs/operations/credit-window-execution-plan.md §5-3）
+#
+# 限界（意図的。docs/adr/0024-readyz-freshness-not-completeness.md）: 見ているのは
+# now() - max(ts) だけで、系列の途中の欠落は検出しない。採取が止まっても次の probe より
+# 前に 1 行でも積まれれば鮮度ゲートは green のまま通る。完全性は obs テーブルの gap 集計で
+# 別途判定する（/readyz = 「いまの鮮度」/ gap 集計 = 「完全性」）。ここに gap スキャンを
+# 足さないこと — 下の docstring にある statement_timeout の予算をフルスキャンが食い、
+# Issue #114 で避けた「観測系の問題が可用性 SLI の欠測に化ける」経路を作り直すため
 _OBS_FRESHNESS_SQL = """
 SELECT
   (extract(epoch FROM now() - (SELECT max(ts) FROM obs.heartbeat)))::bigint,
