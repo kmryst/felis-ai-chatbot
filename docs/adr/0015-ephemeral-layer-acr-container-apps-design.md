@@ -188,7 +188,7 @@ serving / ops とも `min_replicas = 0` とし、「平常時はレプリカ 0 �
 稼働時間仮定は、起案時の前提の記録として残す（決定自体は有効）。運用の実態は
 [ADR-0018 追記 #84](./0018-postgresql-private-access-and-vnet-integration.md)（夜間 destroy をやめる）
 → [ADR-0020](./0020-credit-window-resource-strategy.md)（クレジット失効日まで常時稼働。最終 destroy は
-[credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9 = 2026-09-03〜09-04（当初 2026-09-16 想定。フェーズ 1 を 72h とする決定で前倒し = 計画 §5-4））と
+[credit-window-execution-plan.md](../operations/credit-window-execution-plan.md) §9 = 2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5））と
 段階的に変わっている。
 
 ## 追記（2026-08-27。#132: 層名 ephemeral と Terraform 言語構文 ephemeral の同名衝突）
