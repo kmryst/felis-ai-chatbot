@@ -99,6 +99,18 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 ## 1. persistent 層の再作成（PostgreSQL が作り直される）
 
 ```bash
+# 必須 repository variables は削除しない。切替中の想定内エラーを通知し続けないよう、
+# 先に外形監視だけを止める（OBS_FRESHNESS_ENFORCE の役割とは混ぜない）
+(
+set -euo pipefail
+gh variable set PROBE_ENABLED --body false
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
+)
+```
+
+停止確認の成功後に、次の plan / apply へ進む。
+
+```bash
 # plan で「pgsql が destroy → create（replace）される」「firewall rule が destroy される」
 # 「VNet / subnet ×2 / private DNS zone / VNet link が add される」
 # 「geo_redundant_backup_enabled が false → true になる（replace 要因のひとつ。ADR-0019）」
@@ -169,16 +181,89 @@ terraform -chdir=terraform/ephemeral apply
 ```
 
 - CAE は workload profiles + custom VNet になったため作成時間が伸びる可能性がある（実測して記録）
-- apply 後の検証: `curl -i https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz`
-  が 200 / `db: "ok"` を返すこと（= VNet 内経路での `SELECT 1` 開通）
+- apply 後は Terraform の安定 FQDN output から URL を組み立て、repository variable を更新する。
+  この時点では新 DB に obs schema が無いため、`PROBE_ENABLED=false` を維持する。外形監視の再開は
+  §3-1 の migration 成功と `/readyz` の `.obs` 契約確認後にだけ行う。
+
+```bash
+(
+set -euo pipefail
+
+readyz_url="https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz"
+
+# repository variable へ反映する前に新 URL 自体を検証する。
+# HTTP 200 / db: "ok"（= VNet 内経路での SELECT 1 開通）を確認する
+curl --fail-with-body --silent --show-error "$readyz_url" |
+  jq -e '.status == "ok" and .db == "ok"' >/dev/null
+
+gh variable set READYZ_URL --body "$readyz_url"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')" = "$readyz_url"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
+)
+```
 
 ## 3. ops 結線（マイグレーションと psql 経路の確認）
 
 ```bash
 # 3-1. Alembic マイグレーション（Manual Job を起動して完了を待つ）
-az containerapp job start -g rg-felisaichatbot-dev-tf -n caj-felisaichatbot-dev-migrate
-az containerapp job execution list -g rg-felisaichatbot-dev-tf -n caj-felisaichatbot-dev-migrate -o table
-# → Status: Succeeded を確認。失敗時はログを見る（Log Analytics: ContainerAppConsoleLogs_CL）
+(
+set -euo pipefail
+
+migration_job="caj-felisaichatbot-dev-migrate"
+migration_execution="$(
+  az containerapp job start \
+    -g rg-felisaichatbot-dev-tf \
+    -n "$migration_job" \
+    --query name \
+    -o tsv
+)"
+test -n "$migration_execution"
+
+# 履歴一覧の別 execution を成功と誤認しないよう、今起動した名前だけを最大 12.5 分待つ。
+migration_status=""
+for _ in {1..150}; do
+  migration_status="$(
+    az containerapp job execution show \
+      -g rg-felisaichatbot-dev-tf \
+      -n "$migration_job" \
+      --job-execution-name "$migration_execution" \
+      --query properties.status \
+      -o tsv
+  )"
+  case "$migration_status" in
+    Succeeded) break ;;
+    Failed)
+      echo "migration execution $migration_execution failed; inspect ContainerAppConsoleLogs_CL" >&2
+      exit 1
+      ;;
+    *) sleep 5 ;;
+  esac
+done
+if [ "$migration_status" != "Succeeded" ]; then
+  echo "migration execution $migration_execution did not succeed within 12.5 minutes" >&2
+  exit 1
+fi
+
+# migration 後の契約を満たすまで probe は再開しない。3系列が未採取で値が null でもよいが、
+# obs schema 未作成・クエリ失敗を示す .obs=null やキー欠落は拒否する。
+readyz_url="$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')"
+test "$readyz_url" = \
+  "https://$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)/readyz"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "false"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "OBS_FRESHNESS_ENFORCE") | .value')" = "true"
+curl --fail-with-body --silent --show-error "$readyz_url" |
+  jq -e '
+    .status == "ok" and
+    .db == "ok" and
+    (.obs | type == "object") and
+    (.obs | has("heartbeat_age_seconds") and
+      has("stats_age_seconds") and
+      has("pgstattuple_age_seconds"))
+  ' >/dev/null
+
+gh variable set PROBE_ENABLED --body true
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_ENABLED") | .value')" = "true"
+)
 
 # 3-2. psql 対話経路（ops コンテナ）
 # ops は min_replicas = 1 の常駐構成（2026-08-22 是正。ADR-0015 追記）。exec は Running
