@@ -860,6 +860,35 @@ gap（連続する 2 レコードの実測 `ts=` の差。n = 130 区間）
   72h の稼働率ではない。**この構成では 72h の稼働率は測れていない**
 - coverage 15.2% はこの限定の大きさそのもので、**SLI の値と必ずセットで読む**
 
+**出典の補足（2026-08-30 追記。本文は書き換えていない）**: 上の「GitHub Actions の schedule は
+起動遅延・スキップがある」の一次情報は GitHub 公式ドキュメント "Events that trigger workflows" の
+`schedule` 節である。逐語引用と日本語訳を残す（2026-08-30 に原文で確認）。
+
+> "The `schedule` event can be delayed during periods of high loads of GitHub Actions workflow runs.
+> High load times include the start of every hour. If the load is sufficiently high enough, some
+> queued jobs may be dropped. To decrease the chance of delay, schedule your workflow to run at a
+> different time of the hour."
+
+（訳）
+
+> 「`schedule` イベントは、GitHub Actions の workflow run が高負荷の期間には遅延することがある。
+> 高負荷になる時間帯には毎時 0 分が含まれる。負荷が十分に高い場合、queue された job の一部は
+> drop されることがある。遅延の可能性を減らすには、毎時 0 分とは別の時刻に workflow を
+> スケジュールするとよい。」
+
+出典 URL:
+<https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule>
+
+- 公式が明記しているのは **delay と drop が起こりうる**ことまでで、
+  **drop 率も、drop されたことを事後に観測する手段も示していない**
+- 実際に「schedule が発火したが run が作られなかった」を観測できる API は**存在しない**
+  （2026-08-30 時点の確認範囲。Actions REST API は run を起点とするエンドポイントのみで、
+  スケジューラ側のディスパッチ履歴や drop ログを返すエンドポイントはリファレンスに無い）。
+  上の 733 を「dropped」ではなく **`unknown`** と呼んだのは、この意味で正しかった
+- 本節の 864 / 733 / 15.2% は**当時の固定 72h 窓の確定値のまま**である。
+  2026-08-26 以降さらに配送レートが落ちたこと、および原因調査の到達点は
+  [計画 §5-6](../../operations/credit-window-execution-plan.md) に別途記録した（**本文は訂正していない**）
+
 ### 8-6. この可用性 SLI が測っているもの（限定。Refs #115）
 
 serving は `min_replicas 0` のため、5 分間隔の probe は**毎回 cold start を起こす**（#115 の 1）。
