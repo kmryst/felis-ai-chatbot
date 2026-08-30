@@ -68,7 +68,9 @@ critical user journey を完了した request の割合である。SLI threshold
 次の条件をすべて満たす event を eligible event とする。
 
 - supported client から `POST /chat` へ送られた intended-user submission である
-- 文書化された request shape と authentication mechanism を使用している
+- 文書化された request shape を使用している
+- 文書化された authentication mechanism の対象である。authentication の失敗または欠落を
+  理由に ineligible としない
 - message が client-visible input contract を満たす
 - 文書化された service scope と SLO version が有効な期間に発生している
 
