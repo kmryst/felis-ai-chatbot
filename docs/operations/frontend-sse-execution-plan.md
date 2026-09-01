@@ -47,8 +47,8 @@ production-readiness.md 冒頭と同じ論点）:
    - 実測結果を §2 の対応表で ADR の前提と突き合わせ、食い違いがあれば ADR 追記を先行させた
      上で、以降の作業単位を起票する（§3）
 3. **並行波**（相互に独立。deploy を伴わない）
-   - **backend `/chat` の SSE 化** — ADR-0028 の producer 側（wire format・写像表・upstream
-     incremental parser・retry 境界・共有 fixture）
+   - **backend `/chat` の SSE 化** — ADR-0028 の producer 側（wire format・raw stream から
+     wire contract への変換（決定 5）・upstream incremental parser・retry 境界・共有 fixture）
    - **frontend の BFF・SSE parser・`/readyz` proxy** — ADR-0027 決定 2 / 3 / 8 / 10 と
      ADR-0028 の consumer 側（撤回処理を含む）
    - **`/chat` のレート制限（認証後段）** — ADR-0027 決定 1 の route dependency
@@ -87,9 +87,9 @@ ADR-0027「影響」・ADR-0028「影響」の「未検証の前提」の列挙�
 | Easy Auth sidecar 稼働時の `X-MS-CLIENT-PRINCIPAL-*` header の上書き・除去挙動（ADR-0027 決定 10） | #183 (a) | 除去されない場合はその事実を記録し、決定 10（深層防御）の位置づけを ADR-0027 追記で確定する |
 | revision 切替の実時間と rotation 混在窓の実時間幅（ADR-0027） | #183 (b) | 実測値でのみ主張する。rotation 運用（計画的 rotation・緊急時は `CHAT_DISABLED`）の limitation として SLO 正本改訂（§1 の 7）の入力にする |
 | frontend の cold start 特性（ADR-0027 決定 9） | 実測 Issue なし（ADR-0027 が「予防採用であり実測しない」と決定済み） | 分岐なし（`min_replicas = 1` の予防採用のまま） |
-| streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・`content_filter_results` の `error` が届く系列の実在と到達順序）（ADR-0028 決定 5 / 6） | #184 | 観測できた系列は fixture の実データ裏付けに使い、食い違いは写像表・撤回契約を ADR-0028 追記で改訂する。観測できない場合は不在を主張せず、防御的契約を維持する |
-| Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在（ADR-0028 決定 5） | #184 | 同上（終端判定の `[DONE]` までの遅延は到達順に依存しない設計であり、観測結果は裏付けまたは写像表改訂の入力） |
-| 未知の chunk 形状の実在（ADR-0028 決定 5 写像表の最終行） | #184 | 正当な未知形状が観測されたら写像表を ADR-0028 追記で改訂する |
+| streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・`content_filter_results` の `error` が届く系列の実在と到達順序）（ADR-0028 決定 5 / 6） | #184 | 観測できた系列は fixture の実データ裏付けに使い、食い違いは決定 5 の表・撤回契約を ADR-0028 追記で改訂する。観測できない場合は不在を主張せず、防御的契約を維持する |
+| Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在（ADR-0028 決定 5） | #184 | 同上（終端判定の `[DONE]` までの遅延は到達順に依存しない設計であり、観測結果は裏付けまたは決定 5 の表の改訂の入力） |
+| 未知の chunk 形状の実在（ADR-0028 決定 5 の表の最終行） | #184 | 正当な未知形状が観測されたら決定 5 の表を ADR-0028 追記で改訂する |
 | 撤回の UI 挙動は HTTP synthetic では検証できない（ADR-0028 決定 6） | 実測 Issue なし（parser テスト = fixture 系列 6 で担保。実ブラウザでの再現は別途の browser automation の範囲） | 分岐なし（verifier は分類のみという責務分担を維持） |
 | ingress 既定 240 秒 timeout が総リクエスト時間かアイドル時間か（ADR-0028「影響」。公式文書内で記述が食い違い未解決） | #183 (c) | 総リクエスト時間なら長時間ストリームの扱いを ADR-0028 追記で改訂する。判別できない場合は観測事実のまま記録し断定しない。いずれも platform 制約であり SLI threshold の根拠に流用しない |
 
