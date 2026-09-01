@@ -1,0 +1,20 @@
+# Gitleaks 設定。既定ルールセットをそのまま使い（useDefault）、
+# 誤検出（false positive）だけを最小スコープで allowlist する。
+#
+# security-scan.yml（idp-golden-path の reusable workflow）は --config を渡さないため、
+# gitleaks はリポジトリルートの本ファイルを自動採用する。
+
+[extend]
+useDefault = true
+
+# docs/verification/azure-openai-stream/raw/ の raw SSE 証跡（JSONL）に含まれる
+# Azure API Management のレスポンスヘッダ `apim-request-id` は、リクエスト追跡用の
+# UUID であり secret ではないが、generic-api-key ルールに誤検出される（PR #187）。
+# condition = "AND" により「この path かつ apim-request-id を含む行」の findings のみを
+# 許可し、同ファイル内のそれ以外の検出力は落とさない。
+[[allowlists]]
+description = "Azure OpenAI 観測記録の raw 証跡に含まれる apim-request-id（追跡用 UUID。secret ではない）"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''apim-request-id''']
+paths = ['''docs/verification/azure-openai-stream/raw/.*\.jsonl$''']
