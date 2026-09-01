@@ -641,6 +641,12 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://${front_fqdn}/readyz"   # → 
 gh run list -w readyz-probe.yml -L 3
 ```
 
+- **1 回目の apply が `BACKEND_ORIGIN` の更新で "Provider produced inconsistent final plan"
+  エラーになり得る**（plan 時点で backend の `ingress[0].fqdn` が旧 external 値として確定して
+  いるのに、apply 中に internal FQDN へ変わるため。2026-09-01 実走で発生 =
+  [実測記録 §6](../verification/frontend-easy-auth-cutover/observations.md)）。backend の
+  internal 化自体は成功しているので、**同じ変数のまま再 apply すれば 1 件の in-place 更新で
+  収束する**（`plan -detailed-exitcode` の exit 0 まで確認する）
 - revision 切替中（実測 20.31〜35.02 秒 =
   [observations.md](../verification/easy-auth-container-app/observations.md) §4）は frontend が
   旧 FQDN を参照し 502/503 になり得る。probe 間隔（5 分）より短いため通常は SLI に現れないが、

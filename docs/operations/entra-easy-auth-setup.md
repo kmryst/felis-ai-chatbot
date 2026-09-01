@@ -50,6 +50,14 @@ az ad app credential reset --id "$app_id" --append --display-name easyauth --yea
 ```bash
 sp_obj=$(az ad sp create --id "$app_id" --query id -o tsv)
 az ad sp update --id "$app_id" --set appRoleAssignmentRequired=true
+
+# OIDC の delegated scope（openid profile email）への管理者同意。テナントがユーザー同意を
+# 許可していない場合、これが無いと割当済みユーザーでも AADSTS90094（Need admin approval）で
+# 止まる（2026-09-01 実測）。app registration に requiredResourceAccess が無いため
+# `az ad app permission admin-consent` は空振りし、oauth2PermissionGrants を直接作成する
+graph_sp=$(az ad sp show --id 00000003-0000-0000-c000-000000000000 --query id -o tsv)
+az rest --method POST --url https://graph.microsoft.com/v1.0/oauth2PermissionGrants \
+  --body '{"clientId":"'"$sp_obj"'","consentType":"AllPrincipals","resourceId":"'"$graph_sp"'","scope":"openid profile email User.Read"}'
 ```
 
 ## 3. 割当（ADR-0027 決定 5 の 3 者）
