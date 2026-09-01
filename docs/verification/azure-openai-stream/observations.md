@@ -1,7 +1,7 @@
 # Azure OpenAI streaming の raw chunk 到達順序の実測記録（Issue #184）
 
 ADR-0028（[/chat の SSE 化と応答契約の固定](../../adr/0028-chat-sse-response-contract.md)）の
-写像表（決定 5）・撤回契約（決定 6）・fixture 系列（決定 9）が置いている
+決定 5 の表・撤回契約（決定 6）・fixture 系列（決定 9）が置いている
 「未検証の前提」を、実 stream の観測で消す・または「観測できなかった」と確定させるための記録。
 **時刻はすべて UTC**。raw 証跡は [raw/](./raw/) に置く（大きい採取は抜粋。抜粋方針は各ファイル
 先頭の `note` 行に記載）。
@@ -55,28 +55,28 @@ filter 発火候補（run2 / run2u）のプロンプトは、明らかに架空�
 | # | 観測対象 | 結論 |
 | --- | --- | --- |
 | 1 | 表示済み partial text の後に `finish_reason: "content_filter"` 終端が届く系列の実在 | **観測できなかった**。7 呼び出しすべて `finish_reason: "stop"` で正常終端し、filter 起因の終端は一度も発火しなかった。系列の不在は主張しない（撤回契約は維持） |
-| 2 | `content_filter_results` の `error` が届く系列の実在と到達位置 | **`content_filter_results`（複数形）の `error` は観測できなかった**。ただし近縁の未知形状として、**単数形 field `content_filter_result` の `error`**（`code: "content_filter_error"`, `message: "The contents are not filtered"`）が run3 の**全 1683 JSON chunk**（最初の role delta から `finish_reason: "stop"` chunk まで）に付いたまま正常終端する系列を観測した（§5）。写像表が指す field 名と異なるため「目的 2 の系列」とは扱わない |
-| 3 | Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在 | **自発的な（opt-in なしの）系列は観測できなかった**（run1〜run3 では `finish_reason: "stop"` chunk の直後が `[DONE]`）。一方、`stream_options.include_usage` を opt-in した 4 呼び出しでは、**usage chunk（`choices: []`）が毎回 `finish_reason` の後・`[DONE]` の前に届いた**。「`finish_reason` 後・`[DONE]` 前に chunk が届く」経路は Default mode に実在するため、写像表の「終端判定を `[DONE]` まで遅延」する設計の実データ裏付けになる |
-| 4 | 写像表が列挙していない未知の chunk 形状の有無 | **chunk 全体として写像表のどの行にも当てはまらない形状は現れなかった**が、**field レベルの未知が 4 種**現れた（§5 に全文）。(a) 単数形 `content_filter_result` の `error`、(b) 全 chunk の `obfuscation`、(c) usage chunk の `latency_checkpoint` / `routing`、(d) `include_usage` opt-in 時に全 chunk へ付く `usage: null` |
+| 2 | `content_filter_results` の `error` が届く系列の実在と到達位置 | **`content_filter_results`（複数形）の `error` は観測できなかった**。ただし近縁の未知形状として、**単数形 field `content_filter_result` の `error`**（`code: "content_filter_error"`, `message: "The contents are not filtered"`）が run3 の**全 1683 JSON chunk**（最初の role delta から `finish_reason: "stop"` chunk まで）に付いたまま正常終端する系列を観測した（§5）。決定 5 の表が指す field 名と異なるため「目的 2 の系列」とは扱わない |
+| 3 | Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在 | **自発的な（opt-in なしの）系列は観測できなかった**（run1〜run3 では `finish_reason: "stop"` chunk の直後が `[DONE]`）。一方、`stream_options.include_usage` を opt-in した 4 呼び出しでは、**usage chunk（`choices: []`）が毎回 `finish_reason` の後・`[DONE]` の前に届いた**。「`finish_reason` 後・`[DONE]` 前に chunk が届く」経路は Default mode に実在するため、決定 5 の表の「終端判定を `[DONE]` まで遅延」する設計の実データ裏付けになる |
+| 4 | 決定 5 の表が列挙していない未知の chunk 形状の有無 | **chunk 全体として決定 5 の表のどの行にも当てはまらない形状は現れなかった**が、**field レベルの未知が 4 種**現れた（§5 に全文）。(a) 単数形 `content_filter_result` の `error`、(b) 全 chunk の `obfuscation`、(c) usage chunk の `latency_checkpoint` / `routing`、(d) `include_usage` opt-in 時に全 chunk へ付く `usage: null` |
 
-## 4. 写像表（ADR-0028 決定 5）との対応表
+## 4. ADR-0028 決定 5 の表との突き合わせ
 
-写像表の各行について、対応する raw chunk 形状の観測有無。
+決定 5 の表の各行について、対応する raw chunk 形状の観測有無。
 
-| 写像表の行（raw stream の chunk） | 観測 | 実測の詳細 |
+| 決定 5 の表の行（raw stream の chunk） | 観測 | 実測の詳細 |
 | --- | --- | --- |
-| role のみの delta（content なし） | **厳密な形は観測できなかった** | `content` キー自体を持たない role delta は一度も現れなかった。実際の先頭 delta は常に `delta: {"content": "", "refusal": null, "role": "assistant"}` で、**本行と次行（空 content）の複合形**だった（7/7 回）。どちらの行でも「出力しない」なので写像結果は変わらない |
+| role のみの delta（content なし） | **厳密な形は観測できなかった** | `content` キー自体を持たない role delta は一度も現れなかった。実際の先頭 delta は常に `delta: {"content": "", "refusal": null, "role": "assistant"}` で、**本行と次行（空 content）の複合形**だった（7/7 回）。どちらの行でも「出力しない」なので wire 出力は変わらない |
 | content が空文字列または null の delta | **空文字列は観測**（先頭 delta のみ）。null は観測できなかった | 空文字列 content は上記の role delta に同乗する形でのみ出現。応答本文の途中に空 content delta が単独で現れる系列は観測できなかった |
 | `choices` が空の chunk（prompt annotation・usage 等のメタ chunk） | **観測** | 2 種類を観測。(1) `prompt_filter_results` chunk: 7 回中 6 回、**stream の先頭**（最初の delta より前）に到達。`id: ""`・`created: 0`・`model: ""`・`object: ""` という空 field 形状（run3 では欠落。§5-1）。(2) usage chunk: `include_usage` opt-in の 4 回すべてで `finish_reason` 後・`[DONE]` 前に到達 |
 | content を持たず choice 内に `content_filter_results`（`error` なし）を持つ annotation chunk | **観測できなかった** | content を持たない独立の annotation chunk は一度も現れなかった。`content_filter_results` は**すべての content delta chunk と `finish_reason` chunk に同乗**し、その値はほぼ常に空 object `{}`。run2 / run2u / run4 の一部 chunk でのみ `{"protected_material_code": {"detected": false, "filtered": false}}` が付いた。**公式 sample にあるカテゴリ別（hate / sexual / violence / self_harm）の per-chunk 結果は一度も現れなかった** |
 | content が非空の delta | **観測** | 全 7 回。1 呼び出しあたり 34〜1682 個 |
 | `finish_reason: "stop"` の chunk | **観測** | 全 7 回。形状は `delta: {}`（空 object）+ `content_filter_results: {}` 同乗。content と同時に届く形は観測せず |
 | `finish_reason: "content_filter"` の終端 | **観測できなかった** | filter 発火候補プロンプトでも発火せず。不在は主張しない |
-| chunk 内の `content_filter_results` に `error` を検出 | **観測できなかった**（複数形 field には `error` は一度も現れなかった） | 近縁の単数形 `content_filter_result.error` は観測（§5-1）。写像表のこの行は複数形 field を指すため該当なしと判定 |
+| chunk 内の `content_filter_results` に `error` を検出 | **観測できなかった**（複数形 field には `error` は一度も現れなかった） | 近縁の単数形 `content_filter_result.error` は観測（§5-1）。決定 5 の表のこの行は複数形 field を指すため該当なしと判定 |
 | raw `[DONE]` | **観測** | 全 7 回、最終行として到達。`data: [DONE]` |
-| 上記以外の未知の chunk 形状 | **chunk 単位では観測できなかった**。field 単位の未知は 4 種観測 | §5。写像表は chunk 形状単位の規定のため、既知形状の chunk に未知 field が同乗するケースの扱いは写像表からは一意に決まらない（ADR 追記の論点。本 PR では ADR を変更しない） |
+| 上記以外の未知の chunk 形状 | **chunk 単位では観測できなかった**。field 単位の未知は 4 種観測 | §5。決定 5 の表は chunk 形状単位の規定のため、既知形状の chunk に未知 field が同乗するケースの扱いは表からは一意に決まらない（ADR 追記の論点。本 PR では ADR を変更しない） |
 
-## 5. 写像表にない観測（全文記録）
+## 5. 決定 5 の表にない観測（全文記録）
 
 ### 5-1. 単数形 `content_filter_result` の `error`（run3。正常終端 stream に同乗）
 
@@ -103,23 +103,23 @@ data: {"choices":[{"content_filter_result":{"error":{"code":"content_filter_erro
 - 同一プロンプトの再実行（run3u）では再現せず、リクエスト単位で間欠的に起こる事象である
 
 ADR-0028 決定 6 が引用する公式意味論（「content filtering が evaluation を完了することを
-妨げた error の詳細」）に該当するのはこの事象と解されるが、**公式 REST 仕様や写像表が指す
+妨げた error の詳細」）に該当するのはこの事象と解されるが、**公式 REST 仕様や決定 5 の表が指す
 field 名（複数形 `content_filter_results`）と実際に届いた field 名（単数形
-`content_filter_result`）が食い違っている**。現行の写像表を字義どおり実装すると:
+`content_filter_result`）が食い違っている**。決定 5 の表を現行のまま字義どおり実装すると:
 
 - 複数形の `error` 検出行は発火しない（複数形は空 `{}` のため）
 - 「未知の chunk 形状 → server error 系で終端」行に該当するかは、chunk 全体としては既知形状
   （content delta / finish chunk）に未知 field が同乗した形のため一意に決まらない
 
 fail-closed の趣旨（filter の判定が得られなかった応答を完了扱いにしない）に照らすと、この系列
-こそ撤回契約の対象とすべき実データであり、**写像表・fixture 系列 6 の追記改訂の入力になる**
+こそ撤回契約の対象とすべき実データであり、**決定 5 の表・fixture 系列 6 の追記改訂の入力になる**
 （ADR-0028「影響」の予定どおり別作業。本 PR では ADR を変更しない）。
 
 ### 5-2. `obfuscation` field（全 chunk）
 
 全 7 呼び出しの全 JSON chunk（`prompt_filter_results` chunk を除く）の top-level に、ランダムな
 短い文字列の `obfuscation` field が付いていた。例: `"obfuscation":"l2O60"`（値は chunk ごとに
-異なる長さ・内容）。写像表・ADR-0028 に記載はない。consumer が未知 field を無視する前方互換
+異なる長さ・内容）。ADR-0028（決定 5 の表を含む）に記載はない。consumer が未知 field を無視する前方互換
 （決定 2）で吸収される種類のもの。
 
 ### 5-3. usage chunk の `latency_checkpoint` / `routing`（`include_usage` opt-in 時）
@@ -191,7 +191,7 @@ usage の実測値（`include_usage` opt-in の 4 呼び出し。証跡は raw �
 - **不在の主張はしない**: `finish_reason: "content_filter"` 終端・複数形
   `content_filter_results` の `error`・opt-in なしの post-`finish_reason` metadata chunk は
   「今回の 7 呼び出し（Japan East / gpt-4.1-mini / api-version 2024-10-21 / 既定 filter 構成）
-  では観測できなかった」が結論であり、存在しないことの証明ではない。写像表・撤回契約の
+  では観測できなかった」が結論であり、存在しないことの証明ではない。決定 5 の表・撤回契約の
   防御的設計は維持される
 - filter 発火はプロンプト依存で保証できず、穏当な題材の範囲では発火させられなかった。
   filter を回避・迂回する試み（jailbreak）は行っていない
@@ -214,7 +214,7 @@ python3 scripts/verification/observe-azure-openai-stream.py <出力ディレク�
 ## 関連
 
 - Issue: #184（Refs #107, #113）
-- [ADR-0028](../../adr/0028-chat-sse-response-contract.md) — 写像表（決定 5）・撤回契約
+- [ADR-0028](../../adr/0028-chat-sse-response-contract.md) — 決定 5 の表・撤回契約
   （決定 6）・fixture 系列（決定 9）。本記録が「未検証の前提」の実測入力
 - [ADR-0004](../../adr/0004-stub-llm-and-no-llm-in-ci.md) — CI から実 LLM を呼ばない
 - [ADR-0014](../../adr/0014-keep-azure-openai-out-of-terraform.md) — Azure OpenAI は
