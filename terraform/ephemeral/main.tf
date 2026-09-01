@@ -220,14 +220,41 @@ resource "azurerm_container_app" "main" {
         name  = "CHAT_DISABLED"
         value = var.chat_disabled ? "true" : "false"
       }
+
+      # CHAT_API_KEY rotation の revision 反映担保（ADR-0027「付随する決定」）。
+      # secret 更新は既存 revision に自動反映されないため、鍵のハッシュを revision-scope の
+      # 非 secret env として frontend と backend serving の両 template に同一値で持たせ、
+      # rotation の apply が両 app で必ず新 revision を作るようにする（DSN_CONFIG_CHECKSUM と
+      # 同型。sha256 先頭 8 桁のみで不可逆）。cross-app の同時性・原子性は主張しない
+      # （revision 切替は app ごとに独立。partial apply 時の収束手順は
+      # vnet-integration-cutover.md §6-2）。
+      dynamic "env" {
+        for_each = var.chat_api_key == "" ? [] : ["chat-api-key-config-checksum"]
+        content {
+          name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
+          value = "key-${nonsensitive(substr(sha256(var.chat_api_key), 0, 8))}"
+        }
+      }
     }
   }
 
   ingress {
-    # 検証（作業端末から /readyz を叩く）のため外部公開する。認証なし公開で問題ない
-    # エンドポイントのみ（hello-world / readyz）を載せる前提。
-    external_enabled = true
-    target_port      = var.container_target_port
+    # ADR-0027 決定 1: 恒久構成では internal ingress（backend_ingress_external = false）にし、
+    # internet から直接到達できる面を frontend のみにする。切替は Easy Auth 経由の疎通実測が
+    # 成立した後（手順は vnet-integration-cutover.md §7）。true の間は従来どおり外部公開
+    # （/readyz 検証・bootstrap 段階の経路）。
+    external_enabled = var.backend_ingress_external
+
+    # internal 切替後の app 間通信は http で行う（frontend の BACKEND_ORIGIN =
+    # http://<internal FQDN>。local.backend_origin 参照）。公式ドキュメントは同一環境内の
+    # app 間呼び出しに `http://<APP_NAME>` を推奨し、環境内トラフィックは環境外に出ない
+    # （出典: https://learn.microsoft.com/en-us/azure/container-apps/connect-apps ）。
+    # internal FQDN（<app>.internal.<default domain>）への https は、環境の既定証明書が
+    # この 1 階層深い名前をカバーするか公式に断定できないため使わない。
+    # external の間（= internet に露出している間）は既定どおり https を強制する。
+    allow_insecure_connections = !var.backend_ingress_external
+
+    target_port = var.container_target_port
 
     traffic_weight {
       latest_revision = true
@@ -468,6 +495,160 @@ resource "azurerm_container_app_job" "obs_collect" {
     precondition {
       condition     = var.database_url != ""
       error_message = "ops_container_image を指定する場合は database_url も必須です（採取 Job は DB へ書き込むためだけに存在する）。"
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# frontend Container App + Easy Auth（ADR-0027。Issue #194）
+# ---------------------------------------------------------------------------
+
+# Easy Auth の openIdIssuer 組み立てに tenant ID が要る（値はコードに書かない）
+data "azurerm_client_config" "current" {}
+
+locals {
+  # BFF / /readyz proxy が backend を呼ぶ base URL（ADR-0027 決定 3）。
+  # - external の間: https://<external FQDN>（従来の公開経路）
+  # - internal 切替後: http://<internal FQDN>。同一環境内の app 間通信は Envoy 経由で
+  #   環境外に出ず、公式ドキュメントも app 間呼び出しに http を推奨する
+  #   （出典: https://learn.microsoft.com/en-us/azure/container-apps/connect-apps ）。
+  #   internal FQDN への https を使わない理由は serving 側 ingress のコメントを参照。
+  # ingress[0].fqdn は external / internal の切替に追従して同じ apply 内で新 FQDN に変わるため、
+  # 切替と BACKEND_ORIGIN の付け替えが 1 回の apply で完結する。
+  backend_origin = "${var.backend_ingress_external ? "https" : "http"}://${azurerm_container_app.main.ingress[0].fqdn}"
+}
+
+# frontend（Next.js standalone。BFF + /readyz 透過 proxy）。
+# frontend_container_image が空の間は作らない（ADR-0027 決定 6 の fail-closed bootstrap:
+# 第 1 段は chat_disabled = true かつ frontend 未作成で apply する）。
+resource "azurerm_container_app" "front" {
+  count = var.frontend_container_image == "" ? 0 : 1
+
+  # ADR-0013 の命名規則（qualifier `-front`）。ops（`-ops`）と同じ付け方
+  name                         = "ca-felisaichatbot-dev-front"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  # BFF が server 側で付与する /chat の API キー（ADR-0027 決定 2。ブラウザには配らない）
+  secret {
+    name  = "chat-api-key"
+    value = var.chat_api_key
+  }
+
+  # Easy Auth（authConfigs）が参照する client secret。secret 名は ACA の Entra 構成が使う
+  # 既定名に合わせる（出典: https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra ）
+  secret {
+    name  = "microsoft-provider-authentication-secret"
+    value = var.easy_auth_client_secret
+  }
+
+  template {
+    # ADR-0027 決定 9: scale-to-zero の cold start が /readyz proxy 経由の外形監視と
+    # client-visible latency の偽障害になることを作成時から排除する（ADR-0025 と同型の予防採用）
+    min_replicas = 1
+    max_replicas = 1
+
+    container {
+      name   = "front"
+      image  = var.frontend_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      # BFF / /readyz proxy の upstream（runtime に読む server 専用変数。ADR-0027 決定 3）
+      env {
+        name  = "BACKEND_ORIGIN"
+        value = local.backend_origin
+      }
+
+      env {
+        name        = "CHAT_API_KEY"
+        secret_name = "chat-api-key"
+      }
+
+      # rotation の revision 反映担保（backend serving 側と同一値。ADR-0027「付随する決定」。
+      # 詳細コメントは serving 側の同名 env を参照）
+      env {
+        name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
+        value = "key-${nonsensitive(substr(sha256(var.chat_api_key), 0, 8))}"
+      }
+    }
+  }
+
+  ingress {
+    # 公開面は frontend のみ（ADR-0027 決定 1）。認証は authConfigs（Easy Auth）が担う
+    external_enabled = true
+    # Next.js standalone server の listen ポート（frontend/Dockerfile の PORT=3000）
+    target_port = 3000
+
+    traffic_weight {
+      latest_revision = true
+      percentage      = 100
+    }
+  }
+
+  lifecycle {
+    precondition {
+      # authConfigs 無しの frontend を計画に載せない（ADR-0027 決定 6 の fail-closed。
+      # Easy Auth の資材が揃うまで frontend は作成できない）
+      condition     = var.easy_auth_client_id != "" && var.easy_auth_client_secret != ""
+      error_message = "frontend_container_image を指定する場合は easy_auth_client_id / easy_auth_client_secret も必須です（authConfigs 無しの frontend 公開を防ぐ。ADR-0027 決定 6）。"
+    }
+    precondition {
+      # BFF は CHAT_API_KEY を server 側で付与するためだけに存在する（鍵なし公開を防ぐ）
+      condition     = var.chat_api_key != ""
+      error_message = "frontend_container_image を指定する場合は chat_api_key も必須です（BFF が server 側で付与する鍵。ADR-0027 決定 2）。"
+    }
+  }
+}
+
+# Easy Auth 設定（Microsoft.App/containerApps/authConfigs）。azurerm 5.1.0 に該当リソースが
+# 無いため azapi_resource で管理する（ADR-0027 決定 1。子リソース名は ARM の固定名 "current"。
+# 出典: https://learn.microsoft.com/en-us/azure/templates/microsoft.app/containerapps/authconfigs ）。
+# API バージョンは Microsoft.App の stable（2025-07-01。az provider show で確認済み）。
+#
+# 注意（ADR-0027 決定 6）: frontend 作成〜authConfigs 適用の間には匿名到達可能な窓が
+# 構造的に存在する。この窓は chat_disabled = true の維持（bootstrap 第 2 段）で塞ぐ。
+resource "azapi_resource" "front_auth" {
+  count = var.frontend_container_image == "" ? 0 : 1
+
+  type      = "Microsoft.App/containerApps/authConfigs@2025-07-01"
+  name      = "current"
+  parent_id = azurerm_container_app.front[0].id
+
+  body = {
+    properties = {
+      platform = {
+        enabled = true
+      }
+      globalValidation = {
+        # ブラウザ利用者を Entra ID のサインインへ誘導する（supported client はブラウザのみ）
+        unauthenticatedClientAction = "RedirectToLoginPage"
+        redirectToProvider          = "azureactivedirectory"
+        # /readyz 透過 proxy だけを未認証で通す（ADR-0027 決定 8。外形監視 readyz-probe の
+        # 経路。ADR-0026 の URL 契約 https://<host>/readyz に適合）
+        excludedPaths = ["/readyz"]
+      }
+      identityProviders = {
+        azureActiveDirectory = {
+          registration = {
+            openIdIssuer            = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+            clientId                = var.easy_auth_client_id
+            clientSecretSettingName = "microsoft-provider-authentication-secret"
+          }
+        }
+      }
     }
   }
 }

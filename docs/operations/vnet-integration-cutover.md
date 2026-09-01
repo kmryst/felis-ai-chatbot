@@ -72,16 +72,22 @@ ops リソースの precondition で失敗する。
 #    追記してから実行する（値の形式は terraform/ephemeral/variables.tf の database_url を参照）
 set -a; source .env; set +a
 
-# 3) serving / ops 両イメージ参照（DEPLOY_SHA 未設定なら :? で即失敗する。
-#    初回で §2 の push がまだなら、この 2 行を飛ばして §2 へ進む）
+# 3) serving / ops / frontend の 3 イメージ参照（DEPLOY_SHA 未設定なら :? で即失敗する。
+#    初回で §2 の push がまだなら、この 3 行を飛ばして §2 へ進む。
+#    3 本は単一の DEPLOY_SHA を共有する = ADR-0027 決定 7）
 export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-${DEPLOY_SHA:?DEPLOY_SHA が .env に無い（§2 の push 後に書き戻す）}"
 export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
+export TF_VAR_frontend_container_image="felisaichatbotacrdev.azurecr.io/frontend:sha-${DEPLOY_SHA:?}"
 
 # 4) 設定の有無だけ確認する（値は表示しない）
 env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 # → TF_VAR_administrator_password / TF_VAR_container_image /
 #   TF_VAR_database_url / TF_VAR_ops_container_image の 4 つに加え、
-#   /chat 保護（#107）導入後は TF_VAR_chat_api_key / TF_VAR_chat_disabled が並ぶこと
+#   /chat 保護（#107）導入後は TF_VAR_chat_api_key / TF_VAR_chat_disabled が並ぶこと。
+#   frontend + Easy Auth（#194。§7）では TF_VAR_frontend_container_image /
+#   TF_VAR_easy_auth_client_id / TF_VAR_easy_auth_client_secret も並ぶ
+#   （bootstrap 第 1 段 = frontend 未作成で apply する場合は
+#   TF_VAR_frontend_container_image を意図的に未設定または空にする。§7-1）
 ```
 
 - **この環境変数は §1〜§4 の apply / destroy 全体で維持する**（同じシェルで通しで実行する。
@@ -162,8 +168,10 @@ NEW_SHA=$(git rev-parse --short HEAD)
 az acr login --name felisaichatbotacrdev
 docker build -t felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA backend/
 docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA backend/
+docker build -t felisaichatbotacrdev.azurecr.io/frontend:sha-$NEW_SHA frontend/
 docker push felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA
 docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA
+docker push felisaichatbotacrdev.azurecr.io/frontend:sha-$NEW_SHA
 
 # 前提（#110 / Issue #114 の 5）: 観測採取（obs collect Job）は ops イメージ内の
 # /app/observability/collect.sql を実行する。この COPY は PR #110 以降の Dockerfile にしか
@@ -493,6 +501,190 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 | イメージ push 前に apply が走り `ErrImagePull` | **未踏**（G1 ゲート = push 直後のタグ実在・ダイジェスト一致確認で予防し、発生しなかった） | 症状確定（`runningStateDetails`）→ 正しいタグを push → 同じ参照で apply。詳細手順は実際に踏んだときに記録する |
 | CAE 作成失敗・タイムアウト | **未踏**（実測は 3 分 07 秒で成功） | 状態を記録して報告。CAE は作り直し以外の復旧手段が乏しい想定だが、**未踏のため断定しない** |
 | 委任サブネットから ACR に到達できない | **未踏**（実測で到達できることが確定済み。NSG / UDR / NAT Gateway なしの素の委任サブネットで pull 成功） | 発生し得るのは構成を変えた場合。症状確定 → 変更差分の特定から |
+
+## 7. frontend + Easy Auth bootstrap と backend internal ingress 切替（ADR-0027。Issue #194）
+
+frontend Container App（`ca-felisaichatbot-dev-front`）と Easy Auth（`authConfigs`）を作成し、
+backend の ingress を internal へ切り替える手順の正本。順序は
+[ADR-0027](../adr/0027-frontend-azure-deployment-and-public-surface.md) 決定 6（fail-closed
+bootstrap）と決定 8（`READYZ_URL` の付け替え = ADR-0026 の順序）に従う。frontend の再作成
+（destroy 後の作り直し）でも毎回この順序を適用する。
+
+> **停止条件**: 途中で永続データの破壊（PostgreSQL の destroy / `terraform state rm` /
+> データを失う変更）や、見積り（frontend 常駐 1 replica ≈ 0.0769 USD/日 + ACR 増分）を
+> 大きく超える課金が見えた場合は、その場で停止してユーザーに確認する。
+
+前提:
+
+- §0-2 の `TF_VAR_*` が export 済み（`TF_VAR_easy_auth_client_id` /
+  `TF_VAR_easy_auth_client_secret` を含む。Entra 側の作成手順は
+  [entra-easy-auth-setup.md](./entra-easy-auth-setup.md)）
+- §2 の 3 イメージ（backend / backend-ops / frontend）が同一 `DEPLOY_SHA` で push 済み
+
+### 7-1. 第 1 段: `chat_disabled = true` かつ frontend 未作成で apply
+
+```bash
+# frontend はまだ作らない（変数を空にして plan から外す）
+export TF_VAR_frontend_container_image=""
+export TF_VAR_chat_disabled=true
+terraform -chdir=terraform/ephemeral apply
+
+# 確認 1: 100% traffic を持つ revision の template に CHAT_DISABLED=true があること（ARM 読み取り）
+active_rev=$(az containerapp show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev \
+  --query "properties.latestRevisionName" -o tsv)
+az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev \
+  --revision "$active_rev" \
+  --query "{traffic: properties.trafficWeight, env: properties.template.containers[0].env[?name=='CHAT_DISABLED']}" -o json
+
+# 確認 2: 正しい key 付き POST /chat が 404 になること（鍵の有無にかかわらず LLM に到達しない）
+backend_fqdn=$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${backend_fqdn}/chat" \
+  -H "content-type: application/json" -H "X-API-Key: $TF_VAR_chat_api_key" \
+  -d '{"message":"ping"}'   # → 404
+```
+
+### 7-2. 第 2 段: frontend + `authConfigs` を apply（`chat_disabled = true` のまま）
+
+frontend 作成〜`authConfigs` 適用の間には匿名到達可能な窓が構造的に存在するが、
+`CHAT_DISABLED=true` の間は鍵の有無にかかわらず LLM に到達しない（決定 6）。
+
+```bash
+# §0-2 の 3) を再実行して TF_VAR_frontend_container_image を戻してから
+terraform -chdir=terraform/ephemeral apply
+
+# 確認 1: 匿名 POST /api/chat が拒否されること（Easy Auth により 302 リダイレクト。200 でないこと）
+front_fqdn=$(terraform -chdir=terraform/ephemeral output -raw frontend_app_fqdn)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${front_fqdn}/api/chat" \
+  -H "content-type: application/json" -d '{"message":"ping"}'   # → 302（Location は login.microsoftonline.com）
+
+# 確認 2: /readyz（除外パス）は未認証で 200 を返すこと（この時点では backend external FQDN への proxy）
+curl -s -o /dev/null -w '%{http_code}\n' "https://${front_fqdn}/readyz"   # → 200
+
+# 確認 3: backend ログに chat 実行記録が不在であること（ContainerAppConsoleLogs_CL を確認）
+```
+
+`authConfigs` が適用不能な場合はこの先へ進まず、`chat_disabled = true` を維持するか
+`TF_VAR_frontend_container_image=""` に戻して apply（frontend の destroy）する（fail-closed）。
+
+### 7-3. `READYZ_URL` の付け替え（ADR-0026 の順序）
+
+backend を internal にすると旧 `READYZ_URL`（backend FQDN）は外部から到達不能になるため、
+**internal 切替（§7-5）より前に** frontend の透過 proxy へ付け替える。順序は ADR-0026 のとおり
+probe 停止 → （apply 済み）→ 新 URL 検証 → variable 更新 → probe 再開。
+
+```bash
+(
+set -euo pipefail
+
+# 1) probe 停止（切替中の想定内エラーを通知させない）
+gh variable set PROBE_ENABLED --body false
+
+# 2) 新 URL 自体を検証（.obs 契約を含む）
+readyz_url="https://$(terraform -chdir=terraform/ephemeral output -raw frontend_app_fqdn)/readyz"
+curl --fail-with-body --silent --show-error "$readyz_url" |
+  jq -e '
+    .status == "ok" and
+    .db == "ok" and
+    (.obs | type == "object") and
+    (.obs | has("heartbeat_age_seconds") and
+      has("stats_age_seconds") and
+      has("pgstattuple_age_seconds"))
+  ' >/dev/null
+
+# 3) variable 更新 → probe 再開
+gh variable set READYZ_URL --body "$readyz_url"
+test "$(gh variable list --json name,value --jq '.[] | select(.name == "READYZ_URL") | .value')" = "$readyz_url"
+gh variable set PROBE_ENABLED --body true
+
+# 4) 切替後の probe 成功を実測で確認（workflow_dispatch で 1 回起動し conclusion=success を見る）
+gh workflow run readyz-probe.yml
+)
+```
+
+### 7-4. 第 3 段: Easy Auth 疎通の実測後に `chat_disabled = false` で apply
+
+先に Entra 側の割当（owner / 非管理者テストユーザー）と、非管理者テストユーザーのブラウザ
+サインイン成功・未割当ユーザーの `AADSTS50105` 拒否を実測する（証跡の基準は ADR-0027 決定 5。
+§7-2 の検証に不合格の場合はこの段に進まない）。
+
+```bash
+export TF_VAR_chat_disabled=false
+terraform -chdir=terraform/ephemeral apply
+
+# 認証済みブラウザ（非管理者テストユーザー）で /chat の応答が返ることを確認する
+```
+
+### 7-5. backend internal ingress への切替（cutover）
+
+Easy Auth 経由の疎通が実測で成立した後にのみ実施する（ADR-0027 決定 1）。
+`BACKEND_ORIGIN` は Terraform が backend の `ingress[0].fqdn` から組み立てるため、
+切替と付け替えは 1 回の apply で完結する（external 中: `https://<external FQDN>` /
+internal 後: `http://<internal FQDN>`。app 間通信を http にする根拠は
+`terraform/ephemeral/main.tf` の ingress コメント =
+[connect-apps](https://learn.microsoft.com/en-us/azure/container-apps/connect-apps) ）。
+
+```bash
+export TF_VAR_backend_ingress_external=false
+terraform -chdir=terraform/ephemeral apply
+
+# 確認 1: internet から backend へ直接到達できないこと（旧 external FQDN は解決不能または 404）
+curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
+  "https://ca-felisaichatbot-dev.$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn | cut -d. -f2-)/readyz" || true
+
+# 確認 2: frontend 経由の /readyz が引き続き 200（proxy が internal FQDN へ向いたこと）
+front_fqdn=$(terraform -chdir=terraform/ephemeral output -raw frontend_app_fqdn)
+curl -s -o /dev/null -w '%{http_code}\n' "https://${front_fqdn}/readyz"   # → 200
+
+# 確認 3: 認証済みブラウザで /chat 疎通（frontend 経由の SSE 応答）
+
+# 確認 4: 外形監視が生きていること（probe の直近 run が success）
+gh run list -w readyz-probe.yml -L 3
+```
+
+- revision 切替中（実測 20.31〜35.02 秒 =
+  [observations.md](../verification/easy-auth-container-app/observations.md) §4）は frontend が
+  旧 FQDN を参照し 502/503 になり得る。probe 間隔（5 分）より短いため通常は SLI に現れないが、
+  切替直後の probe 失敗 1 件はこの窓として解釈する
+
+### 7-6. rollback（backend external への復帰）
+
+```bash
+# 1) backend を external に戻す（BACKEND_ORIGIN も同じ apply で external FQDN へ戻る）
+export TF_VAR_backend_ingress_external=true
+terraform -chdir=terraform/ephemeral apply
+
+# 2) 外形監視を backend 直接に戻す場合（frontend ごと破棄する場合のみ必要。
+#    frontend が残っているなら READYZ_URL は frontend のままでよい）
+#    ADR-0026 の順序（probe 停止 → 新 URL 検証 → variable 更新 → probe 再開）を §7-3 と同様に踏む
+
+# 3) /chat を遮断して退避する場合（Easy Auth 側の障害など）
+export TF_VAR_chat_disabled=true
+terraform -chdir=terraform/ephemeral apply
+
+# 4) frontend を破棄する場合（fail-closed の最終退避）
+export TF_VAR_frontend_container_image=""
+terraform -chdir=terraform/ephemeral apply
+```
+
+いずれも Terraform 変数の戻しだけで完結し、`terraform destroy` / `state rm` は使わない。
+
+### 7-7. `CHAT_API_KEY_CONFIG_CHECKSUM` 不一致時の再 apply 収束
+
+rotation の apply が片側の反映後に失敗した場合（partial apply）、自動 rollback はされない。
+frontend / backend serving 両 app の 100% traffic revision の template に**同一 checksum**が
+あることを確認し、不一致なら再 apply で収束させる（ADR-0027「付随する決定」）。
+
+```bash
+for app in ca-felisaichatbot-dev ca-felisaichatbot-dev-front; do
+  rev=$(az containerapp show -g rg-felisaichatbot-dev-tf -n "$app" \
+    --query "properties.latestRevisionName" -o tsv)
+  az containerapp revision show -g rg-felisaichatbot-dev-tf -n "$app" --revision "$rev" \
+    --query "properties.template.containers[0].env[?name=='CHAT_API_KEY_CONFIG_CHECKSUM'].value" -o tsv
+done
+# → 2 行が同一値でなければ terraform -chdir=terraform/ephemeral apply を再実行して収束させる。
+# 切替中は「新 key の frontend × 旧 key の backend」（またはその逆）の混在窓が残る
+# （静的共有鍵の原理的 limitation = ADR-0027 検討した選択肢 8。緊急遮断は CHAT_DISABLED が担う）
+```
 
 ## PITR ドリル（Day 4）への影響
 

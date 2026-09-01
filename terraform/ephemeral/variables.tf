@@ -123,3 +123,56 @@ variable "chat_disabled" {
   type        = bool
   default     = false
 }
+
+variable "frontend_container_image" {
+  description = <<-DESC
+    frontend Container App のイメージ完全参照
+    （例: felisaichatbotacrdev.azurecr.io/frontend:sha-abc1234。frontend/Dockerfile）。
+    空のままなら frontend Container App と authConfigs は作られない（ADR-0027 決定 6 の
+    fail-closed bootstrap 順序: chat_disabled = true かつ frontend 未作成の第 1 段 apply を
+    成立させるため）。指定する場合は easy_auth_client_id / easy_auth_client_secret も必須
+    （frontend の precondition が検査する。authConfigs 無しの frontend を作らない）。
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.frontend_container_image == "" || (can(regex(":[a-zA-Z0-9._-]+$", var.frontend_container_image)) && !endswith(var.frontend_container_image, ":latest"))
+    error_message = "frontend_container_image は空か、タグ付きの完全参照（タグは英数字と . _ - のみ）を指定し、latest タグは使わないでください（ADR-0015 のイメージタグ方針）。"
+  }
+}
+
+variable "backend_ingress_external" {
+  description = <<-DESC
+    backend（serving）の ingress を外部公開するか（ADR-0027 決定 1 の cutover スイッチ）。
+    true（既定）= external ingress（従来どおり internet から到達可能）。
+    false = internal ingress（同一 Container Apps Environment 内からのみ到達可能。
+    frontend の BFF / /readyz proxy が唯一の経路になる）。
+    false への切替は Easy Auth 経由の疎通実測が成立した後にのみ行う
+    （手順は docs/operations/vnet-integration-cutover.md §7）。
+  DESC
+  type        = bool
+  default     = true
+}
+
+variable "easy_auth_client_id" {
+  description = <<-DESC
+    Easy Auth（Entra ID）用 app registration の application (client) ID。
+    app registration 本体は Terraform 管理外・ユーザー実行
+    （ADR-0012 の権限境界。手順は docs/operations/entra-easy-auth-setup.md）。
+    frontend_container_image を指定する場合は必須（precondition が検査する）。
+  DESC
+  type        = string
+  default     = ""
+}
+
+variable "easy_auth_client_secret" {
+  description = <<-DESC
+    Easy Auth 用 app registration の client secret。frontend Container App の secret
+    （microsoft-provider-authentication-secret）として保持し、authConfigs が参照する。
+    実値はコミットせず TF_VAR_easy_auth_client_secret 環境変数（.env 管理）で渡す。
+  DESC
+  type        = string
+  sensitive   = true
+  default     = ""
+}

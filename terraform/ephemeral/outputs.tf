@@ -21,3 +21,11 @@ output "container_app_fqdn" {
   description = "Container App の公開 FQDN（安定。revision が変わっても不変。walking skeleton の検証は https://<FQDN>/readyz）"
   value       = azurerm_container_app.main.ingress[0].fqdn
 }
+
+# frontend の安定 FQDN（ADR-0027 決定 8 の正本化。container_app_fqdn と同型で revision 固有名は
+# 使わない。Issue #135 の教訓）。frontend 未作成（frontend_container_image = ""）の間は null。
+# READYZ_URL の付け替え・ブラウザ検証はこの output から URL を組み立てる。
+output "frontend_app_fqdn" {
+  description = "frontend Container App の公開 FQDN（安定。frontend 未作成の間は null。外形監視は https://<FQDN>/readyz）"
+  value       = one(azurerm_container_app.front[*].ingress[0].fqdn)
+}

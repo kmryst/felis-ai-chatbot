@@ -59,6 +59,11 @@ Azure リソースの命名規則を次のとおり制定し、**未作成のリ
 3. Private DNS zone の VNet link は CAF 略語表に項目がない子リソース。独自略語は作らず（規則 1）、
    リンク先 VNet 名 + `-link` の記述的な名前とする
 
+### 追記（2026-09-01。ADR-0027 のリソース追加に伴う規則表の更新）
+
+1. frontend Container App（ADR-0027 / Issue #194）は `ca-felisaichatbot-dev-front`
+   （`ca` + qualifier `-front`。ops 用 `-ops` と同じ付け方）として予約・作成する。27/32 文字で上限内
+
 ### 既存リソースの例外（改名しない）
 
 `felisaichatbot-openai-dev` は規則どおりなら `oai-felisaichatbot-dev` だが、**改名・再作成しない**。

@@ -30,7 +30,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
 | VNet `vnet-felisaichatbot-dev` / サブネット `snet-felisaichatbot-dev-aca`（`10.10.0.0/26`・CAE 委任）+ `snet-felisaichatbot-dev-pgsql`（`10.10.0.64/27`・PostgreSQL 委任） / private DNS zone `felisaichatbot-dev.private.postgres.database.azure.com` + VNet link（ADR-0018） | persistent | 残す | destroy | private DNS zone のみ 0.5 USD/zone/月（Retail Prices API 実測。ADR-0018）。VNet / サブネット / link は無料 |
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
-| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **2026-08-27 分から `microsoft.app` のメーターが `usageDetails` に現れるようになり、リソース単位の按分ができる**（2026-08-30 取得。**8/26 以前は 1 件も無い**という当時の実測 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md) は誤りではなく、前提のほうが変わった）。8 月合計 **1.145 USD**（`Standard vCPU Active` 0.692 / `Standard vCPU Idle` 0.089 / `Standard Memory Idle` 0.185 / `Standard Memory Active` 0.180）。リソース別の累計は `ca-felisaichatbot-dev` 0.455 / `ca-felisaichatbot-dev-ops` 0.279 / `caj-felisaichatbot-dev-obs` 0.412。**8/27 に出始めた理由は未検証**（`- Free` 対のメーターが 1 件も無く、無料付与枠の消費過程を `usageDetails` から観測できない。月次付与枠の使い切りは**推測**であって確認していない）。**平常運転の日額は確定していない**: 8/28 は HA ドリル日かつ測定用 Monitor の停止忘れ（約 14h）で汚染、8/29 はその残り（推定 ~0.5h・終了時刻未確認）を含む。追跡は Issue #115（同 Issue のコールドスタートコスト実測は、外形監視 probe が設計頻度で動いていないため未達） |
+| ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / **frontend Container App `ca-felisaichatbot-dev-front`（Easy Auth 付き公開面。Issue #194 / ADR-0027）** / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **2026-08-27 分から `microsoft.app` のメーターが `usageDetails` に現れるようになり、リソース単位の按分ができる**（2026-08-30 取得。**8/26 以前は 1 件も無い**という当時の実測 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md) は誤りではなく、前提のほうが変わった）。8 月合計 **1.145 USD**（`Standard vCPU Active` 0.692 / `Standard vCPU Idle` 0.089 / `Standard Memory Idle` 0.185 / `Standard Memory Active` 0.180）。リソース別の累計は `ca-felisaichatbot-dev` 0.455 / `ca-felisaichatbot-dev-ops` 0.279 / `caj-felisaichatbot-dev-obs` 0.412。**8/27 に出始めた理由は未検証**（`- Free` 対のメーターが 1 件も無く、無料付与枠の消費過程を `usageDetails` から観測できない。月次付与枠の使い切りは**推測**であって確認していない）。**平常運転の日額は確定していない**: 8/28 は HA ドリル日かつ測定用 Monitor の停止忘れ（約 14h）で汚染、8/29 はその残り（推定 ~0.5h・終了時刻未確認）を含む。追跡は Issue #115（同 Issue のコールドスタートコスト実測は、外形監視 probe が設計頻度で動いていないため未達） |
 | Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
@@ -309,6 +309,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
 | 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
 | 11 | メトリクスアラート 5 件（`alert-pgsql-storage-free-low` / `alert-pgsql-storage-free-critical` / `alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
+| 12 | Easy Auth 用アプリ登録 `felis-ai-chatbot-dev-easyauth` + service principal + テストユーザー 2 名 | Entra ID アプリ登録 / service principal / ユーザー | Entra ID（リージョン概念なし） | SP が Entra オブジェクトを作れない（ADR-0012 の権限境界。ADR-0027） |
 
 理由区分の意味:
 
@@ -763,6 +764,31 @@ for a in sorted(json.load(sys.stdin), key=lambda x: x['name']):
   `storage` は全工程を通じて 32 のままだった**（実測:
   [failover-drill/observations.md §1](../verification/failover-drill/observations.md)）。
   **tier 変更それ自体はストレージサイズを変えない**ので、tier だけを動かす限り本節の見直しは不要である
+
+---
+
+## 12. Easy Auth 用 Entra ID オブジェクト（アプリ登録・service principal・テストユーザー）
+
+frontend の Easy Auth（ADR-0027）が使う Entra ID 側オブジェクト。CI 用 service principal には
+Entra オブジェクトの作成権限がなく（ADR-0012 の権限境界）、Terraform 管理外・ユーザー実行とする。
+作成・割当・後片付けの手順の正本は
+[entra-easy-auth-setup.md](./entra-easy-auth-setup.md)。
+
+- アプリ登録 `felis-ai-chatbot-dev-easyauth`（app role `Chat.Use` =
+  `allowedMemberTypes: ["User", "Application"]`）+ client secret（`.env` 管理・コミット禁止）
+- enterprise application（service principal）: `appRoleAssignmentRequired = true`。
+  割当は owner / 非管理者テストユーザー（synthetic 用 SP は synthetic transaction SLI の
+  作業単位で追加）
+- 非管理者テストユーザー 2 名（割当あり / 割当なし。`AADSTS50105` の対の証跡用）
+
+確認コマンド（読み取りのみ）:
+
+```bash
+az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[].appId" -o tsv
+az ad sp show --id <appId> --query appRoleAssignmentRequired -o tsv   # → true
+az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/<sp object id>/appRoleAssignedTo" \
+  --query "value[].principalDisplayName" -o tsv
+```
 
 ---
 
