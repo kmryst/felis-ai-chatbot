@@ -64,4 +64,4 @@
 | [0025](./0025-serving-min-replicas-1-for-sli-integrity.md) | Accepted | serving を min_replicas 1 へ変更し cold start による可用性 SLI の汚染を排除する（ADR-0015 の serving スケールゼロのみ上書き。probe 失敗 3 件がすべて偽陽性 = 可用性 97.71% は障害 0 件だった実測を根拠とする） |
 | [0026](./0026-readyz-repository-variables-as-source-of-truth.md) | Accepted | `readyz-probe` の実行設定を必須 repository variables に一本化し、未設定・不正値を probe 前に fail-closed にする |
 | [0027](./0027-frontend-azure-deployment-and-public-surface.md) | Proposed | frontend を Azure Container Apps へデプロイし、公開面を Easy Auth + BFF + backend internal ingress で固定する（`NEXT_PUBLIC_CHAT_API_KEY` の廃止・bootstrap 窓は fail-closed の apply 順序で塞ぐ） |
-| [0028](./0028-chat-sse-response-contract.md) | Proposed | `POST /chat` を SSE 化し応答契約を固定する（event 文法・raw stream 写像表・`content_filter` の fail-closed 撤回契約・retry 境界。SLI threshold の数値は決めない） |
+| [0028](./0028-chat-sse-response-contract.md) | Proposed | `POST /chat` を SSE 化し応答契約を固定する（event 文法・raw stream から wire contract への変換・`content_filter` の fail-closed 撤回契約・retry 境界。SLI threshold の数値は決めない） |
