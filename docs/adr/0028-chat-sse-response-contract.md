@@ -48,8 +48,9 @@ backend の `POST /chat` は、現行の単一 JSON 応答（`{"reply": "..."}`�
 LLM を呼ばず `NO_CONTEXT_NOTICE` を返す。ADR-0010）も **`notice` という content event を
 1 件持つ**。SLO 文書の good event 定義は「no-context notice も client が受信して render
 できれば journey 完了」なので、guard 経路が「最初の content event」を持たない定義にすると
-SLI と食い違う。content event が 1 件しかないストリームでは、content event 間隔の条件
-（後述 11 の threshold 2）は空適用となる。
+SLI と食い違う。content event が 1 件しかないストリームでは content event **間**の間隔条件は
+空適用となるが、決定 11 のとおり threshold 2 は「最後の content event → 終端 event」の区間にも
+適用されるため、`notice` から `done` までの時間が無制限になることはない。
 
 ### 4. `message` は非空の renderable text を要求する
 
@@ -66,32 +67,60 @@ backend は Azure OpenAI の chat completions stream（raw stream）を次の表
 | --- | --- |
 | role のみの delta（content なし） | 出力しない |
 | content が空文字列または null の delta | 出力しない |
-| `choices` が空の chunk（annotation・usage 等のメタ chunk） | 出力しない |
+| `choices` が空の chunk（prompt annotation・usage 等のメタ chunk） | 出力しない（metadata として検査のみ） |
+| content を持たず choice 内に `content_filter_results`（`error` なし）を持つ annotation chunk | 出力しない（metadata として検査のみ） |
 | content が非空の delta | `message` |
-| `finish_reason: "stop"` の終端 | `done` |
+| `finish_reason: "stop"` の chunk | それ自体では wire 出力しない。**`done` の送出候補として記録し、raw `[DONE]` まで後続 chunk の metadata 検査を続ける**（下記） |
 | `finish_reason: "content_filter"` の終端 | `error`（class: `content_filter`）。`done` なし |
-| chunk 内の `content_filter_results` に `error` を検出 | **`finish_reason` の値に関わらず** `error`（class: `content_filter`）。`done` なし（下記 6） |
+| chunk 内の `content_filter_results` に `error` を検出 | **`finish_reason` の値・`stop` の前後に関わらず** `error`（class: `content_filter`）。`done` なし（下記 6） |
+| raw `[DONE]` | ここまでに `error` 条件を検出しておらず、`finish_reason: "stop"` を観測済みなら `done`。`stop` 未観測なら終端 event なしの切断として `error`（class: server error 系） |
 | 上記以外の未知の chunk 形状 | `error`（class: server error 系）で終端する（未知形状を握りつぶして「良い応答」に見せない fail-closed 側の選択。実 stream で正当な未知形状が観測されたら本表を追記改訂する） |
+
+**wire の `done` は raw `[DONE]` の受信後にのみ送出する**。公式の sample stream には
+`finish_reason: "stop"` の**後**に annotation chunk が届いてから `[DONE]` になる系列がある
+（出典: <https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/content-streaming> の
+sample response stream。sample は Asynchronous Filter のものだが、Default での chunk 到達順序は
+公式に保証されていない）。`stop` の時点で `done` を出すと、post-`stop` の
+`content_filter_results` の `error` を fail-closed にできないため、終端判定を `[DONE]` まで
+遅延させる。
 
 guard 経路（LLM を呼ばない）は raw stream を持たず、`notice` → `done` を直接生成する。
 
 ### 6. `content_filter_results` の `error` は fail-closed（撤回契約つき）
 
-Azure の streaming content filtering は chunk 単位で評価されるため、**先行 chunk の text を
-送出・表示した後に filter の判定・エラーが届く系列が起こり得る**（出典:
+前提を正確に記録する。Default streaming filtering（決定 7 のとおり本サービスの採用 mode）では、
+content は buffer 単位で filter の検査を受けてから返却される（"Content is fully vetted
+according to the guardrail policy before it's returned to the user"。訳: content は guardrail
+policy に従って完全に検査されてからユーザーへ返却される。出典:
 <https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/content-streaming> ）。
-streaming ではテキストが判定より先に画面に出るため、「問題のある応答を出さない」制御では
-間に合わず、**出してしまったものを撤回する契約**が必要になる。
+未検査 text が先行表示され、遅延した filter signal が後追いするのは **Asynchronous Filter の
+性質**であり、Default を採用する本契約の根拠にはしない。それでも撤回契約が必要な理由は次の
+2 つである。
+
+- Default でも、検査を通過した先行 buffer の text が表示された**後**に、後続 buffer が block
+  されて応答が `finish_reason: "content_filter"` で打ち切られる系列は起こる（buffer 単位の
+  検査通過は応答全体の完了を保証しない）。表示済み partial text は「打ち切られた応答の断片」
+  として画面に残る
+- `content_filter_results` の `error` は「**filter が evaluation を完了できなかった**」ことを
+  示す（"details about an error that prevented content filtering from completing its
+  evaluation"。訳: content filtering が evaluation を完了することを妨げた error の詳細。出典:
+  <https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat> ）。この場合、
+  表示済み text が検査を通過したと主張できない。`error` と表示済み chunk の到達順序は公式に
+  保証されておらず未検証のため、**到達順に依存しない防御的契約**として撤回を要求する
 
 - producer: `content_filter_results` の `error` を検出したら、`finish_reason` の値に関わらず
   `done` を出さず `error`（class: `content_filter`）で終端する（filter の判定が得られなかった
   応答を完了扱いにしない = fail-closed。外部レビューで 3 周連続で指摘され確定した論点）。
   送出済みの `message` を取り消す撤回 event は wire に導入しない
 - consumer（supported client）: `error` の class が `content_filter` の場合、**表示済みの
-  partial text を画面から撤回し、固定文言（「応答は提供元の content filter により打ち切られ
-  ました」）に置換する**。他の class の `error` では partial text を保持し「応答は完了しません
-  でした」を付す。撤回を filter 起因に限るのは、誤って有害たり得る partial text を画面に
-  残さないためであり、通常障害の partial text はユーザーに残す方が有用なため
+  partial text を画面から撤回し、固定文言（「応答が content filter を通過したことを確認
+  できなかったため、表示を取り消しました」）に置換する**。この文言は「filter による打ち切り」
+  （`finish_reason: "content_filter"`）と「filter の evaluation 不能」
+  （`content_filter_results` の `error`）の両方を偽りなく覆う中立表現として選ぶ（後者を
+  「filter により打ち切られた」と表示するのは公式の意味論と食い違うため）。他の class の
+  `error` では partial text を保持し「応答は完了しませんでした」を付す。撤回を filter 起因に
+  限るのは、filter を通過したと確認できない partial text を画面に残さないためであり、
+  通常障害の partial text はユーザーに残す方が有用なため
 
 ### 7. asynchronous content filter は採用しない
 
@@ -124,9 +153,15 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 4. 空・null content 混在の raw stream とその wire 出力
 5. `content_filter` 終端（`finish_reason: "content_filter"`）
 6. partial message 複数 → `content_filter_results` の `error`（撤回契約の検証用）
+7. `message` 複数 → `finish_reason: "stop"` → **post-`stop` の `content_filter_results` の
+   `error`** → raw `[DONE]`（`stop` 観測後も `done` を抑止して `error` 終端にすることの検証用。
+   写像表の「終端判定は `[DONE]` まで遅延」の裏付け）
 
 このほか、途中切断（終端 event なしの切断）系列と、決定 8 の byte 分断パターン試験データを
-同梱する。backend のテスト・frontend parser のテスト・synthetic verifier がすべて同じ fixture を
+同梱する。**fixture 5〜7 は、raw fixture → upstream parser → producer → client parser →
+synthetic verifier の全段で「`done` なし・`error` 終端・（class `content_filter` なら）撤回・
+verifier の bad 判定」になることをテストの必須条件とする**。backend のテスト・frontend parser
+のテスト・synthetic verifier がすべて同じ fixture を
 読むことで、3 者の契約解釈の分岐を構造的に防ぐ。CI から実 LLM を呼ばない決定（ADR-0004）は
 維持され、raw stream 系列の fixture がスタブ側の入力になる。
 
@@ -144,13 +179,23 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 何を意味するかの再定義は、閾値の数値決定（下記 11 のとおり本 ADR では決めない）と一体のため、
 本 ADR では境界のみを決め、値と適用局面の詳細は SLO 側の決定と実装 PR に委ねる。
 
-### 11. SLI との関係（数値は本 ADR では決めない）
+### 11. SLI との関係（measurement semantics は本 ADR の prospective decision。数値は決めない）
 
-確定済みの SLI specification は次のとおり（数値決定はユーザー。実測は妥当性検証にのみ使う）。
+SLO 正本（`docs/operations/slo/slo-document.md`）の現行 SLI specification は「eligible user
+request のうち、SLI threshold 以内に critical user journey を完了した request の割合」であり、
+**単一 threshold の journey 完了型**である。次の 2 閾値の measurement semantics は SLO 正本には
+まだ存在せず、**本 ADR がストリーミング化に先行して決める prospective decision** として記録する
+（SLO 正本への正本化は別 PR。「影響」参照。数値決定はユーザー。実測は妥当性検証にのみ使う）。
 
 > eligible event のうち、supported client が最初の content event を〈threshold 1〉以内に受信し、
-> 以後 content event の間隔が〈threshold 2〉を超えることなく有効な終端 event を受信して
-> parse / render できたものの割合
+> 以後 content event の間隔、および最後の content event から有効な終端 event までの間隔が
+> 〈threshold 2〉を超えることなく、有効な終端 event を受信して parse / render できたものの割合
+
+- threshold 2 は content event 間だけでなく、**最後の content event から終端 event までの区間にも
+  適用する**。この適用がないと、content event が 1 件のストリーム（guard 経路の
+  `notice` → `done`）では間隔条件が空適用となり、最終 content から `done` までが無制限でも式を
+  満たしてしまい、現行 SLI の「threshold 以内に journey を完了」と同値にならない。journey の
+  完了（終端 event の受信）までを有界に保つことは、この semantics の要件である
 
 - 本契約の「有効な終端 event」は `done` のみである。**`error` event は有効な終端 event では
   ないため、`error` で終端したストリームは bad event になる**（`content_filter` 起因で撤回を
@@ -167,8 +212,9 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 - 現行の `/chat` は応答全文を 1 つの JSON で返す。LLM 応答の生成時間はそのまま無応答時間に
   なり、client は完了までレンダリングできない。frontend の Azure デプロイ（[ADR-0027](./0027-frontend-azure-deployment-and-public-surface.md)）で
   supported client boundary の SLI を継続測定するにあたり、「最初の content event までの時間」と
-  「以後の間隔」を意味論に持つ確定 SLI specification が先に決まっており、応答側の契約を
-  ストリーミングとして固定する必要がある
+  「以後の間隔」を意味論に持つ measurement semantics を本 ADR が prospective に決める（決定 11。
+  SLO 正本の現行 SLI は単一 threshold の journey 完了型であり、正本の改訂は別 PR）。応答側の
+  契約をストリーミングとして固定する必要がある
 - wire format・写像表・撤回契約・retry 境界は、外部レビュー 4 周（Codex）を経て確定した。特に
   「upstream parser の byte 分断耐性」と「表示済み text の後に filter signal が届く経路」は
   レビューで発見され（3〜4 周目）、決定 6・8 に組み込まれた
@@ -183,7 +229,8 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 
 ### 2. 非ストリーミングのまま維持する（却下）
 
-SLI specification が「最初の content event」「content event の間隔」を意味論に持つ以上、
+本 ADR の SLI measurement semantics（決定 11 の prospective decision）が「最初の content
+event」「content event の間隔」を意味論に持つ以上、
 単一 JSON 応答では good event の判定材料が構造的に取れない（全文到着の 1 時点しかない）。
 また応答全文の生成完了まで client が何も表示できず、体感の無応答時間が LLM 生成時間と等しく
 なる構造も変わらない。
@@ -238,8 +285,10 @@ filter の判定が得られなかった応答を「有効な終端 = good event
   流用しない
 - `docs/operations/slo/slo-document.md` の改訂が**別 PR** で必要になる（response contract の
   参照先を本契約へ、bad event 列挙への「`content_filter` 終端（表示済み partial text の撤回を
-  伴う場合を含む）」の具体化、supported client の入力契約）。既存分類（error event = bad）の
-  具体化であり規則の変更ではない
+  伴う場合を含む）」の具体化、supported client の入力契約、そして**決定 11 の 2 閾値
+  measurement semantics（終端 event までの間隔適用を含む）の正本化**）。error event = bad の
+  具体化は既存分類の範囲だが、SLI specification の 2 閾値化は**測定意味論の変更**であり、
+  正本改訂まで本 ADR の式は prospective decision に留まる
 - `frontend/app/chat.tsx` の `REQUEST_TIMEOUT_MS = 15_000` と `AbortSignal.timeout` の扱いが
   変わる。単一の全体 timeout はストリーミング応答と両立しない（正常な長い応答を途中で
   切断する）ため、client 側の打ち切りは threshold 1 / threshold 2 の決定と整合する形に
@@ -251,6 +300,9 @@ filter の判定が得られなかった応答を「有効な終端 = good event
 - **未検証の前提**（実 stream の観測で確定させ、結果次第で写像表・撤回契約を追記改訂する）:
   - streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・
     `content_filter_results` の `error` が実際に届く系列の実在と到達順序）
+  - Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在
+    （公式 sample で確認できるのは Asynchronous Filter のもの。写像表の終端遅延は到達順に
+    依存しない防御的設計として置いている）
   - 未知の chunk 形状の実在（写像表の最終行の発動実績）
   - 撤回の UI 挙動は HTTP synthetic では検証できない（verifier は分類のみ）。browser 側は
     parser テスト（fixture 6 系列目）で担保し、実ブラウザでの再現は別途の browser automation の
@@ -265,6 +317,6 @@ filter の判定が得られなかった応答を「有効な終端 = good event
   本 ADR は retry の適用境界のみ変更する
 - [ADR-0010](./0010-rag-wiring-and-hallucination-guard.md) — guard 経路。`notice` event として
   契約に組み込む（決定 3）
-- [SLI / SLO 文書](../operations/slo/slo-document.md) — 確定 SLI specification との整合
-  （決定 11）。改訂は別 PR
+- [SLI / SLO 文書](../operations/slo/slo-document.md) — 現行の単一 threshold SLI specification
+  の正本。決定 11 の 2 閾値 measurement semantics（prospective decision）の正本化は別 PR
 - Issue: #107（`/chat` 保護）/ #113（公開面）/ #106（外形監視）

@@ -55,17 +55,25 @@ internal ingress 切替時に internal FQDN へ付け替える。
 
 ### 4. Entra app role は `allowedMemberTypes = ["User", "Application"]`
 
-- enterprise application（service principal）の **`appRoleAssignmentRequired = true`** を設定し、
-  app role を定義して synthetic transaction 用 service principal と人間ユーザー（下記 5）に
-  割り当てる
-- app role の `allowedMemberTypes` は **`["User", "Application"]`** とする。`["Application"]` のみ
-  では**人間ユーザーをその role に割り当てられず**、非管理者ブラウザ利用者の割当と成功確認が
-  構造的に不可能になる（レビュー 4 周目 #5）
+app role の定義と assignment required は**別オブジェクト上の設定**であるため、対象を分けて
+記録する。
+
+- **app registration（application object）側**: app role を
+  `allowedMemberTypes = ["User", "Application"]` で定義する。`"Application"` を含む app role は
+  application object 上の定義でのみサポートされる（出典:
+  <https://learn.microsoft.com/en-us/graph/api/resources/approle?view=graph-rest-1.0> ）。
+  `["Application"]` のみでは**人間ユーザーをその role に割り当てられず**、非管理者ブラウザ
+  利用者の割当と成功確認が構造的に不可能になる（レビュー 4 周目 #5）
+- **enterprise application（service principal）側**: **`appRoleAssignmentRequired = true`** を
+  設定し（出典:
+  <https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties> ）、
+  synthetic transaction 用 service principal と人間ユーザー（下記 5）への割当をこちらに置く
 - **実際に到達制御として効いているのは role の値ではなく `appRoleAssignmentRequired` である**。
-  Easy Auth は ACA 層で token 内の role claim を検証しないため、role はあくまで
-  「assignment required の割当対象を表現する器」であり、role ベースの認可を ACA 層に
-  期待しない（出典:
-  <https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/application-properties> ）
+  Easy Auth（ACA の組み込み認証）は token 内の role claim の検証を行わず、role の検証は
+  アプリコード側の責務とされている（出典:
+  <https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra> ）。role は
+  あくまで「assignment required の割当対象を表現する器」であり、role ベースの認可を
+  ACA 層に期待しない
 
 ### 5. 成功試験の証跡は非管理者の専用テストユーザーに限定する
 
@@ -121,8 +129,10 @@ frontend は external ingress で作られるのに対し、`authConfigs` は**�
   `readyz-probe` の `READYZ_URL`（repository variable。ADR-0026 の正本）を frontend の FQDN へ
   付け替える。backend が internal ingress になった後も外形監視が成立し、かつ監視経路が
   supported client と同じ入口を通る
-- パスは **`/readyz`** とする（`/api/readyz` にしない）。ADR-0026 が固定した URL 検証
-  `^https://[^/]+/readyz$` と両立させ、workflow・検証スクリプト・runbook の同時改修を避ける
+- パスは **`/readyz`** とする（`/api/readyz` にしない）。ADR-0026 が固定した URL 契約
+  （`https://<host>/readyz` のみ許可）と、その実装である workflow の検証正規表現
+  `^https://[^/]+/readyz$`（`.github/workflows/readyz-probe.yml`）の両方に適合させ、
+  workflow・検証スクリプト・runbook の同時改修を避ける
 - `/readyz` は Easy Auth の除外パス（未認証で通す）にする。切替は ADR-0026 の順序
   （probe 停止 → apply → 新 URL 検証 → variable 更新 → probe 再開）に従う
 - frontend の安定 FQDN を Terraform output として正本化する（既存 `container_app_fqdn` と
@@ -152,9 +162,17 @@ BFF は、Easy Auth sidecar が注入する認証済み principal header（`X-MS
 ACA の secret 更新は既存 revision に自動反映されない（出典:
 <https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets> ）。
 `CHAT_API_KEY_CONFIG_CHECKSUM` env（`DSN_CONFIG_CHECKSUM` と同型。sha256 先頭 8 桁・不可逆）を
-**frontend と backend serving の両方の template に同一値で**持たせ、key を変える 1 回の apply が
-両 app の新 revision を同時に作ることを担保する。`AZURE_OPENAI_API_KEY` にも同型の checksum env
-（`AZURE_OPENAI_CONFIG_CHECKSUM`）を適用する。ただし混在窓は残る（「影響」参照）。
+**frontend と backend serving の両方の template に同一値で**持たせる。checksum が担保するのは
+**「各 app の template diff が、その app の新 revision 作成を発生させる」ことのみ**である。
+revision の作成時刻・ready 到達・traffic 切替は app ごとに独立に進み（ACA は revision を
+app 単位で扱い、旧 revision は当該 app の新 revision が ready になるまで traffic を受け続ける。
+出典: <https://learn.microsoft.com/en-us/azure/container-apps/revisions> ）、Terraform apply にも
+複数リソースを原子的に commit / rollback する性質はない。cross-app の同時性・原子性は
+主張しない。apply が片側の反映後に失敗した場合（partial apply）は自動 rollback されないため、
+**両 app の 100% traffic revision の template に同一 checksum があること**を確認し、不一致なら
+再 apply で収束させることを回復手順として cutover runbook に含める。`AZURE_OPENAI_API_KEY` にも
+同型の checksum env（`AZURE_OPENAI_CONFIG_CHECKSUM`）を適用する。ただし混在窓は残る
+（「影響」参照）。
 
 ## 背景
 
@@ -211,8 +229,10 @@ audience への token を取得して通過し得る。到達制御は `appRoleA
 
 ### 7. proxy パスを `/api/readyz` にする（却下）
 
-ADR-0026 が固定した URL 検証 `^https://[^/]+/readyz$` に適合せず、workflow・検証スクリプト・
-cutover 手順の 3 点同時変更が必要になる。`/readyz` なら変更は repository variable の値だけで済む。
+ADR-0026 の URL 契約（`https://<host>/readyz` のみ許可）と、その workflow 実装の検証正規表現
+`^https://[^/]+/readyz$`（`.github/workflows/readyz-probe.yml`）に適合せず、workflow・
+検証スクリプト・cutover 手順の 3 点同時変更が必要になる。`/readyz` なら変更は
+repository variable の値だけで済む。
 
 ### 8. dual-key 受理で rotation の混在窓を消す（今回は採らない・将来の選択肢）
 
@@ -234,7 +254,8 @@ backend 認証ゲートの拡張 = 本決定のスコープ外の設計変更の
   ない）を使う順序制御だけで塞げる。新規の遮断機構を作らないため、fail-closed の検証も
   「404 と ログ不在」という既存の観測手段で完結する
 - `/readyz` proxy と frontend FQDN への正本付け替えは、ADR-0026 の fail-closed 検証と
-  正規表現をそのまま生かし、外形監視の経路を supported client と一致させる
+  URL 契約（workflow 実装の検証正規表現を含む）をそのまま生かし、外形監視の経路を
+  supported client と一致させる
 
 ## 影響
 
@@ -273,7 +294,8 @@ backend 認証ゲートの拡張 = 本決定のスコープ外の設計変更の
 - [ADR-0025](./0025-serving-min-replicas-1-for-sli-integrity.md) — 決定 9（frontend
   `min_replicas = 1`）の同型判断
 - [ADR-0026](./0026-readyz-repository-variables-as-source-of-truth.md) — **決定 8 は本 ADR に
-  よる追記**（`READYZ_URL` の正本を frontend FQDN へ付け替える。検証正規表現・切替順序は維持）
+  よる追記**（`READYZ_URL` の正本を frontend FQDN へ付け替える。URL 契約・切替順序は維持。
+  検証正規表現の実体は `.github/workflows/readyz-probe.yml` の workflow 実装）
 - [ADR-0028](./0028-chat-sse-response-contract.md)— BFF が中継する SSE 応答契約
 - Issue: #113（の 3 = `NEXT_PUBLIC_` 鍵、の 4 = レート制限）/ #107（`/chat` 保護ゲート）/
   #106（外形監視）/ #135（安定 FQDN output）
