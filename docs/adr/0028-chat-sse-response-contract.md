@@ -2,11 +2,21 @@
 
 ## ステータス
 
-Proposed
+Accepted
 
 ## 日付
 
 2026-09-01
+
+## 改訂履歴
+
+- 2026-09-01: 初版（PR #181。ステータス Proposed）
+- 2026-09-01: 実測（Issue #183 / #184）を反映した追記改訂（Issue #190）。決定 5 の表の
+  error field 検査を単数形・複数形の明示列挙へ拡大し、既知の chunk 形状への未知 field 同乗の
+  扱いの行を追加。決定 6・決定 9（系列 3 / 6）へ実測形状を反映。「影響」の ACA ingress
+  240 秒 timeout の未解決事項をアイドル（バイト間）timeout と実測で決着。あわせてステータスを
+  Proposed から Accepted へ変更した（初版が「未検証の前提」とした実測がすべて返って本文へ
+  反映され、後続実装が本契約を実装対象とするため）
 
 ## 決定内容
 
@@ -65,16 +75,52 @@ backend は Azure OpenAI の chat completions stream（raw stream）を次の表
 
 | raw stream の chunk | wire 出力 |
 | --- | --- |
-| role のみの delta（content なし） | 出力しない |
+| role のみの delta（content なし） | 出力しない（実測では厳密な role のみの形は観測されず、常に次行との複合形で到達した。下記の改訂注記） |
 | content が空文字列または null の delta | 出力しない |
 | `choices` が空の chunk（prompt annotation・usage 等のメタ chunk） | 出力しない（metadata として検査のみ） |
 | content を持たず choice 内に `content_filter_results`（`error` なし）を持つ annotation chunk | 出力しない（metadata として検査のみ） |
 | content が非空の delta | `message` |
 | `finish_reason: "stop"` の chunk | それ自体では wire 出力しない。**`done` の送出候補として記録し、raw `[DONE]` まで後続 chunk の metadata 検査を続ける**（下記） |
 | `finish_reason: "content_filter"` の終端 | `error`（class: `content_filter`）。`done` なし |
-| chunk 内の `content_filter_results` に `error` を検出 | **`finish_reason` の値・`stop` の前後に関わらず** `error`（class: `content_filter`）。`done` なし（下記 6） |
+| chunk 内の error field を検出: **複数形 `content_filter_results` の `error`、または単数形 `content_filter_result` の `error`**（検査対象の field 名はこの 2 つを明示列挙する。2026-09-01 追記改訂: 実測では単数形のみが届いた。下記の改訂注記） | **`finish_reason` の値・`stop` の前後に関わらず** `error`（class: `content_filter`）。`done` なし（下記 6） |
+| 上記いずれかの行に当てはまる chunk に、上記の error field 以外の**未知 field** が同乗 | **未知 field は無視し、chunk 自体は該当行のとおり扱う**（未知 field の同乗を error 終端の条件にしない。2026-09-01 追記改訂。下記の改訂注記） |
 | raw `[DONE]` | ここまでに `error` 条件を検出しておらず、`finish_reason: "stop"` を観測済みなら `done`。`stop` 未観測なら終端 event なしの切断として `error`（class: server error 系） |
-| 上記以外の未知の chunk 形状 | `error`（class: server error 系）で終端する（未知形状を握りつぶして「良い応答」に見せない fail-closed 側の選択。実 stream で正当な未知形状が観測されたら本表を追記改訂する） |
+| 上記以外の未知の chunk 形状（chunk 全体が本表のどの行にも当てはまらない） | `error`（class: server error 系）で終端する（未知形状を握りつぶして「良い応答」に見せない fail-closed 側の選択。実 stream で正当な未知形状が観測されたら本表を追記改訂する） |
+
+**改訂注記（2026-09-01 追記。入力:
+[Azure OpenAI streaming 実測記録](../verification/azure-openai-stream/observations.md)
+§3〜§6）**:
+
+- **error field の明示列挙（検査対象の拡大）**: 実測（run3-long）では、error は初版の表が指す
+  複数形 `content_filter_results` ではなく**単数形 field `content_filter_result` の `error`**
+  （`code: "content_filter_error"`, `message: "The contents are not filtered"`）として届き、
+  同一 chunk 内の複数形は空 object `{}` のままだった。初版の表を字義どおり実装すると複数形の
+  検出行が発火せず、fail-closed が成立しない。よって単数形・複数形の両 field 名を明示列挙して
+  検査対象とする。この改訂は検査対象の**拡大のみ**であり、複数形の検出は維持する（複数形の
+  `error` が観測できなかったことを根拠に検査対象から外さない。「影響」の観測環境と限界を参照）
+- **未知 field の無視（実測された正常系を守る根拠）**: 実測では既知の chunk 形状への未知 field
+  の同乗が常態だった。観測された未知 field は 4 種 — (a) 単数形 `content_filter_result` の
+  `error`、(b) 全 chunk の `obfuscation`、(c) usage chunk の `latency_checkpoint` / `routing`、
+  (d) `stream_options.include_usage` opt-in 時に全 chunk へ付く `usage: null`。特に run3-long
+  では全 1683 chunk に単数形 error と `obfuscation` が同乗したまま `finish_reason: "stop"` で
+  正常終端しており、「既知形状への未知 field 同乗」自体を error 終端の条件にすると、この実測
+  された系列が丸ごと落ちる（`obfuscation` だけでも全応答が error 終端になる）。よって error を
+  運ぶ field は上記の明示列挙で検査し、それ以外の未知 field は無視する。**未知の chunk 形状**
+  （field ではなく chunk 全体が表のどの行にも当てはまらない場合）に対する fail-closed は維持する
+- **role delta の実形状**: 「role のみの delta（content なし）」は厳密な形では一度も観測されず、
+  先頭 delta は常に `role` + `content: ""` + `refusal: null` の複合形（7/7 回）で、表の 1 行目と
+  2 行目の複合として到達した。どちらの行でも「出力しない」なので wire 出力は変わらないが、
+  fixture（決定 9 の系列 3）はこの実測形状を使う
+- **per-chunk `content_filter_results` の実形状**: 値はほぼ常に空 object `{}` で、一部 chunk で
+  のみ `protected_material_code` が付いた。公式 sample にあるカテゴリ別
+  （hate / sexual / violence / self_harm）の per-chunk 結果は一度も観測されなかった。実装は
+  カテゴリ別の値が埋まる前提を置いてはならない（検査は error field の有無で行い、空 `{}` を
+  正常として扱う）
+- **終端判定を `[DONE]` まで遅延させる設計の実データ裏付け**: `stream_options.include_usage` を
+  opt-in した 4 呼び出しすべてで、usage chunk（`choices: []`）が `finish_reason` の後・raw
+  `[DONE]` の前に到達した。「`finish_reason` 後・`[DONE]` 前に chunk が届く」経路は Default
+  mode に実在し、本表の終端遅延の実データ裏付けになる（opt-in なしの自発的な metadata chunk は
+  観測できなかった。不在は主張しない）
 
 **wire の `done` は raw `[DONE]` の受信後にのみ送出する**。公式の sample stream には
 `finish_reason: "stop"` の**後**に annotation chunk が届いてから `[DONE]` になる系列がある
@@ -122,6 +168,16 @@ policy に従って完全に検査されてからユーザーへ返却される�
   限るのは、filter を通過したと確認できない partial text を画面に残さないためであり、
   通常障害の partial text はユーザーに残す方が有用なため
 
+**改訂注記（2026-09-01 追記）**: 実測（run3-long）で観測された単数形 `content_filter_result` の
+`error`（`message: "The contents are not filtered"`）は、本決定が引用する公式意味論
+（filter が evaluation を完了できなかった）に該当する実データと解される。この系列は全 1683
+chunk に error が同乗したまま `finish_reason: "stop"` で正常終端しており、字義どおり
+「filter の判定が得られなかったまま完了扱いで届く応答」である。決定 5 の表の改訂（単数形の
+明示列挙）により、この系列は本決定の fail-closed・撤回契約の対象になる（producer は `done` を
+出さず `error`（class: `content_filter`）で終端し、consumer は表示済み partial text を撤回
+する）。同一プロンプトの再実行では再現しない間欠事象であることが記録されている
+（[実測記録](../verification/azure-openai-stream/observations.md) §5-1・§9）。
+
 ### 7. asynchronous content filter は採用しない
 
 Azure の asynchronous filter（annotation が本文より遅れて届く opt-in mode）は採用せず、
@@ -149,10 +205,18 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 
 1. 正常（`message` 複数 → `done`）
 2. guard notice（`notice` → `done`）
-3. role-only delta 混在の raw stream とその wire 出力
-4. 空・null content 混在の raw stream とその wire 出力
+3. role delta 混在の raw stream とその wire 出力（2026-09-01 追記改訂: 実測の先頭 delta は
+   role のみではなく `role` + `content: ""` + `refusal: null` の複合形（7/7 回）。fixture は
+   この実測形状を使い、role のみの形も仕様上の想定として維持する）
+4. 空・null content 混在の raw stream とその wire 出力（実測では空文字列 content は先頭 delta に
+   同乗する形でのみ出現。null content・本文途中の空 content は観測がなく、仕様上の想定として
+   維持する）
 5. `content_filter` 終端（`finish_reason: "content_filter"`）
-6. partial message 複数 → `content_filter_results` の `error`（撤回契約の検証用）
+6. partial message 複数 → error field の検出（撤回契約の検証用。2026-09-01 追記改訂:
+   複数形 `content_filter_results` の `error` の系列に加えて、**実測された単数形
+   `content_filter_result` の `error` が全 chunk に同乗したまま `finish_reason: "stop"` に至る
+   系列（run3-long）** を含め、どちらも `done` なし・`error`（class: `content_filter`）終端・
+   撤回になることを検証する）
 7. `message` 複数 → `finish_reason: "stop"` → **post-`stop` の `content_filter_results` の
    `error`** → raw `[DONE]`（`stop` 観測後も `done` を抑止して `error` 終端にすることの検証用。
    決定 5 の表の「終端判定は `[DONE]` まで遅延」の裏付け）
@@ -277,12 +341,16 @@ filter の判定が得られなかった応答を「有効な終端 = good event
   `frontend/app/chat.tsx` と BFF route handler（reader ベースの parser・撤回処理・中継）、
   `docs/contracts/chat-sse/`（fixture 新設）、テスト一式
 - **ACA ingress の 240 秒**: Azure Container Apps の ingress には既定 240 秒の timeout がある
-  （出典: <https://learn.microsoft.com/en-us/azure/container-apps/ingress-overview> ）。ただし
-  **これが総リクエスト時間なのかアイドル時間なのかは公式文書内で記述が食い違っており、未解決**
-  である。ストリーミングでは両者で意味が大きく異なる（総時間なら長い応答が必ず切れ、アイドル
-  時間なら content event が届き続ける限り切れない）ため、**実 stream での実測で確定させる**。
-  いずれにせよこれは **platform の制約であって SLO の値ではなく**、SLI threshold の根拠に
-  流用しない
+  （出典: <https://learn.microsoft.com/en-us/azure/container-apps/ingress-overview> ）。初版では
+  これが総リクエスト時間なのかアイドル時間なのかが公式文書内で記述が食い違っており未解決と
+  していたが、**実測（Issue #183。[一時 Container App 実測記録](../verification/easy-auth-container-app/observations.md)
+  §5）で、この条件ではアイドル（バイト間）timeout として振る舞い、総リクエスト時間の上限と
+  しては振る舞わないことを確認して決着した**（2026-09-01 追記改訂）。SSE で content event が
+  届き続ける限り、総時間が 240 秒を超えても切断されない（event 間隔 30 秒 × 20 で総時間
+  602.30 秒完走、間隔 200 秒 × 2 で総時間 401.05 秒完走。一方アイドルが約 237.5 秒・240.2 秒に
+  達した 2 回はいずれもそこで切断され、2 回再現）。総時間の上限が存在しないことは主張しない
+  （観測した最長は 602.30 秒）。いずれにせよこれは **platform の制約であって SLO の値では
+  なく**、SLI threshold の根拠に流用しない
 - `docs/operations/slo/slo-document.md` の改訂が**別 PR** で必要になる（response contract の
   参照先を本契約へ、bad event 列挙への「`content_filter` 終端（表示済み partial text の撤回を
   伴う場合を含む）」の具体化、supported client の入力契約、そして**決定 11 の 2 閾値
@@ -297,16 +365,39 @@ filter の判定が得られなかった応答を「有効な終端 = good event
 - guard 経路（ADR-0010）の応答は `notice` event になるが、「LLM を呼ばない」構造は不変
 - retry の適用範囲が狭まる（ストリーミング開始後の再試行は行わない）。ADR-0009 の
   「retry 既定値は据え置き」の対象範囲がストリーム開始前に限定される
-- **未検証の前提**（実 stream の観測で確定させ、結果次第で決定 5 の表・撤回契約を追記改訂する）:
-  - streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・
-    `content_filter_results` の `error` が実際に届く系列の実在と到達順序）
-  - Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在
-    （公式 sample で確認できるのは Asynchronous Filter のもの。決定 5 の表の終端遅延は到達順に
-    依存しない防御的設計として置いている）
-  - 未知の chunk 形状の実在（決定 5 の表の最終行の発動実績）
+- **初版の「未検証の前提」の実測結果**（2026-09-01 追記改訂。実測は Issue #184
+  （[Azure OpenAI streaming 実測記録](../verification/azure-openai-stream/observations.md)）で
+  実施し、結果を決定 5 の表・決定 6・決定 9 へ反映済み。「観測できなかった」は不在の証明では
+  なく、防御的契約は維持する）:
+  - streaming content filtering の実挙動: `finish_reason: "content_filter"` 終端・複数形
+    `content_filter_results` の `error` は**観測できなかった**（7 呼び出しすべて
+    `finish_reason: "stop"` で正常終端）。近縁の実データとして、単数形 `content_filter_result`
+    の `error` が正常終端 stream の全 chunk に同乗する系列を観測し、決定 5 の表・決定 6 へ
+    反映した
+  - `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列: 自発的な（opt-in
+    なしの）系列は観測できなかったが、`stream_options.include_usage` opt-in 時の usage chunk で
+    **Default mode での実在を確認**した（決定 5 の改訂注記。終端遅延設計の実データ裏付け）
+  - 未知の chunk 形状: chunk 全体として決定 5 の表のどの行にも当てはまらない形状は**現れ
+    なかった**（表の最終行の発動実績なし）。field 単位の未知 4 種を観測し、「未知 field は
+    無視する」行として表へ反映した
   - 撤回の UI 挙動は HTTP synthetic では検証できない（verifier は分類のみ）。browser 側は
     parser テスト（fixture 6 系列目）で担保し、実ブラウザでの再現は別途の browser automation の
-    範囲とする
+    範囲とする（本改訂でも実測対象外のまま維持する）
+- **実測の観測環境（identity）と限界**（2026-09-01 追記改訂）: 上記の stream 実測は
+  Japan East / `gpt-4.1-mini-2025-04-14` / api-version `2024-10-21` / RAI policy
+  `Microsoft.DefaultV2` / mode **Blocking**（Default mode。Asynchronous Filter ではない）で
+  行われた。RAI policy 名と mode は実測記録の実施条件には含まれておらず、デプロイ設定の読み取り
+  確認（`az`）で補った事実である。**positive control（content filter を実際に発火させた観測）は
+  未取得**であり、`finish_reason: "content_filter"` 終端・複数形 `content_filter_results` の
+  `error`・content を持たない独立の annotation chunk は観測できなかった（不在の証明ではない）。
+  よって本改訂は検査対象を拡大する方向のみで行い、観測されなかったことを根拠に検出範囲を
+  狭める変更（表からの行の削除・検査対象の縮小）は含まない
+- **本改訂で閉じない論点**（2026-09-01 追記改訂）: 単数形 `content_filter_result.error` 系列
+  （再実行で再現しない間欠事象）が fail-closed により `error` 終端 = bad event になることの
+  発生頻度と error budget への影響の評価は、本 ADR ではなく **SLO 文書側**（bad event 列挙の
+  具体化と同じ別 PR）で扱う。本 ADR が決めるのは契約（fail-closed の維持と検査対象の field 名）
+  のみである。決定 5 の表の再改訂が必要になる条件（positive control が得られた場合・正当な
+  未知 chunk 形状が観測された場合）は表内と本節に維持した
 
 ## 関連
 
@@ -319,4 +410,9 @@ filter の判定が得られなかった応答を「有効な終端 = good event
   契約に組み込む（決定 3）
 - [SLI / SLO 文書](../operations/slo/slo-document.md) — 現行の単一 threshold SLI specification
   の正本。決定 11 の 2 閾値 measurement semantics（prospective decision）の正本化は別 PR
-- Issue: #107（`/chat` 保護）/ #113（公開面）/ #106（外形監視）
+- [Azure OpenAI streaming 実測記録](../verification/azure-openai-stream/observations.md) —
+  Issue #184。2026-09-01 の追記改訂（決定 5 の表・決定 6・決定 9）の入力
+- [一時 Container App 実測記録](../verification/easy-auth-container-app/observations.md) —
+  Issue #183。ACA ingress 240 秒 timeout の決着（「影響」）の入力
+- Issue: #107（`/chat` 保護）/ #113（公開面）/ #106（外形監視）/ #184・#183（実測）/
+  #190（2026-09-01 の追記改訂）
