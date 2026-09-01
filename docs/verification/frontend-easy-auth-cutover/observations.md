@@ -151,8 +151,8 @@
 entra-easy-auth-setup.md §4 で作り直す）。
 
 ```console
-$ az ad user delete --id "felis-test@gatsbykenjigmail.onmicrosoft.com"
-$ az ad user delete --id "felis-test-unassigned@gatsbykenjigmail.onmicrosoft.com"
+$ az ad user delete --id "felis-test@<tenant-domain>.onmicrosoft.com"
+$ az ad user delete --id "felis-test-unassigned@<tenant-domain>.onmicrosoft.com"
 $ az ad user list --filter "startswith(userPrincipalName,'felis-test')" --query "length(@)" -o tsv
 0
 $ az rest --url ".../servicePrincipals/0544d912-…/appRoleAssignedTo" \
