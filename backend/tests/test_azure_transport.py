@@ -213,3 +213,103 @@ def test_create_llm_client_supports_azure_openai():
 def test_create_llm_client_azure_requires_config():
     with pytest.raises(ValueError):
         create_llm_client("azure-openai", FAST, azure=None)
+
+
+# --- chat_stream（ADR-0028。stream=true の transport と byte 復元） -------------
+
+
+RAW_STREAM_BODY = (
+    b'data: {"choices":[{"content_filter_results":{},"delta":{"content":"",'
+    b'"refusal":null,"role":"assistant"},"finish_reason":null,"index":0,'
+    b'"logprobs":null}]}\n\n'
+    b'data: {"choices":[{"content_filter_results":{},"delta":'
+    b'{"content":"\xe3\x82\x84\xe3\x81\x82"},"finish_reason":null,"index":0,'
+    b'"logprobs":null}]}\n\n'
+    b'data: {"choices":[{"content_filter_results":{},"delta":{},'
+    b'"finish_reason":"stop","index":0,"logprobs":null}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+async def test_chat_stream_yields_payloads_and_sends_stream_true():
+    """chat_stream は stream: true を送り、SSE data payload を逐次返す。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            content=RAW_STREAM_BODY,
+        )
+
+    transport, requests = _transport_returning(handler)
+    payloads = [p async for p in transport.chat_stream(MESSAGES)]
+    assert len(payloads) == 4
+    assert payloads[-1] == "[DONE]"
+
+    request = requests[0]
+    assert request.url.path == "/openai/deployments/chat/chat/completions"
+    assert request.url.params["api-version"] == "2024-10-21"
+    assert request.headers["api-key"] == "test-key-not-real"
+    assert json.loads(request.content) == {
+        "messages": MESSAGES,
+        "stream": True,
+    }
+
+
+async def test_chat_stream_http_429_maps_to_rate_limit_error():
+    transport, _ = _transport_returning(_status_handler(429))
+    with pytest.raises(LLMRateLimitError):
+        async for _ in transport.chat_stream(MESSAGES):
+            pass
+
+
+@pytest.mark.parametrize("status", [500, 503])
+async def test_chat_stream_http_5xx_maps_to_server_error(status: int):
+    transport, _ = _transport_returning(_status_handler(status))
+    with pytest.raises(LLMServerError):
+        async for _ in transport.chat_stream(MESSAGES):
+            pass
+
+
+@pytest.mark.parametrize("status", [400, 401, 404])
+async def test_chat_stream_http_4xx_maps_to_bad_request_error(status: int):
+    transport, _ = _transport_returning(_status_handler(status))
+    with pytest.raises(LLMBadRequestError):
+        async for _ in transport.chat_stream(MESSAGES):
+            pass
+
+
+async def test_chat_stream_transport_layer_error_maps_to_server_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    transport, _ = _transport_returning(handler)
+    with pytest.raises(LLMServerError):
+        async for _ in transport.chat_stream(MESSAGES):
+            pass
+
+
+async def test_chat_stream_timeout_maps_to_timeout_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timeout")
+
+    transport, _ = _transport_returning(handler)
+    with pytest.raises(LLMTimeoutError):
+        async for _ in transport.chat_stream(MESSAGES):
+            pass
+
+
+async def test_chat_stream_via_llm_client_returns_deltas():
+    """LLMClient.chat_stream 経由で raw stream が content delta 列になる。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            content=RAW_STREAM_BODY,
+        )
+
+    transport, _ = _transport_returning(handler)
+    client = LLMClient(transport, FAST)
+    deltas = [d async for d in client.chat_stream(MESSAGES)]
+    assert deltas == ["やあ"]

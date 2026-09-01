@@ -7,9 +7,11 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
+from collections.abc import AsyncIterator
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import CHAT_API_KEY_MIN_LENGTH, Settings
@@ -24,6 +26,7 @@ from app.llm.prompts import NO_CONTEXT_NOTICE, build_context, build_messages
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
 from app.rag import fetch_property_records, search_similar_documents
+from app.sse import SSE_HEADERS, SSE_MEDIA_TYPE, error_class_for, format_sse_event
 
 logger = logging.getLogger("app")
 
@@ -120,13 +123,6 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-class ChatResponse(BaseModel):
-    # 回答ごとの出典表示（references）は行わない（ADR-0008）。出典はツール
-    # 全体としてフロントエンドのフッターで常設表示し、個別ページ URL へは
-    # docs/data-sources.md で辿れるようにする
-    reply: str
-
-
 def _enforce_chat_gate(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> None:
@@ -161,17 +157,66 @@ def _enforce_chat_gate(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+async def _guard_notice_events() -> AsyncIterator[str]:
+    """guard 経路の wire 出力: `notice` → `done`（ADR-0028 決定 3）。
+
+    raw stream を持たず直接生成する（LLM を呼ばない構造は不変。ADR-0010）。
+    """
+    yield format_sse_event("notice", {"text": NO_CONTEXT_NOTICE})
+    yield format_sse_event("done", {})
+
+
+async def _chat_stream_events(deltas: AsyncIterator[str]) -> AsyncIterator[str]:
+    """LLM stream を wire contract の event 列へ組み立てる（ADR-0028 決定 2）。
+
+    - 正常: `message`（1 回以上）→ `done`（1 回）。`done` の送出は変換器
+      （decision 5 の表の実装 = app.llm.streaming）が raw `[DONE]` の受信まで
+      遅延させた結果の正常 return に対応する
+    - 失敗: `message`（0 回以上）→ `error`（1 回）で終端し `done` を出さない。
+      error の data は class のみ（詳細メッセージを含めない）。content filter の
+      error field 検出時は class `content_filter` になり、consumer 側の
+      撤回契約（決定 6）の入力になる
+    - client 切断時は StreamingResponse が本 generator を close し、
+      LLMClient.chat_stream → transport の finally が provider stream を
+      打ち切る（決定 2）
+    """
+    try:
+        try:
+            async for delta in deltas:
+                # 変換器は非空 content のみを yield する（決定 4: 空 message を
+                # 送出しない）
+                yield format_sse_event("message", {"text": delta})
+        except LLMError as exc:
+            # 詳細（プロンプト等）はログに出さない。wire には class だけ載せる
+            logger.error(
+                "chat stream failed", extra={"error_type": type(exc).__name__}
+            )
+            yield format_sse_event("error", {"class": error_class_for(exc)})
+            return
+        yield format_sse_event("done", {})
+    finally:
+        # client 切断（GeneratorExit）を含むあらゆる終了経路で upstream の
+        # generator を閉じ、provider stream を打ち切る（決定 2）
+        aclose = getattr(deltas, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 @app.post("/chat", dependencies=[Depends(_enforce_chat_gate)])
-async def chat(req: ChatRequest) -> ChatResponse:
-    """RAG つきチャット応答（ADR-0010）。
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """RAG つきチャット応答（ADR-0010）。応答は SSE（ADR-0028）。
 
     - ユーザー質問を embedding し、documents を cosine 類似度で検索する
     - ハルシネーション・ガード: 検索結果が 0 件、または最上位の類似度が
-      閾値未満なら、LLM を呼ばずに固定文言（NO_CONTEXT_NOTICE）を返す。
-      参照資料が空のとき LLM が事前知識で誤答する事象を実測しており、
-      プロンプト指示ではなくコードで担保する
+      閾値未満なら、LLM を呼ばずに固定文言（NO_CONTEXT_NOTICE）を `notice`
+      event で返す。参照資料が空のとき LLM が事前知識で誤答する事象を
+      実測しており、プロンプト指示ではなくコードで担保する
     - システムプロンプト（予報・警報の生成禁止。気象業務法対応。ADR-0008）を
-      必ず適用する
+      必ず適用する。回答ごとの出典表示（references）は行わない（ADR-0008。
+      出典はフロントエンドのフッターに常設表示する）
+    - ストリーム開始前の失敗（ゲートの 404 / 401、validation の 422、
+      embedding の 502、検索の 503）は SSE を開始せず現行の HTTP status を
+      維持する。chat stream 開始後の失敗は `error` event で終端する
     """
     try:
         query_embedding = await app.state.llm.embed(req.message)
@@ -209,7 +254,11 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 "threshold": settings.rag_similarity_threshold,
             },
         )
-        return ChatResponse(reply=NO_CONTEXT_NOTICE)
+        return StreamingResponse(
+            _guard_notice_events(),
+            media_type=SSE_MEDIA_TYPE,
+            headers=SSE_HEADERS,
+        )
 
     try:
         property_records = await fetch_property_records(
@@ -227,14 +276,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
     context = build_context(
         [chunk.content for chunk in chunks], property_records
     )
-    try:
-        reply = await app.state.llm.chat(build_messages(req.message, context))
-    except LLMError as exc:
-        # 詳細（プロンプト等）はログに出さない。分類だけ返す
-        logger.error(
-            "chat failed", extra={"error_type": type(exc).__name__}
-        )
-        raise HTTPException(
-            status_code=502, detail="LLM 呼び出しに失敗しました"
-        ) from exc
-    return ChatResponse(reply=reply)
+    # ここから先の失敗は chat stream の失敗であり、SSE の `error` event で
+    # 終端する（retry は最初の content delta 受信前に限る。ADR-0028 決定 10。
+    # retry・timeout・raw stream の変換は app.state.llm.chat_stream が担う）
+    deltas = app.state.llm.chat_stream(build_messages(req.message, context))
+    return StreamingResponse(
+        _chat_stream_events(deltas),
+        media_type=SSE_MEDIA_TYPE,
+        headers=SSE_HEADERS,
+    )

@@ -1,4 +1,9 @@
-"""health / readyz / request ID / /chat / 設定 fail-fast のテスト。"""
+"""health / readyz / request ID / /chat / 設定 fail-fast のテスト。
+
+/chat の応答は SSE（ADR-0028）。本ファイルの /chat テストは wire event を
+parse して従来の検証項目（stub 応答・ガード・コンテキスト受け渡し）を見る。
+SSE 契約自体の網羅は test_chat_sse_endpoint.py / test_sse_contract.py。
+"""
 
 import dataclasses
 
@@ -9,6 +14,16 @@ import app.main as main_module
 from app.config import InvalidEnvError, MissingEnvError, Settings
 from app.llm.prompts import NO_CONTEXT_NOTICE
 from app.rag import ScoredChunk
+from sse_test_helpers import parse_wire_sse
+
+
+def _reply_text(res) -> str:
+    """SSE 応答から content event（message / notice）の text を連結して返す。"""
+    events = parse_wire_sse(res.text)
+    assert events[-1] == {"event": "done", "data": {}}
+    return "".join(
+        e["data"]["text"] for e in events if e["event"] in ("message", "notice")
+    )
 
 
 def _fake_search(chunks):
@@ -72,9 +87,10 @@ def test_chat_returns_stub_reply_when_search_hits(client, monkeypatch):
     monkeypatch.setattr(main_module, "fetch_property_records", _fake_properties)
     res = client.post("/chat", json={"message": "台風について教えて"})
     assert res.status_code == 200
-    body = res.json()
-    assert body["reply"].startswith("[stub]")
-    assert "台風について教えて" in body["reply"]
+    assert res.headers["content-type"] == "text/event-stream; charset=utf-8"
+    reply = _reply_text(res)
+    assert reply.startswith("[stub]")
+    assert "台風について教えて" in reply
 
 
 def test_chat_passes_context_to_llm_when_search_hits(client, monkeypatch):
@@ -86,13 +102,15 @@ def test_chat_passes_context_to_llm_when_search_hits(client, monkeypatch):
     )
     monkeypatch.setattr(main_module, "fetch_property_records", _fake_properties)
     captured: list[list[dict[str, str]]] = []
-    original_chat = main_module.app.state.llm.chat
+    original_chat_stream = main_module.app.state.llm.chat_stream
 
-    async def spy_chat(messages):
+    def spy_chat_stream(messages):
         captured.append(messages)
-        return await original_chat(messages)
+        return original_chat_stream(messages)
 
-    monkeypatch.setattr(main_module.app.state.llm, "chat", spy_chat)
+    monkeypatch.setattr(
+        main_module.app.state.llm, "chat_stream", spy_chat_stream
+    )
     res = client.post("/chat", json={"message": "台風について教えて"})
     assert res.status_code == 200
     assert len(captured) == 1
@@ -110,13 +128,15 @@ def test_chat_guard_zero_hits_does_not_call_llm(client, monkeypatch):
         main_module, "search_similar_documents", _fake_search([])
     )
 
-    async def must_not_be_called(messages):
-        raise AssertionError("ガードが素通りして LLM chat が呼ばれた")
+    def must_not_be_called(messages):
+        raise AssertionError("ガードが素通りして LLM chat_stream が呼ばれた")
 
-    monkeypatch.setattr(main_module.app.state.llm, "chat", must_not_be_called)
+    monkeypatch.setattr(
+        main_module.app.state.llm, "chat_stream", must_not_be_called
+    )
     res = client.post("/chat", json={"message": "おすすめのラーメン屋は？"})
     assert res.status_code == 200
-    assert res.json()["reply"] == NO_CONTEXT_NOTICE
+    assert _reply_text(res) == NO_CONTEXT_NOTICE
 
 
 def test_chat_guard_below_threshold_does_not_call_llm(client, monkeypatch):
@@ -128,13 +148,15 @@ def test_chat_guard_below_threshold_does_not_call_llm(client, monkeypatch):
         _fake_search([ScoredChunk(content="無関係なチャンク", similarity=below)]),
     )
 
-    async def must_not_be_called(messages):
-        raise AssertionError("ガードが素通りして LLM chat が呼ばれた")
+    def must_not_be_called(messages):
+        raise AssertionError("ガードが素通りして LLM chat_stream が呼ばれた")
 
-    monkeypatch.setattr(main_module.app.state.llm, "chat", must_not_be_called)
+    monkeypatch.setattr(
+        main_module.app.state.llm, "chat_stream", must_not_be_called
+    )
     res = client.post("/chat", json={"message": "おすすめのラーメン屋は？"})
     assert res.status_code == 200
-    assert res.json()["reply"] == NO_CONTEXT_NOTICE
+    assert _reply_text(res) == NO_CONTEXT_NOTICE
 
 
 def test_chat_rejects_empty_message(client):

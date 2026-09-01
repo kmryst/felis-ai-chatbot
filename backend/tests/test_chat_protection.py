@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.llm.prompts import NO_CONTEXT_NOTICE
+from sse_test_helpers import parse_wire_sse
 
 _KEY = os.environ["CHAT_API_KEY"]
 
@@ -55,7 +56,11 @@ def test_chat_with_correct_key_passes(raw_client, monkeypatch):
         headers={"X-API-Key": _KEY},
     )
     assert res.status_code == 200
-    assert res.json()["reply"] == NO_CONTEXT_NOTICE
+    # ガード応答は SSE の notice → done（ADR-0028 決定 3）
+    assert parse_wire_sse(res.text) == [
+        {"event": "notice", "data": {"text": NO_CONTEXT_NOTICE}},
+        {"event": "done", "data": {}},
+    ]
 
 
 def test_chat_disabled_returns_404_even_with_correct_key(

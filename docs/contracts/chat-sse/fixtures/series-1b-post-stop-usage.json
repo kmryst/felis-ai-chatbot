@@ -1,0 +1,30 @@
+{
+  "name": "series-1b-post-stop-usage",
+  "series": 1,
+  "title": "post-stop の usage metadata chunk → done",
+  "basis": "measured",
+  "basis_note": "raw/run4-usage-optin.jsonl の実測形状（stream_options.include_usage opt-in 時、全 chunk への usage: null 同乗と、finish_reason 後・[DONE] 前に届く usage chunk（latency_checkpoint / routing の undocumented field 同乗））に基づく",
+  "description": "finish_reason: \"stop\" の後・raw [DONE] の前に metadata chunk が届いても、未知 field（usage: null / latency_checkpoint / routing）を無視して done で終端する（決定 5 の表の「未知 field は無視」行と終端判定の遅延の検証）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"aa\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":null}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"梅雨は\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"bb\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":null}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"長雨の季節です。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"cc\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":null}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"delta\":{}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"dd\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":null}\n\ndata: {\"choices\":[],\"created\":1788254314,\"id\":\"chatcmpl-fixture\",\"latency_checkpoint\":{\"engine_ttft_ms\":49,\"service_ttft_ms\":397},\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"\",\"object\":\"chat.completion.chunk\",\"routing\":{\"serving_pipereplica\":\"fixture-replica\"},\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":{\"completion_tokens\":34,\"prompt_tokens\":22,\"total_tokens\":56}}\n\ndata: [DONE]\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"梅雨は\"}\n\nevent: message\ndata: {\"text\":\"長雨の季節です。\"}\n\nevent: done\ndata: {}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "梅雨は"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "長雨の季節です。"
+      }
+    },
+    {
+      "event": "done",
+      "data": {}
+    }
+  ],
+  "expect_done": true,
+  "expected_error_class": null
+}
