@@ -176,3 +176,69 @@ variable "easy_auth_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "llm_provider" {
+  description = <<-DESC
+    backend serving の LLM provider 切替（Issue #195。ADR-0009）。
+    空（既定）= LLM_PROVIDER env を注入しない = backend/app/config.py の既定 "stub"（ADR-0004）。
+    "azure-openai" = 実 Azure OpenAI へ切り替える（azure_openai_endpoint / azure_openai_api_key が
+    必須になる。azurerm_container_app.main の precondition が検査する）。
+    rollback は空へ戻して apply する（手順は docs/operations/llm-provider-cutover.md）。
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "azure-openai"], var.llm_provider)
+    error_message = "llm_provider は空（stub 既定のまま）か \"azure-openai\" のみを指定してください（backend/app/llm/client.py がサポートする実 provider は azure-openai のみ。ADR-0009）。"
+  }
+}
+
+variable "azure_openai_endpoint" {
+  description = <<-DESC
+    Azure OpenAI のエンドポイント URL（例: https://<account>.openai.azure.com/）。
+    リソース本体は Terraform 管理外（ADR-0014）で、ここでは接続先として参照するのみ。
+    secret ではないが、実値は .env の TF_VAR_azure_openai_endpoint で渡す（tfvars に書かない）。
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.azure_openai_endpoint == "" || can(regex("^https://", var.azure_openai_endpoint))
+    error_message = "azure_openai_endpoint は空か https:// で始まる URL を指定してください。"
+  }
+}
+
+variable "azure_openai_api_key" {
+  description = <<-DESC
+    Azure OpenAI の API キー（ADR-0009。マネージド ID 化までの暫定 = production-readiness §2）。
+    Container Apps の secret（azure-openai-api-key）として保持し、tfvars に書かず
+    TF_VAR_azure_openai_api_key で渡す（.env 管理。コミット禁止）。
+    値の変更は AZURE_OPENAI_CONFIG_CHECKSUM env（ADR-0027「付随する決定」と同型）を通じて
+    必ず新 revision を作る。
+  DESC
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "azure_openai_api_version" {
+  description = <<-DESC
+    Azure OpenAI の api-version。空なら env を注入せず backend の既定（backend/app/config.py の
+    "2024-10-21"。ADR-0009 で疎通実測済みの GA 版）が使われる。
+  DESC
+  type        = string
+  default     = ""
+}
+
+variable "azure_openai_chat_deployment" {
+  description = "Azure OpenAI の chat deployment 名。空なら env を注入せず backend の既定（\"chat\"）が使われる（ADR-0009）"
+  type        = string
+  default     = ""
+}
+
+variable "azure_openai_embedding_deployment" {
+  description = "Azure OpenAI の embedding deployment 名。空なら env を注入せず backend の既定（\"embedding\"）が使われる（ADR-0009）"
+  type        = string
+  default     = ""
+}

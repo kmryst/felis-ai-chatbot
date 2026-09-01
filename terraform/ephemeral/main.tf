@@ -140,6 +140,17 @@ resource "azurerm_container_app" "main" {
     }
   }
 
+  # Azure OpenAI の API キー（Issue #195。ADR-0009）。database-url / chat-api-key と同方針で
+  # Container Apps の secret として保持し、環境変数から参照する。未指定なら secret / env とも
+  # 作らない（llm_provider = "azure-openai" のときの必須検査は下の precondition）
+  dynamic "secret" {
+    for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-api-key"]
+    content {
+      name  = "azure-openai-api-key"
+      value = var.azure_openai_api_key
+    }
+  }
+
   template {
     # secret（database-url）の更新は既存 revision に自動反映されない（新しい revision の作成
     # または restart が必要。出典: https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets ）。
@@ -235,6 +246,75 @@ resource "azurerm_container_app" "main" {
           value = "key-${nonsensitive(substr(sha256(var.chat_api_key), 0, 8))}"
         }
       }
+
+      # LLM provider 切替（Issue #195。ADR-0009）。空なら env を注入せず backend の既定
+      # "stub"（ADR-0004）のまま動く。rollback = 変数を空へ戻して apply
+      # （手順は docs/operations/llm-provider-cutover.md）
+      dynamic "env" {
+        for_each = var.llm_provider == "" ? [] : ["llm-provider"]
+        content {
+          name  = "LLM_PROVIDER"
+          value = var.llm_provider
+        }
+      }
+
+      # Azure OpenAI 接続設定（Issue #195）。endpoint は secret ではない接続先 URL。
+      # api-version / deployment 名は空なら注入せず backend の既定
+      # （backend/app/config.py: "2024-10-21" / "chat" / "embedding"）が使われる
+      dynamic "env" {
+        for_each = var.azure_openai_endpoint == "" ? [] : ["azure-openai-endpoint"]
+        content {
+          name  = "AZURE_OPENAI_ENDPOINT"
+          value = var.azure_openai_endpoint
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-api-key"]
+        content {
+          name        = "AZURE_OPENAI_API_KEY"
+          secret_name = "azure-openai-api-key"
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_api_version == "" ? [] : ["azure-openai-api-version"]
+        content {
+          name  = "AZURE_OPENAI_API_VERSION"
+          value = var.azure_openai_api_version
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_chat_deployment == "" ? [] : ["azure-openai-chat-deployment"]
+        content {
+          name  = "AZURE_OPENAI_CHAT_DEPLOYMENT"
+          value = var.azure_openai_chat_deployment
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_embedding_deployment == "" ? [] : ["azure-openai-embedding-deployment"]
+        content {
+          name  = "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"
+          value = var.azure_openai_embedding_deployment
+        }
+      }
+
+      # AZURE_OPENAI_API_KEY rotation の revision 反映担保（ADR-0027「付随する決定」が規定した
+      # AZURE_OPENAI_CONFIG_CHECKSUM。DSN_CONFIG_CHECKSUM / CHAT_API_KEY_CONFIG_CHECKSUM と同型）。
+      # secret 更新は既存 revision に自動反映されないため、key のハッシュを revision-scope の
+      # 非 secret env として template に持たせ、rotation の apply が必ず新 revision を作るように
+      # する。ハッシュは sha256 の先頭 8 桁のみで不可逆（key は復元できない）。
+      # この key を参照するのは backend serving のみのため片側適用（CHAT_API_KEY と異なり
+      # cross-app の同期対象がない）
+      dynamic "env" {
+        for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-config-checksum"]
+        content {
+          name  = "AZURE_OPENAI_CONFIG_CHECKSUM"
+          value = "aoai-${nonsensitive(substr(sha256(var.azure_openai_api_key), 0, 8))}"
+        }
+      }
     }
   }
 
@@ -259,6 +339,16 @@ resource "azurerm_container_app" "main" {
     traffic_weight {
       latest_revision = true
       percentage      = 100
+    }
+  }
+
+  lifecycle {
+    precondition {
+      # LLM_PROVIDER=azure-openai の env だけ注入して接続変数が欠ける計画を弾く
+      # （backend は起動時 MissingEnvError で落ちる = 気づくのが apply 後になる。
+      # plan 時に検査して事故を前倒しする。Issue #195。ADR-0009 の必須変数）
+      condition     = var.llm_provider != "azure-openai" || (var.azure_openai_endpoint != "" && var.azure_openai_api_key != "")
+      error_message = "llm_provider = \"azure-openai\" のときは azure_openai_endpoint / azure_openai_api_key が必須です（欠けると backend が起動時 MissingEnvError で落ちる。ADR-0009）。"
     }
   }
 }
