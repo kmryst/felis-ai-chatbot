@@ -1,0 +1,24 @@
+{
+  "name": "series-2-guard-notice",
+  "series": 2,
+  "title": "guard 応答（notice → done）",
+  "basis": "spec",
+  "basis_note": "guard 経路（ADR-0010）は raw stream を持たず notice → done を直接生成する（決定 3 / 決定 5）。notice の text は backend/app/llm/prompts.py の NO_CONTEXT_NOTICE 全文",
+  "description": "ハルシネーション・ガード発火時の wire 出力。LLM を呼ばない構造は不変（ADR-0010）。",
+  "raw_sse": null,
+  "wire_sse": "event: notice\ndata: {\"text\":\"参照資料に記載がないため、お答えできません。本サービスは気象庁ホームページに基づく過去の記録と一般的な解説のみを扱っています。\"}\n\nevent: done\ndata: {}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "notice",
+      "data": {
+        "text": "参照資料に記載がないため、お答えできません。本サービスは気象庁ホームページに基づく過去の記録と一般的な解説のみを扱っています。"
+      }
+    },
+    {
+      "event": "done",
+      "data": {}
+    }
+  ],
+  "expect_done": true,
+  "expected_error_class": null
+}

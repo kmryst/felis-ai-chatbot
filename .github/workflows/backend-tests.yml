@@ -15,6 +15,9 @@ on:
     # backend に影響しない変更（docs 等）では走らせない
     paths:
       - "backend/**"
+      # 共有 contract fixture（ADR-0028 決定 9）は backend テストの入力のため、
+      # fixture だけの変更でもテストを走らせる
+      - "docs/contracts/chat-sse/**"
       - ".github/workflows/backend-tests.yml"
 
 permissions:

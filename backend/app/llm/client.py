@@ -15,48 +15,46 @@
 """
 
 import asyncio
+import json
 import logging
 import random
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 import httpx
 
+# エラー分類は errors.py が正本（streaming.py との循環 import 回避）。
+# 既存の import 経路（from app.llm.client import LLMError 等）を維持するため
+# ここで再 export する
+from app.llm.errors import (
+    LLMBadRequestError,
+    LLMContentFilterError,
+    LLMError,
+    LLMRateLimitError,
+    LLMServerError,
+    LLMTimeoutError,
+)
+from app.llm.streaming import RAW_DONE_SENTINEL, SSEStreamParser, raw_stream_to_deltas
+
+__all__ = [
+    "EMBEDDING_DIMENSIONS",
+    "AzureOpenAIConfig",
+    "AzureOpenAITransport",
+    "LLMBadRequestError",
+    "LLMClient",
+    "LLMContentFilterError",
+    "LLMError",
+    "LLMRateLimitError",
+    "LLMServerError",
+    "LLMTimeoutError",
+    "RetryConfig",
+    "StubTransport",
+    "create_llm_client",
+]
+
 logger = logging.getLogger("app.llm")
 
 EMBEDDING_DIMENSIONS = 1536
-
-
-# --- エラー分類 ---------------------------------------------------------------
-
-
-class LLMError(Exception):
-    """LLM 呼び出しの失敗。retryable かどうかをクラスで表す。"""
-
-    retryable: bool = False
-
-
-class LLMTimeoutError(LLMError):
-    """呼び出しが timeout した。一時的な混雑の可能性があるため retry する。"""
-
-    retryable = True
-
-
-class LLMRateLimitError(LLMError):
-    """レート制限（HTTP 429 相当）。retry する。"""
-
-    retryable = True
-
-
-class LLMServerError(LLMError):
-    """提供元側の一時障害（HTTP 5xx 相当）。retry する。"""
-
-    retryable = True
-
-
-class LLMBadRequestError(LLMError):
-    """リクエスト自体が不正（HTTP 4xx 相当）。retry しても直らないため即失敗。"""
-
-    retryable = False
 
 
 # --- retry 設定 ---------------------------------------------------------------
@@ -137,6 +135,60 @@ class StubTransport:
         rng = random.Random(text)
         return [rng.uniform(-1.0, 1.0) for _ in range(EMBEDDING_DIMENSIONS)]
 
+    async def chat_stream(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        """chat と同じ決定的応答を raw stream 形状（SSE data payload 列）で返す。
+
+        Azure OpenAI の実測形状（docs/verification/azure-openai-stream/）を模した
+        chunk を生成し、実 transport と同じ変換（streaming.raw_stream_to_deltas）を
+        通す。stub provider も同一契約の SSE を生成する（ADR-0004 / Issue #192 の
+        受け入れ条件）ための構造で、変換器が CI で常時実行される。
+        """
+        await self._maybe_inject_fault()
+        reply = await StubTransport.chat(
+            # 故障注入を二重に踏まないため、注入なしの複製で本文だけ作る
+            StubTransport(),
+            messages,
+        )
+
+        def _chunk(choice: dict) -> str:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "content_filter_results": {},
+                            "index": 0,
+                            "logprobs": None,
+                            **choice,
+                        }
+                    ],
+                    "id": "chatcmpl-stub",
+                    "model": "stub",
+                    "object": "chat.completion.chunk",
+                },
+                ensure_ascii=False,
+            )
+
+        # 実測の先頭 delta は role + content:"" + refusal:null の複合形
+        yield _chunk(
+            {
+                "delta": {"content": "", "refusal": None, "role": "assistant"},
+                "finish_reason": None,
+            }
+        )
+        # 本文を複数 chunk に分割して流す（message 複数の系列を作る）
+        size = max(1, len(reply) // 3)
+        for start in range(0, len(reply), size):
+            yield _chunk(
+                {
+                    "delta": {"content": reply[start : start + size]},
+                    "finish_reason": None,
+                }
+            )
+        yield _chunk({"delta": {}, "finish_reason": "stop"})
+        yield RAW_DONE_SENTINEL
+
 
 # --- Azure OpenAI transport（ADR-0009） ---------------------------------------
 
@@ -208,6 +260,60 @@ class AzureOpenAITransport:
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMServerError("embedding 応答の形式が不正です") from exc
 
+    async def chat_stream(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        """chat completions を stream=true で呼び、SSE data payload を逐次返す。
+
+        - HTTP エラーの分類は _post と同一（429 → rate limit、5xx → server、
+          その他 4xx → bad request、transport 例外 → server / timeout）
+        - byte 断片からの payload 復元は SSEStreamParser（ADR-0028 決定 8 の
+          upstream 方向。recv 境界の分断耐性）
+        - 呼び出し側が generator を close した場合（client 切断・timeout）は
+          finally で response を閉じ、provider stream を打ち切る（決定 2。
+          課金と接続の垂れ流しを作らない）
+        """
+        request = self._http.build_request(
+            "POST",
+            f"/openai/deployments/{self._config.chat_deployment}"
+            "/chat/completions",
+            params={"api-version": self._config.api_version},
+            json={"messages": messages, "stream": True},
+            headers={"api-key": self._config.api_key},
+        )
+        try:
+            response = await self._http.send(request, stream=True)
+        except httpx.TimeoutException as exc:
+            raise LLMTimeoutError("HTTP timeout: chat stream") from exc
+        except httpx.HTTPError as exc:
+            raise LLMServerError(
+                f"HTTP transport error: {type(exc).__name__}"
+            ) from exc
+        try:
+            status = response.status_code
+            if status == 429:
+                raise LLMRateLimitError("rate limited (HTTP 429)")
+            if status >= 500:
+                raise LLMServerError(f"server error (HTTP {status})")
+            if status >= 400:
+                # レスポンス本文はログへ流さない（_post と同じ方針）
+                raise LLMBadRequestError(f"bad request (HTTP {status})")
+            parser = SSEStreamParser()
+            try:
+                async for fragment in response.aiter_bytes():
+                    for payload in parser.feed(fragment):
+                        yield payload
+            except httpx.TimeoutException as exc:
+                raise LLMTimeoutError("HTTP timeout: chat stream") from exc
+            except httpx.HTTPError as exc:
+                # stream 途中の接続断等。retry 境界（決定 10）の判断は
+                # LLMClient 側が行う
+                raise LLMServerError(
+                    f"HTTP transport error: {type(exc).__name__}"
+                ) from exc
+        finally:
+            await response.aclose()
+
     async def _post(self, path: str, payload: dict) -> dict:
         """POST して JSON を返す。HTTP エラーは既存のエラー分類へ変換する。"""
         try:
@@ -265,6 +371,103 @@ class LLMClient:
         return await self._call_with_retry(
             "chat", lambda: self._transport.chat(messages)
         )
+
+    async def chat_stream(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        """chat 応答を content delta（非空 str）列として stream で返す。
+
+        - transport の raw stream を streaming.raw_stream_to_deltas（決定 5 の
+          表）で変換した結果を中継する。正常 return は「有効な done」を意味し、
+          失敗は LLMError（error event への変換は呼び出し側 = app.main）
+        - retry 境界（ADR-0028 決定 10）: retry は**最初の content delta を
+          受信する前**に限る。受信後の upstream 失敗は retry せず即座に送出する
+          （部分出力の重複送出を作らない）
+        - timeout_seconds（1 試行あたり）は「最初の content delta の受信まで」に
+          適用する（接続確立局面 = retry 可能域と一致させる）。以後の delta 間隔
+          への timeout は閾値の数値決定と一体のため本実装では設けない
+          （SLO 側の決定手順で決める。ADR-0028 決定 10 / 11）
+        - 呼び出し側が generator を close した場合（client 切断）は transport の
+          stream まで連鎖して閉じる（決定 2）
+        """
+        last_error: LLMError | None = None
+        for attempt in range(1, self._retry.max_attempts + 1):
+            deltas = raw_stream_to_deltas(self._transport.chat_stream(messages))
+            try:
+                first = await asyncio.wait_for(
+                    anext(deltas), timeout=self._retry.timeout_seconds
+                )
+            except StopAsyncIteration:
+                # content 0 件の done。文法（message 1 回以上 → done。決定 2）を
+                # 満たせないため fail-closed（server error 系として retry 対象）
+                last_error = LLMServerError(
+                    "stream に content delta が含まれていません"
+                )
+            except TimeoutError:
+                await self._aclose_quietly(deltas)
+                last_error = LLMTimeoutError(
+                    "chat stream の最初の content delta が"
+                    f" {self._retry.timeout_seconds}s で timeout"
+                )
+            except LLMError as exc:
+                await self._aclose_quietly(deltas)
+                if not exc.retryable:
+                    logger.warning(
+                        "llm stream failed (non-retryable)",
+                        extra={
+                            "llm_operation": "chat_stream",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    raise
+                last_error = exc
+            else:
+                try:
+                    # 最初の content delta を受信した。以後は retry しない
+                    yield first
+                    async for delta in deltas:
+                        yield delta
+                    return
+                finally:
+                    # client 切断（GeneratorExit）・下流の例外でも upstream を
+                    # 確実に打ち切る（決定 2）
+                    await self._aclose_quietly(deltas)
+
+            if attempt == self._retry.max_attempts:
+                break
+            delay = self._retry.backoff_delay(attempt, self._rng)
+            logger.warning(
+                "llm stream failed, retrying",
+                extra={
+                    "llm_operation": "chat_stream",
+                    "error_type": type(last_error).__name__,
+                    "attempt": attempt,
+                    "max_attempts": self._retry.max_attempts,
+                    "backoff_seconds": round(delay, 3),
+                },
+            )
+            await asyncio.sleep(delay)
+
+        logger.error(
+            "llm stream failed, retries exhausted",
+            extra={
+                "llm_operation": "chat_stream",
+                "error_type": type(last_error).__name__,
+                "attempts": self._retry.max_attempts,
+            },
+        )
+        raise last_error
+
+    @staticmethod
+    async def _aclose_quietly(agen: AsyncIterator) -> None:
+        """async generator を close する。close 時の二次例外は握りつぶさない。
+
+        aclose は generator 内の finally（transport の response.aclose 等）を
+        実行させるための呼び出しで、既に終了済みなら no-op。
+        """
+        aclose = getattr(agen, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
     async def embed(self, text: str) -> list[float]:
         vector = await self._call_with_retry(

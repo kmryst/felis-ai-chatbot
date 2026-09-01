@@ -122,6 +122,14 @@ def test_chat_response_has_no_references_field(monkeypatch):
     ) as client:
         res = client.post("/chat", json={"message": "台風について教えて"})
     assert res.status_code == 200
-    body = res.json()
-    assert "references" not in body
-    assert set(body.keys()) == {"reply"}
+    # SSE 応答（ADR-0028）: どの event の data にも references を含めない。
+    # message の data は text のみ（出典表示は wire に載らない）
+    from sse_test_helpers import parse_wire_sse
+
+    events = parse_wire_sse(res.text)
+    message_events = [e for e in events if e["event"] == "message"]
+    assert message_events
+    for event in events:
+        assert "references" not in event["data"]
+    for event in message_events:
+        assert set(event["data"].keys()) == {"text"}

@@ -1,0 +1,30 @@
+{
+  "name": "series-4-empty-null-content",
+  "series": 4,
+  "title": "空・null content 混在の raw stream とその wire 出力",
+  "basis": "measured+spec",
+  "basis_note": "空文字列 content の実測は先頭 delta への同乗形のみ（raw/run1-normal.jsonl）。本文途中の空 content・null content は観測がなく仕様上の想定として維持する（決定 9 系列 4）",
+  "description": "空文字列・null の content delta は wire に出力しない（決定 4: 空の message を作らない。決定 5 の表）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e1\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"春は\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e2\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e3\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"delta\":{\"content\":null},\"finish_reason\":null,\"index\":0,\"logprobs\":null}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e4\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"移動性高気圧に覆われます。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e5\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"delta\":{}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"e6\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: [DONE]\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"春は\"}\n\nevent: message\ndata: {\"text\":\"移動性高気圧に覆われます。\"}\n\nevent: done\ndata: {}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "春は"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "移動性高気圧に覆われます。"
+      }
+    },
+    {
+      "event": "done",
+      "data": {}
+    }
+  ],
+  "expect_done": true,
+  "expected_error_class": null
+}
