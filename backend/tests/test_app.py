@@ -205,3 +205,27 @@ def test_settings_repr_does_not_leak_azure_api_key(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-value-do-not-print")
     settings = Settings.from_env()
     assert "secret-value-do-not-print" not in repr(settings)
+
+
+def test_settings_azure_provider_defaults_without_optional_vars(monkeypatch):
+    """api-version / deployment 名は未設定なら backend の既定が効く（ADR-0009）。
+
+    Terraform 側（Issue #195）は「変数が空なら env を注入しない」設計であり、
+    その rollback・省略時の挙動はこの既定値に依存する。既定が変わると
+    deployed 環境の接続先が黙って変わるため、値をテストで固定する。
+    """
+    monkeypatch.setenv("LLM_PROVIDER", "azure-openai")
+    monkeypatch.setenv(
+        "AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/"
+    )
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "dummy-key-for-test")
+    for name in (
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_CHAT_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings.from_env()
+    assert settings.azure_openai_api_version == "2024-10-21"
+    assert settings.azure_openai_chat_deployment == "chat"
+    assert settings.azure_openai_embedding_deployment == "embedding"
