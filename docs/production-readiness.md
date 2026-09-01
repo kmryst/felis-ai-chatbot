@@ -43,7 +43,7 @@
 | --- | --- | --- | --- | --- |
 | DB のネットワーク境界 | private access（VNet 統合）を**実機に適用済み**（2026-08-22 ステップ A〜C 完了。VNet 内経路の `/readyz` 200 と、作業端末から DB FQDN が DNS 解決すらできないこと（到達不能）の両方を実測。DB への対話経路は ops コンテナ経由のみ = [実測記録](./verification/vnet-cutover/observations.md)） | 当初の public access + firewall は walking skeleton 開通までの暫定で、egress IP の変動が実測で確認されたため確定構成へ引き上げた | private access（この移行の方向そのもの） | [ADR-0018](./adr/0018-postgresql-private-access-and-vnet-integration.md) / Issue #81（CLOSED） / [vnet-integration-cutover.md](./operations/vnet-integration-cutover.md) |
 | tfstate のネットワーク境界 | RBAC のみ。公開ネットワークから到達可 | tfstate backend を Day 0 に最短で確立し、主成果物（PITR / Maintenance）の実測を優先した | ネットワーク境界（selected networks / Private Endpoint）+ 共有アクセスキー無効化 | **Issue #87** |
-| `/chat` の公開面 | 外部 ingress にアプリ層 API キー + 緊急遮断フラグを**実装済み**（`/readyz` の外形監視は無認証のまま両立）。レート制限と API スキーマの露出は未対処 | 常時稼働への転換（ADR-0020）で 24/7 露出になるため常時稼働開始の先行ゲートに格上げし、認証と緊急遮断を先に入れた。残りは正規キー保有者経由の課金という限定された面なので、常時稼働の実績を見てから判断する | 認証（少なくとも API キー / IP 制限）+ レート制限。LLM 課金を伴うエンドポイントを匿名公開しない | **Issue #113** / [credit-window-execution-plan.md](./operations/credit-window-execution-plan.md) §10-2 |
+| `/chat` の公開面 | 外部 ingress にアプリ層 API キー + 緊急遮断フラグを**実装済み**（`/readyz` の外形監視は無認証のまま両立）。レート制限は未実装で、恒久構成（Easy Auth + BFF + backend internal ingress）は決定のみ・未実装 | 常時稼働への転換（ADR-0020）で 24/7 露出になるため認証と緊急遮断を先に入れた。恒久構成は ADR-0027 で決定済みだが、未検証の前提の実測が返るまで実装 Issue を確定させない作業順を採っている | Easy Auth（Entra ID）+ BFF + backend internal ingress + 認証後段のレート制限（決定 = ADR-0027） | [ADR-0027](./adr/0027-frontend-azure-deployment-and-public-surface.md) / **Issue #107** / **Issue #113** |
 
 ### 2. 認証・シークレット
 
@@ -104,7 +104,7 @@
 | --- | --- | --- | --- | --- |
 | 数値質問への RAG 構造 | 数値はベクトル検索では原理的に到達できず、`object_properties` 全件の常時併載で補っている。類似度閾値は現データ規模の実測分布に依存する | 5 日制約で entity 抽出等の複雑な検索設計を避けた最小実装を選んだ | データ規模に応じた検索設計（ハイブリッド検索・絞り込み）と、データ追加時の閾値再測定の運用化 | [ADR-0010](./adr/0010-rag-wiring-and-hallucination-guard.md) |
 | LLM retry の既定値 | 実測に基づかない一般的な初期値のまま | 提供元確定前の初期値で、実運用でレート制限に当たっていない | 実 API のレート制限仕様・実測に基づく調整 | [ADR-0004](./adr/0004-stub-llm-and-no-llm-in-ci.md)（「未確定・要レビュー」） / [ADR-0009](./adr/0009-azure-openai-as-llm-provider.md) |
-| フロントエンドの配信 | Azure 上に未デプロイ（ローカル開発のみ。Container Apps で動くのは backend のみ） | walking skeleton の検証は `/readyz` / `/chat` で足り、UI の配信は主成果物に寄与しない | 静的ホスティング / CDN 等での配信と CORS / ドメイン設計 | **追跡先なし** |
+| フロントエンドの配信 | Azure 上に未デプロイ（ローカル開発のみ。Container Apps で動くのは backend のみ） | walking skeleton の検証は `/readyz` / `/chat` で足り、UI の配信は主成果物に寄与しない | Container Apps への frontend デプロイと認証つき公開面（決定 = ADR-0027。静的ホスティング / CDN 案は同 ADR で却下） | **Issue #182** / [frontend-sse-execution-plan.md](./operations/frontend-sse-execution-plan.md) / [ADR-0027](./adr/0027-frontend-azure-deployment-and-public-surface.md) |
 
 ## 本書の更新ルール
 
