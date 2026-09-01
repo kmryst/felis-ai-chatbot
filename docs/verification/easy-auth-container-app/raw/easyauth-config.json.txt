@@ -1,0 +1,13 @@
+note: 実行ログからの事後抽出。az containerapp auth show の抜粋。
+{
+  "platform": {
+    "enabled": true
+  },
+  "globalValidation": {
+    "redirectToProvider": "azureactivedirectory",
+    "unauthenticatedClientAction": "AllowAnonymous"
+  },
+  "providers": [
+    "azureActiveDirectory"
+  ]
+}

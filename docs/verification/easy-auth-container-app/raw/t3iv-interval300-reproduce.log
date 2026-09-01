@@ -1,0 +1,15 @@
+[T3iv-interval300-reproduce t=    0.00] connecting to ca-felis-ephem-verify-183.blackbush-a1db7f50.japaneast.azurecontainerapps.io:443 path=/sse?interval=300&count=1
+[T3iv-interval300-reproduce t=    0.02] request sent
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) HTTP/1.1 200 OK
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) server: BaseHTTP/0.6 Python/3.12.14
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) date: Tue, 01 Sep 2026 09:59:13 GMT
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) content-type: text/event-stream
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) cache-control: no-cache
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) connection: close
+[T3iv-interval300-reproduce t=    0.07] RECV(raw) transfer-encoding: chunked
+[T3iv-interval300-reproduce t=    0.08] RECV(raw) 16
+[T3iv-interval300-reproduce t=    0.08] RECV : stream-open rev=s8
+[T3iv-interval300-reproduce t=  240.27] CONNECTION CLOSED by peer. gap since last byte = 240.19s
+[T3iv-interval300-reproduce t=  240.27] done. total elapsed 240.27s
+
+[exited with code 0]
