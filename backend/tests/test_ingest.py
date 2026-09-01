@@ -209,3 +209,28 @@ def test_document_revision_replaces_stale_chunk(db_conn, monkeypatch):
             "SELECT count(*) FROM documents WHERE content = %s", (new_content,)
         )
         assert cur.fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# CLI エントリポイントの終了コード契約（Issue #196）
+#
+# Container App Job（seed / embed-backfill）は execution の成否を
+# プロセスの終了コードで判定するため、異常系が非ゼロで終了することが
+# Job の失敗検知の前提になる。実 LLM は呼ばない（ADR-0004）。
+# ---------------------------------------------------------------------------
+
+
+def test_main_rejects_unknown_arguments(monkeypatch):
+    """未対応の引数は exit code 2（DB へ一切触らない）。"""
+    from app.ingest.__main__ import main
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    assert main(["--unknown"]) == 2
+
+
+def test_main_fails_without_database_url(monkeypatch):
+    """DATABASE_URL 未設定は exit code 1（Job の env 注入漏れを失敗として検知できる）。"""
+    from app.ingest.__main__ import main
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert main([]) == 1

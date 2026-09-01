@@ -590,6 +590,205 @@ resource "azurerm_container_app_job" "obs_collect" {
 }
 
 # ---------------------------------------------------------------------------
+# RAG データ投入経路（seed Job + embedding backfill Job。Issue #196）
+# ---------------------------------------------------------------------------
+
+# 気象庁シードデータの投入 Job（Manual トリガー。migrate Job と同型）。
+# `az containerapp job start` で起動し、`python -m app.ingest`（diff-sync）を 1 回実行して終了する。
+# シードに現れない行を削除して同期する destructive な操作を含むため、再実行安全な
+# backfill Job（下の embed_backfill）とはリソースを分離する（frontend-sse-execution-plan.md §1 の 4
+# の作業単位区分）。投入自体は冪等（再実行しても行数は増えない。backend/app/ingest/runner.py）。
+# ops イメージは runtime ステージ（app/ + .venv）を継承しており `python -m app.ingest` を
+# 実行できる（backend/Dockerfile）。
+# Job には revision の概念がないため CONFIG_CHECKSUM 系のコード担保は不要（migrate Job と同じ理屈）。
+resource "azurerm_container_app_job" "seed" {
+  count = var.ops_container_image == "" ? 0 : 1
+
+  name                         = "caj-felisaichatbot-dev-seed"
+  location                     = data.azurerm_resource_group.dev.location
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
+
+  # シードは 4 テーブル計 119 行（38 documents + 53 properties + 15 objects + 13 sources）の
+  # INSERT / DELETE のみで数秒で終わる想定。migrate Job と同じ 10 分で打ち切り、無限に待たない
+  replica_timeout_in_seconds = 600
+  # 失敗時に自動で叩き直さない（destructive な diff-sync の再試行は人間が状態を確認してから。
+  # migrate Job と同じ方針）
+  replica_retry_limit = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  template {
+    container {
+      name   = "seed"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      command = ["python", "-m", "app.ingest"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（seed Job は DB へ書き込むためだけに存在する）。"
+    }
+  }
+}
+
+# embedding backfill Job（Manual トリガー。migrate Job と同型）。
+# `python -m app.ingest --embed` を 1 回実行して終了する。--embed は ingest（diff-sync）→
+# backfill の順を CLI 内部で担保し（ADR-0010: この順で実行すれば文面改訂も自然に再生成対象に
+# なる）、backfill 自体は `embedding IS NULL` の行のみを対象とする冪等な実行（再実行安全。
+# backend/app/ingest/embeddings.py）。
+# 実 embedding の生成には LLM_PROVIDER=azure-openai と AZURE_OPENAI_* の注入が必要
+# （backend serving と同じ作法。Issue #195 / ADR-0009）。
+resource "azurerm_container_app_job" "embed_backfill" {
+  # llm_provider が azure-openai のときだけ作る。stub のまま backfill を実行すると決定的な
+  # ダミーベクトルが embedding 列を埋めてしまい、以後の backfill が対象外（NOT NULL）として
+  # スキップする = 実データに対してベクトル検索が成立しない状態が固定化されるため、
+  # その経路をリソースの不在で塞ぐ（ADR-0004 の stub は CI・テスト用であり deployed 環境の
+  # backfill に使う経路を作らない）
+  count = var.ops_container_image != "" && var.llm_provider == "azure-openai" ? 1 : 0
+
+  name                         = "caj-felisaichatbot-dev-embed"
+  location                     = data.azurerm_resource_group.dev.location
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
+
+  # 対象は最大でも documents 全 38 行の embedding 生成（1 行ずつ直列。retry 込みでも数分想定）。
+  # migrate Job と同じ 10 分で打ち切り、無限に待たない。打ち切られても未 commit 分は巻き戻り、
+  # 次回実行が NULL の行だけを再対象にする（backend/app/ingest/embeddings.py）
+  replica_timeout_in_seconds = 600
+  # 失敗時に自動で叩き直さない（token 課金を伴う実行の再試行は人間が消費実測を確認してから）
+  replica_retry_limit = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  secret {
+    name  = "azure-openai-api-key"
+    value = var.azure_openai_api_key
+  }
+
+  template {
+    container {
+      name   = "embed-backfill"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      command = ["python", "-m", "app.ingest", "--embed"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+
+      # LLM provider と Azure OpenAI 接続設定（backend serving と同じ注入作法。Issue #195）。
+      # count のガードにより、この Job が存在する時点で llm_provider は "azure-openai"
+      env {
+        name  = "LLM_PROVIDER"
+        value = var.llm_provider
+      }
+
+      env {
+        name  = "AZURE_OPENAI_ENDPOINT"
+        value = var.azure_openai_endpoint
+      }
+
+      env {
+        name        = "AZURE_OPENAI_API_KEY"
+        secret_name = "azure-openai-api-key"
+      }
+
+      # api-version / deployment 名は空なら注入せず backend の既定
+      # （backend/app/config.py: "2024-10-21" / "chat" / "embedding"）が使われる
+      dynamic "env" {
+        for_each = var.azure_openai_api_version == "" ? [] : ["azure-openai-api-version"]
+        content {
+          name  = "AZURE_OPENAI_API_VERSION"
+          value = var.azure_openai_api_version
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_chat_deployment == "" ? [] : ["azure-openai-chat-deployment"]
+        content {
+          name  = "AZURE_OPENAI_CHAT_DEPLOYMENT"
+          value = var.azure_openai_chat_deployment
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.azure_openai_embedding_deployment == "" ? [] : ["azure-openai-embedding-deployment"]
+        content {
+          name  = "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"
+          value = var.azure_openai_embedding_deployment
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（backfill Job は DB へ書き込むためだけに存在する）。"
+    }
+    precondition {
+      # serving 側と同じ検査（Issue #195 の lifecycle precondition と同型）。count のガードで
+      # llm_provider = "azure-openai" のときにしか評価されないが、接続変数の欠落は Job 実行時の
+      # MissingEnvError まで気づけないため plan 時に前倒しで弾く
+      condition     = var.azure_openai_endpoint != "" && var.azure_openai_api_key != ""
+      error_message = "embedding backfill Job には azure_openai_endpoint / azure_openai_api_key が必須です（欠けると Job が実行時 MissingEnvError で落ちる。ADR-0009）。"
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
 # frontend Container App + Easy Auth（ADR-0027。Issue #194）
 # ---------------------------------------------------------------------------
 
