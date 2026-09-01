@@ -89,7 +89,24 @@ RUNS = [
 ]
 
 
+REQUIRED_ENV_KEYS = (
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_CHAT_DEPLOYMENT",
+)
+
+
 def load_env(path: pathlib.Path) -> dict:
+    """`.env` を読み、必須キーの存在を検証する。
+
+    ファイル不在・キー欠落は stack trace ではなく、必要なキー名だけを示して
+    即終了する（値は表示しない。API キーの値を出力しないため）。
+    """
+    if not path.is_file():
+        print(f"エラー: .env が見つかりません: {path}")
+        print("リポジトリルート（.env のあるディレクトリ）で実行してください。")
+        print(f"必須キー: {', '.join(REQUIRED_ENV_KEYS)}")
+        sys.exit(1)
     env = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -97,6 +114,10 @@ def load_env(path: pathlib.Path) -> dict:
             continue
         key, _, value = line.partition("=")
         env[key.strip()] = value.strip()
+    missing = [k for k in REQUIRED_ENV_KEYS if not env.get(k)]
+    if missing:
+        print(f"エラー: .env に必須キーが不足しています: {', '.join(missing)}")
+        sys.exit(1)
     return env
 
 
