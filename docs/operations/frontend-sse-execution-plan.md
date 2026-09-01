@@ -87,11 +87,11 @@ ADR-0027「影響」・ADR-0028「影響」の「未検証の前提」の列挙�
 | Easy Auth sidecar 稼働時の `X-MS-CLIENT-PRINCIPAL-*` header の上書き・除去挙動（ADR-0027 決定 10） | #183 (a) — 実測済み（[記録](../verification/easy-auth-container-app/observations.md) §3。無認証は除去・認証済みは実 principal に置換で、前提と一致し失敗分岐に入らない） | 除去されない場合はその事実を記録し、決定 10（深層防御）の位置づけを ADR-0027 追記で確定する |
 | revision 切替の実時間と rotation 混在窓の実時間幅（ADR-0027） | #183 (b) — 実測済み（[記録](../verification/easy-auth-container-app/observations.md) §4。一時アプリ構成での 4 回実測。本番構成での値は未実測のまま） | 実測値でのみ主張する。rotation 運用（計画的 rotation・緊急時は `CHAT_DISABLED`）の limitation として SLO 正本改訂（§1 の 7）の入力にする |
 | frontend の cold start 特性（ADR-0027 決定 9） | 実測 Issue なし（ADR-0027 が「予防採用であり実測しない」と決定済み） | 分岐なし（`min_replicas = 1` の予防採用のまま） |
-| streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・`content_filter_results` の `error` が届く系列の実在と到達順序）（ADR-0028 決定 5 / 6） | #184 | 観測できた系列は fixture の実データ裏付けに使い、食い違いは決定 5 の表・撤回契約を ADR-0028 追記で改訂する。観測できない場合は不在を主張せず、防御的契約を維持する |
-| Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在（ADR-0028 決定 5） | #184 | 同上（終端判定の `[DONE]` までの遅延は到達順に依存しない設計であり、観測結果は裏付けまたは決定 5 の表の改訂の入力） |
-| 未知の chunk 形状の実在（ADR-0028 決定 5 の表の最終行） | #184 | 正当な未知形状が観測されたら決定 5 の表を ADR-0028 追記で改訂する |
+| streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・`content_filter_results` の `error` が届く系列の実在と到達順序）（ADR-0028 決定 5 / 6） | #184 — 実測済み（[記録](../verification/azure-openai-stream/observations.md) §3〜§5。`finish_reason: "content_filter"` 終端・複数形の `error` は観測できず、近縁の単数形 `content_filter_result.error` が正常終端 stream の全 chunk に同乗する系列を観測） | 食い違い（error field 名の単複）は ADR-0028 追記改訂（Issue #190）で決定 5 の表・決定 6 へ反映済み（単数形・複数形とも明示列挙して検査対象）。観測できなかった系列は不在を主張せず、防御的契約を維持 |
+| Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在（ADR-0028 決定 5） | #184 — 実測済み（同記録 §3。`include_usage` opt-in 時の usage chunk で実在を確認。自発的な系列は観測できず） | 終端判定を `[DONE]` まで遅延する設計の実データ裏付けとして ADR-0028 追記改訂（Issue #190）へ反映済み |
+| 未知の chunk 形状の実在（ADR-0028 決定 5 の表の最終行） | #184 — 実測済み（同記録 §4〜§5。chunk 単位の未知形状は現れず、field 単位の未知 4 種を観測） | ADR-0028 追記改訂（Issue #190）で「既知形状への未知 field 同乗は無視・未知 chunk 形状は fail-closed 維持」として決定 5 の表へ反映済み |
 | 撤回の UI 挙動は HTTP synthetic では検証できない（ADR-0028 決定 6） | 実測 Issue なし（parser テスト = fixture 系列 6 で担保。実ブラウザでの再現は別途の browser automation の範囲） | 分岐なし（verifier は分類のみという責務分担を維持） |
-| ingress 既定 240 秒 timeout が総リクエスト時間かアイドル時間か（ADR-0028「影響」。公式文書内で記述が食い違い未解決） | #183 (c) — 実測済み（[記録](../verification/easy-auth-container-app/observations.md) §5。アイドル（バイト間）timeout として振る舞い、総リクエスト時間の分岐に入らない） | 総リクエスト時間なら長時間ストリームの扱いを ADR-0028 追記で改訂する。判別できない場合は観測事実のまま記録し断定しない。いずれも platform 制約であり SLI threshold の根拠に流用しない |
+| ingress 既定 240 秒 timeout が総リクエスト時間かアイドル時間か（ADR-0028「影響」。公式文書内で記述が食い違い未解決） | #183 (c) — 実測済み（[記録](../verification/easy-auth-container-app/observations.md) §5。アイドル（バイト間）timeout として振る舞い、総リクエスト時間の分岐に入らない。ADR-0028「影響」へ反映済み（Issue #190）） | 総リクエスト時間なら長時間ストリームの扱いを ADR-0028 追記で改訂する。判別できない場合は観測事実のまま記録し断定しない。いずれも platform 制約であり SLI threshold の根拠に流用しない |
 
 ## 3. 起票トリガー
 
