@@ -471,3 +471,76 @@ resource "azurerm_container_app_job" "obs_collect" {
     }
   }
 }
+
+# フェーズ 2 の負荷生成 Job（Issue #112。計画 §5-5）。Manual トリガー = フェーズ 1 の間は
+# 一度も起動しない。さらに load_generate.sh 冒頭のフェーズゲート（obs.phase_config が
+# 'load' / 'gp_load' 以外なら即 exit 1）と二重で、ベースラインへの混入をゼロにする。
+# 書き込み先は load スキーマのみ（migration 0004）。採取側（obs collect Job）は無変更
+resource "azurerm_container_app_job" "load_generate" {
+  count = var.ops_container_image == "" ? 0 : 1
+
+  name                         = "caj-felisaichatbot-dev-load"
+  location                     = data.azurerm_resource_group.dev.location
+  resource_group_name          = data.azurerm_resource_group.dev.name
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  workload_profile_name        = "Consumption"
+
+  # 継続時間 + 300 秒の後片付けマージンで打ち切る（無限に走らせない = コスト上限を構造で持つ）
+  replica_timeout_in_seconds = var.load_duration_seconds + 300
+  replica_retry_limit        = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [data.azurerm_user_assigned_identity.acr_pull.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = data.azurerm_user_assigned_identity.acr_pull.id
+  }
+
+  secret {
+    name  = "database-url"
+    value = var.database_url
+  }
+
+  template {
+    container {
+      name   = "load-generate"
+      image  = var.ops_container_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      command = ["/bin/bash", "/app/observability/load_generate.sh"]
+
+      env {
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+      env {
+        name  = "LOAD_DURATION_SECONDS"
+        value = tostring(var.load_duration_seconds)
+      }
+      env {
+        name  = "LOAD_BATCH_ROWS"
+        value = tostring(var.load_batch_rows)
+      }
+      env {
+        name  = "LOAD_SLEEP_SECONDS"
+        value = tostring(var.load_sleep_seconds)
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.database_url != ""
+      error_message = "ops_container_image を指定する場合は database_url も必須です（負荷生成 Job は DB へ書き込むためだけに存在する）。"
+    }
+  }
+}
