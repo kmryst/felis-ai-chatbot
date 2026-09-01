@@ -1,0 +1,32 @@
+{
+  "name": "series-8-truncated",
+  "series": null,
+  "title": "途中切断（raw [DONE] なしの stream 終了）",
+  "basis": "spec",
+  "basis_note": "決定 9 の「途中切断（終端 event なしの切断）系列」。raw stream が finish_reason も [DONE] も無いまま終了する",
+  "description": "終端 event なしの stream 終了は契約違反。producer は error（class: server_error）で終端する（決定 5 の表の raw [DONE] 行と最終行に準ずる fail-closed）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"t1\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"秋は\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"t2\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"台風の季節です。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"t3\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"秋は\"}\n\nevent: message\ndata: {\"text\":\"台風の季節です。\"}\n\nevent: error\ndata: {\"class\":\"server_error\"}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "秋は"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "台風の季節です。"
+      }
+    },
+    {
+      "event": "error",
+      "data": {
+        "class": "server_error"
+      }
+    }
+  ],
+  "expect_done": false,
+  "expected_error_class": "server_error"
+}

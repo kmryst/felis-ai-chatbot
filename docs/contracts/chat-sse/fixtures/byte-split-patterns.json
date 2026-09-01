@@ -1,0 +1,63 @@
+{
+  "description": "ADR-0028 決定 8 の byte 分断パターン試験データ。分断は UTF-8 byte 列上の offset で表す（offset の位置で stream を 2 断片に分割して parser に与え、無分割時と同一の event 列になることを検証する）。chunk_size 型のパターンは stream 全体を固定長の byte 断片に刻む。対象は upstream（raw_sse）と downstream（wire_sse）の両方向（決定 8）。",
+  "single_split_patterns": [
+    {
+      "name": "utf8-multibyte-mid-raw_sse",
+      "series": "series-1-normal",
+      "target": "raw_sse",
+      "split_byte_offset": 838
+    },
+    {
+      "name": "field-prefix-mid-raw_sse",
+      "series": "series-1-normal",
+      "target": "raw_sse",
+      "split_byte_offset": 375
+    },
+    {
+      "name": "before-event-separator-raw_sse",
+      "series": "series-1-normal",
+      "target": "raw_sse",
+      "split_byte_offset": 371
+    },
+    {
+      "name": "after-event-separator-raw_sse",
+      "series": "series-1-normal",
+      "target": "raw_sse",
+      "split_byte_offset": 372
+    },
+    {
+      "name": "utf8-multibyte-mid-wire_sse",
+      "series": "series-1-normal",
+      "target": "wire_sse",
+      "split_byte_offset": 31
+    },
+    {
+      "name": "field-prefix-mid-wire_sse",
+      "series": "series-1-normal",
+      "target": "wire_sse",
+      "split_byte_offset": 64
+    },
+    {
+      "name": "before-event-separator-wire_sse",
+      "series": "series-1-normal",
+      "target": "wire_sse",
+      "split_byte_offset": 45
+    },
+    {
+      "name": "after-event-separator-wire_sse",
+      "series": "series-1-normal",
+      "target": "wire_sse",
+      "split_byte_offset": 46
+    }
+  ],
+  "chunk_size_patterns": [
+    {
+      "name": "single-byte-chunks",
+      "chunk_size": 1
+    },
+    {
+      "name": "three-byte-chunks",
+      "chunk_size": 3
+    }
+  ]
+}

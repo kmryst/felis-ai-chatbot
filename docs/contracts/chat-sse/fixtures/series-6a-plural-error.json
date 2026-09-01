@@ -1,0 +1,32 @@
+{
+  "name": "series-6a-plural-error",
+  "series": 6,
+  "title": "partial message 複数 → 複数形 content_filter_results の error",
+  "basis": "spec",
+  "basis_note": "複数形 field の error は実測（Issue #184）では観測できなかった（複数形は常に空 object {}）。公式 REST 仕様が定義する field 名のため検査対象として維持し、仕様ベースで置く（observations.md §3 / §9。検査対象の縮小はしない）",
+  "description": "message 送出後に複数形 content_filter_results の error を検出。error を運ぶ chunk の content（「続き」）は送出せず、error（class: content_filter）で終端し done を送らない。consumer は表示済み partial text を撤回する（決定 6 の撤回契約）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"g1\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"部分的な\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"g2\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"応答です。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"g3\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{\"error\":{\"code\":\"content_filter_error\",\"message\":\"The contents are not filtered\"}},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"続き\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"g4\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: [DONE]\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"部分的な\"}\n\nevent: message\ndata: {\"text\":\"応答です。\"}\n\nevent: error\ndata: {\"class\":\"content_filter\"}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "部分的な"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "応答です。"
+      }
+    },
+    {
+      "event": "error",
+      "data": {
+        "class": "content_filter"
+      }
+    }
+  ],
+  "expect_done": false,
+  "expected_error_class": "content_filter"
+}

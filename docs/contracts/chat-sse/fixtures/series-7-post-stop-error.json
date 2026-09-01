@@ -1,0 +1,32 @@
+{
+  "name": "series-7-post-stop-error",
+  "series": 7,
+  "title": "message 複数 → finish_reason: \"stop\" → post-stop の content_filter_results の error → raw [DONE]",
+  "basis": "spec",
+  "basis_note": "post-stop の error chunk は実測（Issue #184）では観測できなかった。ただし「finish_reason 後・[DONE] 前に chunk が届く」構造自体は include_usage opt-in 時の usage chunk（raw/run4-usage-optin.jsonl）で Default mode での実在を確認済みで、本系列にも同構造の usage chunk を含めた（observations.md §3 / §6）",
+  "description": "finish_reason: \"stop\" を観測済みでも done の送出は raw [DONE] まで遅延し、post-stop の chunk の metadata 検査を続ける。error を検出したら done を抑止して error（class: content_filter）で終端する（決定 5 の表の終端判定の遅延の検証）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"h1\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"夏は\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"h2\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"高温多湿です。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"h3\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"delta\":{}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"h4\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[],\"created\":1788254314,\"id\":\"chatcmpl-fixture\",\"latency_checkpoint\":{\"engine_ttft_ms\":49,\"service_ttft_ms\":397},\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"\",\"object\":\"chat.completion.chunk\",\"routing\":{\"serving_pipereplica\":\"fixture-replica\"},\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\",\"usage\":{\"completion_tokens\":34,\"prompt_tokens\":22,\"total_tokens\":56}}\n\ndata: {\"choices\":[{\"content_filter_results\":{\"error\":{\"code\":\"content_filter_error\",\"message\":\"The contents are not filtered\"}},\"finish_reason\":null,\"index\":0,\"logprobs\":null}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"h5\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: [DONE]\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"夏は\"}\n\nevent: message\ndata: {\"text\":\"高温多湿です。\"}\n\nevent: error\ndata: {\"class\":\"content_filter\"}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "夏は"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "高温多湿です。"
+      }
+    },
+    {
+      "event": "error",
+      "data": {
+        "class": "content_filter"
+      }
+    }
+  ],
+  "expect_done": false,
+  "expected_error_class": "content_filter"
+}

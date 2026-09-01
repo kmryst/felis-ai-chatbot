@@ -1,0 +1,42 @@
+{
+  "name": "series-1-normal",
+  "series": 1,
+  "title": "正常応答（message 複数 → done）",
+  "basis": "measured",
+  "basis_note": "raw/run1-normal.jsonl の実測形状（stream 先頭の prompt_filter_results chunk・role + content:\"\" + refusal:null の複合形の先頭 delta・全 chunk への obfuscation 同乗・content_filter_results は空 object）に基づく。content 本文は短縮",
+  "description": "`finish_reason: \"stop\"` はそれ自体では wire 出力せず、raw [DONE] の受信で done を送出する（終端判定の遅延。決定 5）。",
+  "raw_sse": "data: {\"choices\":[],\"created\":0,\"id\":\"\",\"model\":\"\",\"object\":\"\",\"prompt_filter_results\":[{\"prompt_index\":0,\"content_filter_results\":{\"hate\":{\"filtered\":false,\"severity\":\"safe\"},\"jailbreak\":{\"detected\":false,\"filtered\":false},\"self_harm\":{\"filtered\":false,\"severity\":\"safe\"},\"sexual\":{\"filtered\":false,\"severity\":\"safe\"},\"violence\":{\"filtered\":false,\"severity\":\"safe\"}}}]}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"\",\"refusal\":null,\"role\":\"assistant\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"U99lN\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"注意報は\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"j2fOpE\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"災害のおそれが\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"T1gc\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"あるときに\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"F6QO3o\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":null,\"index\":0,\"logprobs\":null,\"delta\":{\"content\":\"発表されます。\"}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"di0Td8\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: {\"choices\":[{\"content_filter_results\":{},\"finish_reason\":\"stop\",\"index\":0,\"logprobs\":null,\"delta\":{}}],\"created\":1788254279,\"id\":\"chatcmpl-fixture\",\"model\":\"gpt-4.1-mini-2025-04-14\",\"obfuscation\":\"f\",\"object\":\"chat.completion.chunk\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_51ebab882d\"}\n\ndata: [DONE]\n\n",
+  "wire_sse": "event: message\ndata: {\"text\":\"注意報は\"}\n\nevent: message\ndata: {\"text\":\"災害のおそれが\"}\n\nevent: message\ndata: {\"text\":\"あるときに\"}\n\nevent: message\ndata: {\"text\":\"発表されます。\"}\n\nevent: done\ndata: {}\n\n",
+  "expected_wire_events": [
+    {
+      "event": "message",
+      "data": {
+        "text": "注意報は"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "災害のおそれが"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "あるときに"
+      }
+    },
+    {
+      "event": "message",
+      "data": {
+        "text": "発表されます。"
+      }
+    },
+    {
+      "event": "done",
+      "data": {}
+    }
+  ],
+  "expect_done": true,
+  "expected_error_class": null
+}
