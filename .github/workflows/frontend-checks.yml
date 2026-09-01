@@ -20,6 +20,8 @@ on:
     paths:
       - "frontend/**"
       - ".github/workflows/frontend-checks.yml"
+      # 共有 contract fixture（ADR-0028 決定 9）は frontend のテスト入力
+      - "docs/contracts/chat-sse/**"
 
 permissions:
   contents: read
@@ -54,5 +56,12 @@ jobs:
       - name: Type check (tsc --noEmit)
         run: npx tsc --noEmit
 
+      - name: Run tests (vitest)
+        run: npm test
+
       - name: Build (next build)
         run: npm run build
+
+      # client 配布物に秘匿対象が含まれないことの検査（ADR-0027 決定 2 / Issue #193）
+      - name: Check client bundle for secrets
+        run: npm run check:bundle-secrets

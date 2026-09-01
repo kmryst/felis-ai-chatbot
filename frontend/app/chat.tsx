@@ -1,24 +1,21 @@
 "use client";
 
 /**
- * 最小のチャット UI。
+ * チャット UI（SSE consumer。ADR-0027 決定 2 / 3・ADR-0028 の client 側）。
  *
- * - backend の POST /chat を呼ぶ（既定 http://localhost:8000。
- *   NEXT_PUBLIC_BACKEND_URL で上書き）
- * - fetch には明示的な timeout を設定する（timeout なしの通信を作らない）
- * - backend 停止・エラー時はメッセージを表示する（無限待ち・白画面にしない）
+ * - 相対パス /api/chat のみを呼ぶ（BFF 経由。upstream の base URL や API キーを
+ *   client は一切持たない。`NEXT_PUBLIC_BACKEND_URL` / `NEXT_PUBLIC_CHAT_API_KEY` は廃止）
+ * - 応答は SSE を fetch + response.body.getReader() で読み、受信しながら描画する
+ * - `done` を受けるまで応答は確定しない。終端 event なしの終了は失敗として扱う
+ * - `error`（class: content_filter）では表示済み partial text を撤回する（撤回契約）
+ * - 旧実装の単一全体 timeout（REQUEST_TIMEOUT_MS）は廃止した。ストリーミングでは
+ *   正常な長い応答を全体 timeout が切断してしまうため、client 側の打ち切りは
+ *   AbortController によるユーザー操作（停止ボタン）とし、時間ベースの閾値
+ *   （threshold 1 / 2）は SLO 側の数値決定後に組み込む（ADR-0028「影響」）
  */
 
 import { FormEvent, useRef, useState } from "react";
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
-// /chat の API キー（Issue #113 の 3。backend の CHAT_API_KEY と同じ値を渡す）。
-// NEXT_PUBLIC_* はビルド成果物（ブラウザに配られる JS）に埋め込まれるため、
-// この渡し方はローカル開発専用。公開デプロイでキーを秘匿する仕組みではない
-// （公開面の認証設計は Issue #113 の 4 = レート制限等と合わせてユーザー判断待ち）
-const CHAT_API_KEY = process.env.NEXT_PUBLIC_CHAT_API_KEY;
-const REQUEST_TIMEOUT_MS = 15_000;
+import { consumeChatSseStream } from "../lib/chat-sse/consumer";
 
 type Message = {
   id: string;
@@ -32,6 +29,21 @@ export default function Chat() {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  function upsertAssistantMessage(id: string, content: string) {
+    setMessages((prev) => {
+      const exists = prev.some((m) => m.id === id);
+      if (exists) {
+        return prev.map((m) => (m.id === id ? { ...m, content } : m));
+      }
+      return [...prev, { id, role: "assistant", content }];
+    });
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -46,32 +58,41 @@ export default function Chat() {
     ]);
     setInput("");
 
+    const assistantId = crypto.randomUUID();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const res = await fetch(`${BACKEND_URL}/chat`, {
+      const res = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // キー未設定ならヘッダ自体を送らない（backend 側は 401 を返す）
-          ...(CHAT_API_KEY ? { "X-API-Key": CHAT_API_KEY } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: controller.signal,
       });
       if (!res.ok) {
+        // ストリーム開始前の失敗は HTTP status で返る（ADR-0028 決定 2）
         throw new Error(`backend が ${res.status} を返しました`);
       }
-      const data: { reply: string } = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "assistant", content: data.reply },
-      ]);
+      if (res.body === null) {
+        throw new Error("応答 body がありません");
+      }
+      const outcome = await consumeChatSseStream(res.body, (cumulativeText) => {
+        upsertAssistantMessage(assistantId, cumulativeText);
+      });
+      // 終端処理の結果（撤回・失敗文言を反映済みの text）で最終表示を確定する。
+      // 失敗時の文言は displayText 側が持つため、別途のバナーは出さない
+      upsertAssistantMessage(assistantId, outcome.displayText);
     } catch (err) {
-      const reason =
-        err instanceof DOMException && err.name === "TimeoutError"
-          ? `${REQUEST_TIMEOUT_MS / 1000} 秒以内に応答がありませんでした`
-          : "backend に接続できませんでした";
-      setError(`送信に失敗しました: ${reason}`);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        // ユーザーによる停止。表示済み partial text はそのまま残す
+        setError("応答の受信を停止しました");
+      } else {
+        const reason =
+          err instanceof Error ? err.message : "backend に接続できませんでした";
+        setError(`送信に失敗しました: ${reason}`);
+      }
     } finally {
+      abortRef.current = null;
       setSending(false);
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
     }
@@ -106,9 +127,15 @@ export default function Chat() {
           aria-label="メッセージ"
           disabled={sending}
         />
-        <button type="submit" disabled={sending || input.trim() === ""}>
-          {sending ? "送信中..." : "送信"}
-        </button>
+        {sending ? (
+          <button type="button" onClick={handleStop}>
+            停止
+          </button>
+        ) : (
+          <button type="submit" disabled={input.trim() === ""}>
+            送信
+          </button>
+        )}
       </form>
     </section>
   );
