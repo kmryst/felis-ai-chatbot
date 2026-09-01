@@ -58,10 +58,10 @@ SLI と食い違う。content event が 1 件しかないストリームでは c
 契約違反であり、producer は送出してはならず、parser / verifier は「最初の content event」として
 数えてはならない（空 event で threshold 1 だけ満たす抜け道を作らない）。
 
-### 5. Azure OpenAI raw stream からの写像表（producer の義務）
+### 5. Azure OpenAI raw stream から wire contract への変換（producer の義務）
 
 backend は Azure OpenAI の chat completions stream（raw stream）を次の表のとおり wire contract
-へ写像する。
+へ変換する。
 
 | raw stream の chunk | wire 出力 |
 | --- | --- |
@@ -155,7 +155,7 @@ Azure の asynchronous filter（annotation が本文より遅れて届く opt-in
 6. partial message 複数 → `content_filter_results` の `error`（撤回契約の検証用）
 7. `message` 複数 → `finish_reason: "stop"` → **post-`stop` の `content_filter_results` の
    `error`** → raw `[DONE]`（`stop` 観測後も `done` を抑止して `error` 終端にすることの検証用。
-   写像表の「終端判定は `[DONE]` まで遅延」の裏付け）
+   決定 5 の表の「終端判定は `[DONE]` まで遅延」の裏付け）
 
 このほか、途中切断（終端 event なしの切断）系列と、決定 8 の byte 分断パターン試験データを
 同梱する。**fixture 5〜7 は、raw fixture → upstream parser → producer → client parser →
@@ -215,7 +215,7 @@ request のうち、SLI threshold 以内に critical user journey を完了し�
   「以後の間隔」を意味論に持つ measurement semantics を本 ADR が prospective に決める（決定 11。
   SLO 正本の現行 SLI は単一 threshold の journey 完了型であり、正本の改訂は別 PR）。応答側の
   契約をストリーミングとして固定する必要がある
-- wire format・写像表・撤回契約・retry 境界は、外部レビュー 4 周（Codex）を経て確定した。特に
+- wire format・決定 5 の表・撤回契約・retry 境界は、外部レビュー 4 周（Codex）を経て確定した。特に
   「upstream parser の byte 分断耐性」と「表示済み text の後に filter signal が届く経路」は
   レビューで発見され（3〜4 周目）、決定 6・8 に組み込まれた
 - ガードをコードで担保する構造（ADR-0010）と、CI から実 LLM を呼ばない構造（ADR-0004）は
@@ -261,9 +261,9 @@ filter の判定が得られなかった応答を「有効な終端 = good event
 
 - SSE は一方向のテキストストリーミングに対する標準形式であり、HTTP のまま BFF 中継・
   Easy Auth・既存観測と両立する。`EventSource` の制約は `fetch` + reader で回避できる
-- 文法（順序・多重度）と写像表を先に固定することで、backend・frontend・synthetic の 3 実装が
+- 文法（順序・多重度）と決定 5 の表を先に固定することで、backend・frontend・synthetic の 3 実装が
   同一 fixture で検証でき、「実装の挙動が契約」という状態を作らない
-- 撤回契約と fail-closed の写像は、streaming で必然的に生じる「表示が判定に先行する」構造への
+- 撤回契約と fail-closed の変換規則は、streaming で必然的に生じる「表示が判定に先行する」構造への
   唯一の安全側の回答である。wire に撤回 event を足さず client 責務にしたのは、producer 側は
   「`done` を出さない」ことで完了扱いを防げており、画面状態の巻き戻しは client にしか
   できないため
@@ -297,13 +297,13 @@ filter の判定が得られなかった応答を「有効な終端 = good event
 - guard 経路（ADR-0010）の応答は `notice` event になるが、「LLM を呼ばない」構造は不変
 - retry の適用範囲が狭まる（ストリーミング開始後の再試行は行わない）。ADR-0009 の
   「retry 既定値は据え置き」の対象範囲がストリーム開始前に限定される
-- **未検証の前提**（実 stream の観測で確定させ、結果次第で写像表・撤回契約を追記改訂する）:
+- **未検証の前提**（実 stream の観測で確定させ、結果次第で決定 5 の表・撤回契約を追記改訂する）:
   - streaming content filtering の実挙動（partial text 送出後に `content_filter` 終端・
     `content_filter_results` の `error` が実際に届く系列の実在と到達順序）
   - Default mode で `finish_reason` の後・raw `[DONE]` の前に metadata chunk が届く系列の実在
-    （公式 sample で確認できるのは Asynchronous Filter のもの。写像表の終端遅延は到達順に
+    （公式 sample で確認できるのは Asynchronous Filter のもの。決定 5 の表の終端遅延は到達順に
     依存しない防御的設計として置いている）
-  - 未知の chunk 形状の実在（写像表の最終行の発動実績）
+  - 未知の chunk 形状の実在（決定 5 の表の最終行の発動実績）
   - 撤回の UI 挙動は HTTP synthetic では検証できない（verifier は分類のみ）。browser 側は
     parser テスト（fixture 6 系列目）で担保し、実ブラウザでの再現は別途の browser automation の
     範囲とする
