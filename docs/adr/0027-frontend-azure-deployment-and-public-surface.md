@@ -2,11 +2,11 @@
 
 ## ステータス
 
-Proposed
+Accepted
 
 ## 日付
 
-2026-09-01
+2026-09-01（起案）/ 2026-09-01（Accepted 化・追記。下記「追記」）
 
 ## 決定内容
 
@@ -278,6 +278,27 @@ backend 認証ゲートの拡張 = 本決定のスコープ外の設計変更の
   - Easy Auth sidecar 稼働時の `X-MS-CLIENT-PRINCIPAL-*` header の上書き・除去挙動（決定 10）
   - revision 切替の実時間と rotation 混在窓の実時間幅（実測値でのみ主張する）
   - frontend の cold start 特性（決定 9 は予防採用であり実測しない）
+
+## 追記（2026-09-01。#183 実測反映と実装 PR での確定事項）
+
+- **Accepted 化の根拠**: 前提としていた実測（#183）が完了し、ADR の前提と一致した
+  （[実測記録](../verification/easy-auth-container-app/observations.md)）。
+  - 決定 10 の未検証前提「sidecar 稼働時の header 偽装の上書き・除去」は**実測と一致**
+    （無認証 + 偽装 4 種はアプリ到達前に完全除去、認証済み + 偽装は実 principal に完全置換）
+  - revision 切替の実時間は 20.31 / 35.02 / 28.41 / 32.48 秒（4 回実測。観測記録としてのみ扱い、
+    閾値の根拠に流用しない）
+  - ingress 既定 240 秒はアイドル（バイト間）timeout（総リクエスト時間ではない）
+- **実装 PR（Issue #194）で確定した具体値**:
+  - frontend Container App 名は `ca-felisaichatbot-dev-front`（ADR-0013 の規則。qualifier
+    `-front`）
+  - `authConfigs` の管理は AzAPI provider 2.12.0・API バージョン `2025-07-01`（stable）
+  - internal ingress 切替後の `BACKEND_ORIGIN` は **`http://<internal FQDN>`**（決定 3 の
+    「internal FQDN へ付け替え」の scheme を確定）。同一環境内の app 間通信は Envoy 経由で
+    環境外に出ず、公式ドキュメントが app 間呼び出しに http を推奨する（出典:
+    <https://learn.microsoft.com/en-us/azure/container-apps/connect-apps> ）。internal FQDN
+    （`<app>.internal.<既定ドメイン>`）への https は、環境の既定証明書がこの 1 階層深い名前を
+    カバーするか公式に断定できないため使わない。合わせて internal 切替時のみ backend ingress の
+    `allow_insecure_connections = true` とする（external の間は https 強制を維持）
 
 ## 関連
 

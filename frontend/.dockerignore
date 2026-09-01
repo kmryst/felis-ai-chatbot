@@ -1,0 +1,9 @@
+# ビルドコンテキストから除外する（イメージ内で npm ci / next build し直すため、
+# ローカルの生成物・依存を持ち込まない）
+node_modules
+.next
+tsconfig.tsbuildinfo
+
+# secret をビルドコンテキストに入れない
+.env
+.env.*

@@ -15,6 +15,12 @@ terraform {
       # persistent 層と同じ明示 pin（範囲指定にしない）。更新は Dependabot / 明示的な PR で行う。
       version = "5.1.0"
     }
+    # frontend の Easy Auth 設定（Microsoft.App/containerApps/authConfigs）用。
+    # azurerm 5.1.0 に該当リソースが無いため AzAPI で管理する（ADR-0027 決定 1）。
+    azapi = {
+      source  = "Azure/azapi"
+      version = "2.12.0"
+    }
   }
 }
 
@@ -28,4 +34,9 @@ provider "azurerm" {
   }
   # subscription_id はコードに書かず ARM_SUBSCRIPTION_ID 環境変数
   # （CI では azure/login が設定する環境変数）から解決する。
+}
+
+provider "azapi" {
+  # azurerm と同じく subscription は ARM_SUBSCRIPTION_ID 環境変数から解決する。
+  # 認証も azurerm と同一（Azure CLI / OIDC）。
 }
