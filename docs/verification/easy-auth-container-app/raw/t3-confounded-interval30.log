@@ -1,0 +1,27 @@
+[T3i-interval30-total600 t=    0.00] connecting to ca-felis-ephem-verify-183.blackbush-a1db7f50.japaneast.azurecontainerapps.io:443 path=/sse?interval=30&count=20
+[T3i-interval30-total600 t=    0.05] request sent
+[T3i-interval30-total600 t=    0.11] RECV(raw) HTTP/1.1 200 OK
+[T3i-interval30-total600 t=    0.11] RECV(raw) server: BaseHTTP/0.6 Python/3.12.14
+[T3i-interval30-total600 t=    0.11] RECV(raw) date: Tue, 01 Sep 2026 09:24:28 GMT
+[T3i-interval30-total600 t=    0.11] RECV(raw) content-type: text/event-stream
+[T3i-interval30-total600 t=    0.11] RECV(raw) cache-control: no-cache
+[T3i-interval30-total600 t=    0.11] RECV(raw) connection: close
+[T3i-interval30-total600 t=    0.11] RECV(raw) transfer-encoding: chunked
+[T3i-interval30-total600 t=    0.11] RECV(raw) 16
+[T3i-interval30-total600 t=    0.11] RECV : stream-open rev=r1
+[T3i-interval30-total600 t=   30.13] RECV(raw) 51
+[T3i-interval30-total600 t=   30.13] RECV event: message
+[T3i-interval30-total600 t=   30.13] RECV data: {"seq": 0, "elapsed_s": 30.0, "epoch": 1788254698.9408407}
+[T3i-interval30-total600 t=   57.99] RECV(raw) 51
+[T3i-interval30-total600 t=   57.99] RECV event: message
+[T3i-interval30-total600 t=   57.99] RECV data: {"seq": 1, "elapsed_s": 60.0, "epoch": 1788254728.9411128}
+[T3i-interval30-total600 t=   88.32] RECV(raw) 52
+[T3i-interval30-total600 t=   88.32] RECV event: message
+[T3i-interval30-total600 t=   88.32] RECV data: {"seq": 2, "elapsed_s": 90.001, "epoch": 1788254758.941381}
+[T3i-interval30-total600 t=  118.72] RECV(raw) 54
+[T3i-interval30-total600 t=  118.72] RECV event: message
+[T3i-interval30-total600 t=  118.72] RECV data: {"seq": 3, "elapsed_s": 120.001, "epoch": 1788254788.9416568}
+[T3i-interval30-total600 t=  136.94] CONNECTION CLOSED by peer. gap since last byte = 18.22s
+[T3i-interval30-total600 t=  136.94] done. total elapsed 136.94s
+
+[exited with code 0]

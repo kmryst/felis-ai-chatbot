@@ -1,0 +1,8 @@
+note: 実行ログ（担当エージェントのセッションログ）からの事後抽出。Bearer token 値は [REDACTED] にマスク。
+=== 1a: UNAUTH + spoofed principal headers ===
+rev: s8
+principal headers seen by app:
+  (none)
+--- easy-auth-injected headers seen by app ---
+   x-ms-containerapp-name = ca-felis-ephem-verify-183
+   x-ms-containerapp-revision-name = ca-felis-ephem-verify-183--0000007

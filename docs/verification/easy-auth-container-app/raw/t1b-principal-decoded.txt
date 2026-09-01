@@ -1,0 +1,8 @@
+note: 実行ログ（担当エージェントのセッションログ）からの事後抽出。Bearer token 値は [REDACTED] にマスク。
+auth_typ: aad
+has spoofed "fake" key: False
+claim count: 16
+   aud = api://12c7e2ab-3b75-411f-ac23-499b560c9a50
+   iss = https://sts.windows.net/08649350-15a6-481d-bad5-db9ba5824200
+   appid = 12c7e2ab-3b75-411f-ac23-499b560c9a50
+   http://schemas.microsoft.com/identity/claims/objectidentifier = 8d842383-d249-48b4-b58d-25e57822c262

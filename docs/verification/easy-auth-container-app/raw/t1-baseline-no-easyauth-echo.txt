@@ -1,0 +1,28 @@
+note: 実行ログからの事後抽出。Easy Auth 有効化前（sidecar 無し）の /echo 応答。
+=== root ===
+=== /echo (spoofed principal headers) ===
+{
+  "path": "/echo",
+  "received_headers": {
+    "accept": "*/*",
+    "host": "ca-felis-ephem-verify-183.blackbush-a1db7f50.japaneast.azurecontainerapps.io",
+    "user-agent": "curl/8.5.0",
+    "x-arr-ssl": "true",
+    "x-envoy-expected-rq-timeout-ms": "1800000",
+    "x-envoy-external-address": "147.192.0.45",
+    "x-forwarded-for": "147.192.0.45",
+    "x-forwarded-path": "/echo",
+    "x-forwarded-proto": "https",
+    "x-k8se-app-kind": "web",
+    "x-k8se-app-name": "ca-felis-ephem-verify-183--0000001",
+    "x-k8se-app-namespace": "k8se-apps",
+    "x-k8se-protocol": "http1",
+    "x-ms-client-principal-id": "attacker-id",
+    "x-ms-client-principal-name": "attacker@evil.example",
+    "x-ms-containerapp-name": "ca-felis-ephem-verify-183",
+    "x-ms-containerapp-revision-name": "ca-felis-ephem-verify-183--0000001",
+    "x-request-id": "d598bab2-3e84-43a8-a6ff-5ecd3e56ef58"
+  },
+  "rev_marker": "r1",
+  "server_time": 1788254626.127676
+}

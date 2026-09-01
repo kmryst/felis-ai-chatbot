@@ -1,0 +1,24 @@
+----- iteration marker=s5  apply_start=2026-09-01T09:45:40Z -----
+  az update command returned after 14.959880730s
+  NEW REVISION ca-felis-ephem-verify-183--0000004 reached 100% traffic (runningState=RunningAtMaxScale)
+  >>> time_from_apply_start_to_100pct = 20.312536059s
+----- iteration marker=s6  apply_start=2026-09-01T09:46:01Z -----
+  az update command returned after 17.813898908s
+  NEW REVISION ca-felis-ephem-verify-183--0000005 reached 100% traffic (runningState=RunningAtMaxScale)
+  >>> time_from_apply_start_to_100pct = 35.017573127s
+----- iteration marker=s7  apply_start=2026-09-01T09:46:36Z -----
+  az update command returned after 12.358484537s
+  NEW REVISION ca-felis-ephem-verify-183--0000006 reached 100% traffic (runningState=RunningAtMaxScale)
+  >>> time_from_apply_start_to_100pct = 28.413515197s
+----- iteration marker=s8  apply_start=2026-09-01T09:47:04Z -----
+  az update command returned after 16.449204074s
+  NEW REVISION ca-felis-ephem-verify-183--0000007 reached 100% traffic (runningState=RunningAtMaxScale)
+  >>> time_from_apply_start_to_100pct = 32.481818745s
+===== revision list (final) =====
+Name                                Created                    Active    Running            Replicas
+----------------------------------  -------------------------  --------  -----------------  ----------
+ca-felis-ephem-verify-183--0000005  2026-09-01T09:46:11+00:00  True      Deprovisioning     1
+ca-felis-ephem-verify-183--0000006  2026-09-01T09:46:43+00:00  True      RunningAtMaxScale  1
+ca-felis-ephem-verify-183--0000007  2026-09-01T09:47:13+00:00  True      RunningAtMaxScale  1
+
+[exited with code 0]

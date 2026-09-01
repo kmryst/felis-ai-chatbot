@@ -1,0 +1,23 @@
+note: 実行ログ（担当エージェントのセッションログ）からの事後抽出。Bearer token 値は [REDACTED] にマスク。
+=== acquire client-credentials token (app-only) ===
+token_type: Bearer expires_in: 3599 error: None 
+=== token claims (aud/iss/appid/roles) ===
+{
+  "aud": "api://12c7e2ab-3b75-411f-ac23-499b560c9a50",
+  "iss": "https://sts.windows.net/08649350-15a6-481d-bad5-db9ba5824200/",
+  "appid": "12c7e2ab-3b75-411f-ac23-499b560c9a50",
+  "azp": null,
+  "roles": null,
+  "oid": "8d842383-d249-48b4-b58d-25e57822c262",
+  "sub": "8d842383-d249-48b4-b58d-25e57822c262"
+}
+=== /.auth/me with Bearer (is the token accepted by Easy Auth?) ===
+ok rev=s8
+
+=== 1b: AUTHED (Bearer) + spoofed principal headers -> what does the app see? ===
+principal/auth headers seen by app:
+   Authorization = Bearer [REDACTED]
+   x-ms-client-principal = eyJhdXRoX3R5cCI6ImFhZCIsImNsYWltcyI6W3sidHlwIjoiYXVkIiwidmFs...
+   x-ms-client-principal-id = 8d842383-d249-48b4-b58d-25e57822c262
+   x-ms-client-principal-idp = aad
+   x-ms-client-principal-name = 12c7e2ab-3b75-411f-ac23-499b560c9a50
