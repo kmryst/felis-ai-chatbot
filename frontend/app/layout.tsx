@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "felis-ai-chatbot",
+  title: "気象情報チャットボット",
   description:
-    "pgvector RAG チャットボット。PostgreSQL の Backup / Restore / Maintenance / Monitoring を設計・実装・検証する個人開発",
+    "気象庁ホームページの観測データを参照して回答する AI チャットボット（felis-ai-chatbot）",
 };
 
 export default function RootLayout({
