@@ -3,10 +3,7 @@ import Chat from "./chat";
 export default function Home() {
   return (
     <main className="page">
-      <h1>felis-ai-chatbot</h1>
-      <p className="subtitle">
-        pgvector RAG チャットボット（気象庁データ + Azure OpenAI）
-      </p>
+      <h1>気象情報チャットボット</h1>
       <Chat />
       {/* 出典表示（気象庁の出典記載例に準拠）・加工表記・AI 生成表示・
           予報/警報を提供しない旨の常設フッター（ADR-0008）。

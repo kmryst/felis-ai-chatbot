@@ -45,11 +45,6 @@ body {
   min-height: 100dvh;
 }
 
-.subtitle {
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
 .chat {
   display: flex;
   flex-direction: column;
