@@ -196,7 +196,9 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 消し忘れ・残存�
     VNet 内から打つ手段がなく開始できない
   - 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources 込みで
     約 0.84 USD/日（Retail Prices API 実測単価。ADR-0018）。Container App はスケールゼロ
-    （min_replicas 0）のため夜間のコンピュート課金はない
+    （min_replicas 0）のため夜間のコンピュート課金はない（**2026-08-22 時点の構成の記述。
+    現在は serving / ops / frontend とも `min_replicas = 1` = [ADR-0025](../adr/0025-serving-min-replicas-1-for-sli-integrity.md)・
+    [ADR-0027](../adr/0027-frontend-azure-deployment-and-public-surface.md)**）
   - 対案（毎朝 ACR 再 push を含む 2 段階 apply で作り直す）は、ドリル本番の前に apply + イメージ push
     という不確実な作業を毎朝積むことになり却下（判断の記録は ADR-0018 追記）
 

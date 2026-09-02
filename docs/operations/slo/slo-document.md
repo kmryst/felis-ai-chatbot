@@ -18,11 +18,17 @@ revision の手順は [slo-review-runbook.md](./slo-review-runbook.md) を正本
 ## サービス範囲
 
 対象とするサービス体験は、supported client と認証済みの `POST /chat` endpoint で
-構成される RAG chatbot の操作である。supported client は現在、ローカルで実行する
-frontend である。Azure には backend があるが、frontend は deployment されていない。
-2026-08-30 の読み取り専用 runtime 確認では、現在の Azure revision の image は
-`backend:sha-1183c19` であり、`LLM_PROVIDER` がなかった。対応する repository commit の
-application 設定では、既定値は `stub` である。
+構成される RAG chatbot の操作である。
+
+構成は 2026-09-01〜09-02 に変わった。supported client は Azure Container Apps に
+deployment された frontend（`ca-felisaichatbot-dev-front`。Easy Auth 付き）であり、
+client は BFF（`POST /api/chat`）だけを呼ぶ。backend は internal ingress で、
+BFF 経由でのみ到達する。`LLM_PROVIDER` は `azure-openai` で、実際に Azure OpenAI を
+呼ぶ（[llm-provider-cutover](../../verification/llm-provider-cutover/observations.md)）。
+2026-09-02 の読み取り専用確認では backend image は `backend:sha-b6d90f7` で、
+deployment 済み image と `main` の一致を確認している
+（[frontend-image-sync](../../verification/frontend-image-sync/observations.md)）。
+この構成変更は**事実の更新であり、下記の SLI / SLO の未決定事項を解消しない**。
 
 後の decision でサービス定義を変更しない限り、次はこの SLO の範囲外とする。
 
@@ -38,9 +44,11 @@ application 設定では、既定値は `stub` である。
 
 ## ユーザー
 
-現在の intended user は、supported client である local frontend から chatbot を操作する
-project owner である。public production frontend、外部 customer
-population、SLA、独立した business requirement は repository に記録されていない。
+現在の intended user は、Easy Auth（Entra ID）で認証し、アプリのロール `Chat.Use` を
+割り当てられたアカウントから chatbot を操作する project owner である。`Chat.Use` の
+割当は 2026-09-02 時点で所有者 1 アカウントのみで、他のアカウントは `AADSTS50105` で
+拒否される（Issue #208）。外部 customer population、SLA、独立した business requirement は
+repository に記録されていない。
 
 サービス範囲を拡張する前に、新しい user population、supported client、authentication
 contract、user expectation、failure impact、risk tolerance を記録する。現在の定義が
@@ -204,9 +212,9 @@ contract との整合を試験してから選ぶ。
 
 ### 既知の measurement limitation
 
-- 継続的に deployment された frontend と現在の real-user telemetry がない
-- 現在の Azure revision は application の `stub` provider default を使用し、Azure OpenAI を
-  実行していない
+- deployment された frontend はあるが、real-user telemetry がない。intended user は
+  2026-09-02 時点で所有者 1 アカウントのみで（Issue #208）、eligible event を生む
+  実利用が継続的に存在しない
 - authenticated `/chat` transaction と client-visible result の継続的な collection がない
 - application log は FastAPI 到達前の request と client-visible completion を観測できない
 - `ContainerAppHTTPLogs` は確認した Container Apps environment で有効になっていない

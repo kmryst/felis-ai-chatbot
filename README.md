@@ -1,15 +1,17 @@
 # felis-ai-chatbot
 
-pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）。うち backend（FastAPI）と
-PostgreSQL、観測用 Job を Azure 上に Terraform で構築しています（frontend はローカル実行のみ）。
+pgvector による RAG chatbot（Next.js + FastAPI + PostgreSQL）。frontend / backend / PostgreSQL と
+観測用 Job を Azure 上に Terraform で構築しています（frontend は Easy Auth 付きの Container App、
+backend は internal ingress で frontend の BFF 経由でのみ到達可能）。
 成果物はアプリではなく、**その PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
 設定で終わらせずドリルとして実行し、実測値を証跡として残したこと**です。
 
 ## 対象ロールと、このリポジトリで示せること
 
 - **対象ロール**: DevOps Engineer / SRE / Platform Engineer / インフラエンジニア
-- **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps / ACR / VNet + Private DNS /
-  Log Analytics を管理。DB は private access で、運用経路は VNet 内の ops コンテナに一本化
+- **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps（frontend / backend / ops の 3 App + Job 4 本）/
+  ACR / VNet + Private DNS / Log Analytics / Azure Monitor アラートを管理。DB は private access で、
+  運用経路は VNet 内の ops コンテナに一本化
 - **可観測性**: `/readyz` の外形監視と、DB 内の観測 3 系列（1 分 / 5 分 / 1 時間）を継続採取。
   これらは operational signal であり、user-facing SLI / SLO の定義と未決定事項は
   [SLO document](./docs/operations/slo/slo-document.md) に分離
@@ -24,17 +26,19 @@ PostgreSQL、観測用 Job を Azure 上に Terraform で構築しています�
 
 | 項目 | 状態 |
 | --- | --- |
-| PITR ドリル（RTO / RPO） | **未実測** — 2026-08-28 実施予定 |
-| ゾーン冗長 HA の failover ダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
-| General Purpose へのスケールのダウンタイム | **未実測** — 2026-08-31〜09-01 予定 |
+| PITR ドリル（RTO / RPO） | **未実測** — 1 回目（8/28 目安）・2 回目（9/2 目安）とも 2026-08-30 時点で未実施。2026-09-02〜09-15 の実施窓で実施予定 |
 | 高負荷観測（フェーズ 2） | **未実装** — 負荷生成（churn generator）は Issue #112 / PR #120 で未マージ。フェーズ 1 の毎分 1 行の書き込みは PITR の復旧時点を確定させる recovery marker であり、負荷生成ではありません（[ADR-0021](./docs/adr/0021-heartbeat-table-as-recovery-marker.md)） |
 | ベースライン観測（フェーズ 1、72h） | **完了** — 2026-08-23T08:16:19Z 起点の固定 72h 窓。probe 131 点のうち `code=200` が 128 点（97.71%）、レイテンシ中央値 21.5 秒 / p90 24.3 秒 |
+| ゾーン冗長 HA の failover ダウンタイム | **実測済み** — 2026-08-28 実施。外形プローブ（10 秒間隔、誤差 ±20 秒）で planned failover 23.9 秒 / forced failover 30.4 秒（公称 60〜120 秒）。primary の zone は 1 → 2 → 1 と実際に移った。HA 有効化 / 無効化は 10 秒粒度で非 200 ゼロ。DB 約 4 GiB・書き込みは毎分 1 行のみの条件で、PITR の RTO とは別物 |
+| General Purpose へのスケールのダウンタイム | **実測済み** — 2026-08-28 実施。同じ外形プローブで tier 昇格（B1ms → GP）5 分 30 秒 / tier 復帰（GP → B1ms）7 分 10 秒（公称 regular scaling 2〜10 分。B1ms は near-zero downtime scaling の対象外）。failover より 1 桁大きい |
 | 外形監視の実効 coverage | **実測済み** — 固定 72h 窓で scheduled run 131 回 ÷ 名目 cron 機会 864 回 = 15.2%。最大無観測時間 102.8 分 |
 | 障害通知の到達 | **実測済み** — probe の run failure から 20 秒後に、GitHub の通知インボックスへ配送記録が生成された（メール受信の実証ではない） |
 | autovacuum の自然発火 | **実測済み** — 1 行を毎分 UPDATE するテーブルで 22.6 時間に 26 回（約 52 分周期） |
 | private access（VNet 統合）への切替 | **実測済み** — VNet 内経路の `/readyz` 200 と、作業端末からの到達不能を両方確認 |
 
-> PITR の RTO も failover のダウンタイムも、この時点ではまだ 1 つも測っていません。
+> PITR の RTO / RPO は、この時点ではまだ測っていません。HA failover の 23.9 秒 / 30.4 秒は
+> HA が有効なときのそのシナリオでの復旧時間であって、バックアップからの復旧時間ではありません。
+> RTO 目標（3 時間）を改定するかどうかは PITR ドリルの実測が揃ってから判断します。
 
 ## このプロジェクトの立て付け
 
@@ -76,7 +80,8 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 - [docs/operations/slo/slo-document.md](./docs/operations/slo/slo-document.md): user-facing SLI / SLO、error budget、および review procedure の入口
 - [docs/adr/README.md](./docs/adr/README.md): 設計判断（ADR）。撤回した判断も削除せず残しています
 - [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md): フェーズ 1 の実測記録・食い違い・未検証項目
-- [docs/operations/credit-window-execution-plan.md](./docs/operations/credit-window-execution-plan.md): 進行中のフェーズ計画（PITR ドリル / HA / teardown）
+- [docs/verification/failover-drill/observations.md](./docs/verification/failover-drill/observations.md): HA failover / tier 変更ドリルの実測記録（downtime・zone 遷移・公称との照合・限定）
+- [docs/operations/credit-window-execution-plan.md](./docs/operations/credit-window-execution-plan.md): 進行中のフェーズ計画（PITR ドリル / メンテナンスドリル / teardown）
 
 ## ローカルで動かす
 
