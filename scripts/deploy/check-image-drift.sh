@@ -61,5 +61,5 @@ fi
 
 echo "DRIFT: DEPLOY_SHA=${DEPLOY_SHA} → HEAD=${head_sha} で image に影響する差分がある。" >&2
 echo "       §2 の手順で 3 image を HEAD の SHA で build / push し、.env の DEPLOY_SHA を更新すること" >&2
-echo "$changed" | sed 's/^/  /' >&2
+while IFS= read -r f; do printf '  %s\n' "$f" >&2; done <<<"$changed"
 exit 1

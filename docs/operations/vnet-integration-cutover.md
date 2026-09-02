@@ -72,6 +72,12 @@ ops リソースの precondition で失敗する。
 #    追記してから実行する（値の形式は terraform/ephemeral/variables.tf の database_url を参照）
 set -a; source .env; set +a
 
+# 2') DEPLOY_SHA と HEAD の乖離検査（Issue #206）。backend/ / frontend/ に DEPLOY_SHA 以降の
+#    差分があれば exit 1 で止まる = 「main は進んだのに image を作り直していない」状態。
+#    その場合は §2 の build / push（3 本）を先に行い、DEPLOY_SHA を書き戻してから本節へ戻る。
+#    初回（DEPLOY_SHA 未設定）は exit 2 になるのでそのまま §2 へ進む
+scripts/deploy/check-image-drift.sh
+
 # 3) serving / ops / frontend の 3 イメージ参照（DEPLOY_SHA 未設定なら :? で即失敗する。
 #    初回で §2 の push がまだなら、この 3 行を飛ばして §2 へ進む。
 #    3 本は単一の DEPLOY_SHA を共有する = ADR-0027 決定 7）
@@ -99,6 +105,10 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
   また `git rev-parse --short HEAD` は**作業ツリーが dirty でも同じ値を返す**ため、
   タグがビルド内容を同定しない（未コミットの変更込みでビルドしても同じタグになる）。
   push した時点の SHA を `.env` の `DEPLOY_SHA` に固定し、build / push したときだけ更新する
+- **注意（逆方向の乖離 = 固定した `DEPLOY_SHA` が古いまま main が進む）**: 上の固定は「push して
+  いないタグを参照しない」ことは守るが、「main で image の中身が変わったのに再 build しない」
+  ことは防がない（#196 で frontend の文言変更がデプロイに反映されなかった。Issue #206）。
+  2') の `check-image-drift.sh` がこの方向を検出する。apply を伴う作業では必ず 2') を通す
 - `TF_VAR_database_url` のホスト部は §1 の apply 後に新 FQDN へ更新が必要になる（§1 参照。
   更新したら `.env` を編集して本節の 2) を再実行する）
 
