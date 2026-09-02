@@ -99,15 +99,15 @@ ADR-0027「影響」・ADR-0028「影響」の「未検証の前提」の列挙�
 確定できないため、実測 → 計画へのレビュー → 起票の順とする。起票は CLAUDE.md のとおり
 プラン提示とユーザー確認を経る。
 
-| 作業単位（§1） | 起票トリガー |
-| --- | --- |
-| 実測 2 件 | 起票済み（#183 / #184） |
-| backend SSE 化 / frontend BFF / レート制限 / SLI specification 改訂 | #183 / #184 の実測記録が揃い、§2 の対応表での突き合わせ（食い違いがあれば ADR 追記を先行）が完了した後 |
-| ingest CLI の backfill 単独実行 mode | 実測に依存しない（応答契約・公開面に触れない）ため実測完了を待たずに起票できる。時期はユーザー判断 |
-| seed / backfill Job の Terraform 化・`LLM_PROVIDER` 切替・実 embedding backfill・frontend + Easy Auth | 並行波の全 PR のマージ後（frontend image は BFF 実装込み、ops image は backfill 単独実行 mode 込みであることが前提） |
-| cutover | frontend + Easy Auth の疎通（非管理者テストユーザーの成功試験。ADR-0027 決定 5）が実測で成立した後 |
-| synthetic transaction SLI | SLI specification 改訂のマージ後、かつ frontend + Easy Auth の実測成立後（cutover 後が望ましい） |
-| SLO 正本改訂（実測記録の反映） | apply セッション〜synthetic の実測記録が揃った後 |
+| 作業単位（§1） | 起票トリガー | 状態（2026-09-02） |
+| --- | --- | --- |
+| 実測 2 件 | 起票済み（#183 / #184） | **完了**（#183 / #184 CLOSED。記録は azure-openai-stream / easy-auth-container-app） |
+| backend SSE 化 / frontend BFF / レート制限 / SLI specification 改訂 | #183 / #184 の実測記録が揃い、§2 の対応表での突き合わせ（食い違いがあれば ADR 追記を先行）が完了した後 | **一部完了** — backend SSE 化 / frontend BFF は #192 / #193（PR #198 / #199 merged）。**レート制限は未実装（#113）**、SLI specification 改訂は未起票 |
+| ingest CLI の backfill 単独実行 mode | 実測に依存しない（応答契約・公開面に触れない）ため実測完了を待たずに起票できる。時期はユーザー判断 | **単独実行 mode としては未実装**。#196（PR #204）で `python -m app.ingest --embed`（seed 投入 → backfill。どちらも冪等で、backfill は `embedding IS NULL` の行のみ対象）として実装され、Job `caj-felisaichatbot-dev-embed` がこれを実行する。単独 mode を別途設ける必要性は再評価されていない |
+| seed / backfill Job の Terraform 化・`LLM_PROVIDER` 切替・実 embedding backfill・frontend + Easy Auth | 並行波の全 PR のマージ後（frontend image は BFF 実装込み、ops image は backfill 単独実行 mode 込みであることが前提） | **完了**（#194 / #195 / #196。PR #200 / #202 / #204。実測記録は frontend-easy-auth-cutover / llm-provider-cutover / seed-embedding-backfill） |
+| cutover | frontend + Easy Auth の疎通（非管理者テストユーザーの成功試験。ADR-0027 決定 5）が実測で成立した後 | **完了**（PR #201 の実測記録） |
+| synthetic transaction SLI | SLI specification 改訂のマージ後、かつ frontend + Easy Auth の実測成立後（cutover 後が望ましい） | **未起票**。トリガー側の前提（frontend + Easy Auth の実測成立）は満たされているが、SLI specification 改訂が未着手 |
+| SLO 正本改訂（実測記録の反映） | apply セッション〜synthetic の実測記録が揃った後 | **未起票**。構成変更に伴う事実の記述のみ #210 で更新済み（SLI / SLO の値と未決定事項は据え置き） |
 
 ## 4. production-readiness.md の同時更新ルール
 

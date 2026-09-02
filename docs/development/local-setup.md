@@ -57,11 +57,15 @@ npm install
 npm run dev   # http://localhost:3000
 ```
 
-- チャット UI からのメッセージは backend の `POST /chat` に送られる
-- backend の URL は `NEXT_PUBLIC_BACKEND_URL` で上書き可能（既定 `http://localhost:8000`）
+- チャット UI からのメッセージは frontend の BFF（`POST /api/chat`）に送られ、BFF が
+  backend の `POST /chat` へ中継する。ブラウザは backend の URL も API キーも持たない
+  （ADR-0027 決定 2 / 3。`NEXT_PUBLIC_BACKEND_URL` / `NEXT_PUBLIC_CHAT_API_KEY` は PR #199 で廃止）
+- backend の URL は **server 専用**の `BACKEND_ORIGIN` で上書きする（既定 `http://localhost:8000`）
 - backend 側の CORS 許可 origin は `CORS_ALLOWED_ORIGINS`（既定 `http://localhost:3000`）
-- backend で `CHAT_API_KEY` を設定している場合は、frontend 側にも同じ値を
-  `NEXT_PUBLIC_CHAT_API_KEY` で渡す（未設定だと `/chat` が 401 になる）
+- backend で `CHAT_API_KEY` を設定している場合は、frontend 側にも **`NEXT_PUBLIC_` を付けない**
+  `CHAT_API_KEY` として同じ値を渡す（BFF だけが保持し、backend への request に付与する）
+- BFF は既定で Easy Auth の principal header を要求する（fail-closed）。ローカルでは
+  `BFF_PRINCIPAL_CHECK_DISABLED=true` を設定しないと `/api/chat` が 401 になる
 
 ## 5. テストを実行する
 

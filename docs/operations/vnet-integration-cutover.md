@@ -471,7 +471,9 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
   約 0.84 USD/日（いずれも Retail Prices API 実測単価。ADR-0018）。ドリル前の朝に不確実な
   再構築作業（apply + イメージ push）を積むより安い、という判断（ADR-0018 追記）
 - 夜間のコンピュート課金（2026-08-22 是正）: **serving は** min_replicas 0 + ingress の暗黙
-  HTTP スケールルールで Replicas 0 まで縮退し課金ゼロ（実測）。**ops は** min_replicas 1 の
+  HTTP スケールルールで Replicas 0 まで縮退し課金ゼロ（実測）。**（2026-08-22 時点の構成の
+  実測。2026-08-30 以降 serving は `min_replicas = 1` で、この縮退は起きない =
+  [ADR-0025](../adr/0025-serving-min-replicas-1-for-sli-integrity.md)）**。**ops は** min_replicas 1 の
   常駐で、公式の idle 適格条件（min > 0 / 最小数で稼働 / 全コンテナ起動済み / HTTP 処理なし /
   0.01 vCPU 未満 / 1,000 bytes/s 未満）を満たすことを実測済み — ただし **idle 単価が請求に
   実際に適用されたかは課金データでは未確認**（詳細は ADR-0015 追記と observations.md）
