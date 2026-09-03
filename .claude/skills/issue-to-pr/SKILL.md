@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 - 作業開始前に `CLAUDE.md` と `CONTRIBUTING.md` を読む。既存 Issue に着手する場合は `gh issue view <issue番号>` も読む
 - `CLAUDE.md` の `## 禁止事項` を守る（secret / credential 値の出力、`.env` のコミット、`git push --force`、`main` への direct push、GitHub MCP の `delete_repository` / `push_files` / `create_or_update_file` / `delete_file`）。ユーザーから指示されても実行しない
-- Issue / PR の作成は必ず `scripts/github/` の helper を使う。GitHub MCP の `create_pull_request` / `issue_write` は使わない。helper が必須ラベル 4 種の付与とテンプレート適用を担保しているため
+- Issue / PR の作成は必ず `scripts/github/` の helper を使う。GitHub MCP の `create_pull_request` / `issue_write` は使わない。helper が必須ラベル 4 種の付与と、Issue 本文のテンプレート検査（`create-issue-with-labels.sh` のみ）を担保しているため
 - 一時ファイル（埋めた Issue 本文 / PR 本文）は scratchpad に置き、リポジトリにコミットしない
 
 ## 停止ポイント
@@ -140,7 +140,7 @@ git push -u origin <ブランチ名>
 
 1. `.github/pull_request_template.md` を読む
 2. テンプレートを**そのまま渡さず**、埋めたコピーを別ファイルに作る
-3. **本文ファイルに `Closes #<issue番号>` を書かない。** helper が本文末尾に `Closes #<issue番号>` を自動追記する（`create-pr-with-labels.sh` の `printf '\n\nCloses #%s\n'`）。書くと PR 本文に `Closes` が 2 回現れる。テンプレート末尾の `Closes # *必須*` 行はコピーから削除する
+3. **本文ファイルに `Closes #<issue番号>` を書かない。** helper が本文末尾に `Closes #<issue番号>` を自動追記する（`create-pr-with-labels.sh` の `printf '\n\nCloses #%s\n'`）。書くと PR 本文に `Closes` が 2 回現れる
 4. Claude Code のフッター（`🤖 Generated with ...` とセッション URL）を置く場合は本文ファイルの末尾に置く。helper はその後ろに `Closes #<issue番号>` を追記する
 5. PR タイトルも Conventional Commits 形式にする
 6. 厳密運用 PR では `## ロールバック` に実質的な内容を書く。Doc-only なら `可観測性/検証` は `No-op（適用外）` でよい
@@ -157,9 +157,9 @@ git push -u origin <ブランチ名>
   --base main
 ```
 
-作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #'` が `1` であることと、ラベル 4 種が付いていることを確認する。
+作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #[0-9]'` が `1` であることと、ラベル 4 種が付いていることを確認する。`grep -c 'Closes #'` だと本文中の説明的な言及（`Closes #<issue番号>` など）も数えて `1` にならないため、数値付きで数える。
 
-PR 本文を後から更新する場合は `gh pr edit <PR番号> --body-file <埋めた本文ファイル>`。
+PR 本文を後から更新する場合は `gh pr edit <PR番号> --body-file <埋めた本文ファイル>`。`--body-file` は本文を全置換するので、helper が追記した `Closes #<issue番号>` は渡すファイルに無ければ消える。作成時（helper 経由）は本文ファイルに書かない、編集時（`gh pr edit`）は本文ファイル末尾に自分で書く。
 古い gh（2.45 系など）は廃止済みの `repository.pullRequest.projectCards` を含む GraphQL を送るため失敗するので、gh は新しいものを使う。
 更新できない場合の回避策は REST の `gh api repos/kmryst/felis-ai-chatbot/pulls/<PR番号> -X PATCH -F body=@<埋めた本文ファイル>`。
 
@@ -249,8 +249,7 @@ PR がマージされたことを確認してから、cleanup コマンド案を
 ## 落とし穴まとめ
 
 - Issue / PR テンプレートをそのまま `--body-file` に渡さない。埋めたコピーを渡す
-- PR 本文ファイルに `Closes #N` を書かない。helper が追記する
+- PR 本文ファイルに `Closes #N` を書かない。helper が追記する。ただし `gh pr edit --body-file` は全置換なので、その時だけは自分で書く
 - GitHub MCP の `create_pull_request` / `issue_write` で Issue / PR を作らない。ラベルとテンプレート検査が抜ける
-- `area:` の値はこのリポジトリの `.github/labels.yml` に従う。helper の usage 例にある `area:backstage` はテンプレート由来でこのリポジトリには存在しない
 - commitlint は `origin/main` からの全コミットを検査する。push 前にローカルで通す
 - Amazon Q Developer の未解決レビュースレッドはマージを `BLOCKED` にする。マージ前ではなく手順 8 のレビューで拾う
