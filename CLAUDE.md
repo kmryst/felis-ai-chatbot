@@ -118,27 +118,29 @@ npm run commitlint -- --from origin/main --to HEAD --verbose
 
 ## 禁止事項
 
-ユーザーから明示的に指示された場合でも、実行前に必ず確認する。
+以下は例外なく実行しない。ユーザーから明示的に指示された場合でも実行せず、
+必要な場合はユーザー自身が実行する。
 
-- Azure リソースを作成・変更・削除する CLI 操作（az の書き込み系コマンド）
-- `terraform apply` / `terraform destroy` / `terraform state rm`
-- `git push --force` / `main` ブランチへの direct push
-- branch protection などリポジトリ設定の無断変更
-- GitHub Issue / PR の無断作成・無断編集
 - secret / credential 値の出力
 - `.env` ファイルのコミット
+- `git push --force`
+- `main` ブランチへの direct push
 
-## ユーザー確認が必要な操作
+## 実行前に確認が必要な操作
+
+以下は実行前にユーザーへ内容を提示し、確認を得てから実行する。
 
 | 操作 | 確認のタイミング |
 | --- | --- |
+| Azure リソースを作成・変更・削除する CLI 操作（az の書き込み系） | 対象リソースと影響、戻し方を提示してから |
+| `terraform apply` / `terraform destroy` / `terraform state rm` | plan 結果と影響範囲を提示してから |
+| リポジトリ設定変更（branch protection など） | 変更内容と戻し方を提示してから |
 | Issue 起票 | 本文・ラベル案とコマンドを提示してから |
 | 実装着手 | 変更対象・変更内容・影響範囲を提示してから |
 | コミット | コミット前サマリを提示して停止してから |
 | git push | コミット確認後に明示的な許可を得てから |
 | PR 作成 | タイトル・本文・ラベル・コマンド案を提示してから |
 | ブランチ削除 | cleanup コマンド案を提示してから |
-| リポジトリ設定変更 | 変更内容と戻し方を提示してから |
 
 ## PR 必須ラベル（4種類）
 
