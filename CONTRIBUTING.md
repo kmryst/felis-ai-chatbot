@@ -167,9 +167,10 @@ npm run lint:md
 npm run commitlint -- --from origin/main --to HEAD --verbose
 ```
 
-`.pre-commit-config.yaml` を置いており、commit 前に `terraform fmt` を自動適用できます。
+`.pre-commit-config.yaml` を置いており、commit 前に `terraform fmt` の自動適用と `terraform validate` の実行ができます。
 有効化は各自 1 回 `uvx pre-commit install`（または `pre-commit install`）が必要で、任意です。
 有効化しなくても CI（`terraform-checks.yml`）が検査するため、必須ではありません。
+`terraform validate` は `terraform init -backend=false` を伴うため、`.terraform/` が未生成の初回だけ時間がかかります。
 
 ## 運用モード
 
