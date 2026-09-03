@@ -34,6 +34,10 @@ Issue / PR 駆動の開発フローと CI ガードレールが最初から有�
 Issue / PR 駆動開発を必ず守る。
 順序: Issue 確認 → ブランチ作成 → 実装前計画提示 → 実装 → 検証 → コミット前停止 → コミット → push → PR → merge → cleanup。
 
+Issue / PR の作成には `scripts/github/` の helper スクリプトを使う。
+GitHub MCP の `create_pull_request` / `issue_write` は使わない。
+helper が必須ラベル 4 種の付与とテンプレート適用を担保しているため。
+
 ### Issue 作成
 
 Issue は起票前にプランを提示してユーザーに確認してもらう。
@@ -125,6 +129,8 @@ npm run commitlint -- --from origin/main --to HEAD --verbose
 - `.env` ファイルのコミット
 - `git push --force`
 - `main` ブランチへの direct push
+- GitHub MCP の `delete_repository`（リポジトリの削除）
+- GitHub MCP の `push_files` / `create_or_update_file` / `delete_file`（ブランチと PR を経由しないリモートへの直接書き込み）
 
 ## 実行前に確認が必要な操作
 
@@ -140,6 +146,7 @@ npm run commitlint -- --from origin/main --to HEAD --verbose
 | コミット | コミット前サマリを提示して停止してから |
 | git push | コミット確認後に明示的な許可を得てから |
 | PR 作成 | タイトル・本文・ラベル・コマンド案を提示してから |
+| GitHub MCP の `merge_pull_request`（PR のマージ） | マージ対象と CI の状態を提示してから |
 | ブランチ削除 | cleanup コマンド案を提示してから |
 
 ## PR 必須ラベル（4種類）
