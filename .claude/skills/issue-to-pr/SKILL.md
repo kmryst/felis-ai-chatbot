@@ -159,6 +159,10 @@ git push -u origin <ブランチ名>
 
 作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #'` が `1` であることと、ラベル 4 種が付いていることを確認する。
 
+PR 本文を後から更新する場合は `gh pr edit <PR番号> --body-file <埋めた本文ファイル>`。
+古い gh（2.45 系など）は廃止済みの `repository.pullRequest.projectCards` を含む GraphQL を送るため失敗するので、gh は新しいものを使う。
+更新できない場合の回避策は REST の `gh api repos/kmryst/felis-ai-chatbot/pulls/<PR番号> -X PATCH -F body=@<埋めた本文ファイル>`。
+
 ### 8. レビュー
 
 PR 作成後、マージ前に必ずレビューを通す。レビュー結果と未解決スレッドの有無を提示して停止し、確認を得てからマージへ進む（停止ポイント）。
@@ -175,9 +179,10 @@ PR 作成後、マージ前に必ずレビューを通す。レビュー結果�
    gh pr checks <PR番号>
    ```
 
-   Amazon Q が check として現れず、レビュースレッドだけを投稿する場合もある。その場合は次のスレッド確認で判断する
+   Amazon Q が check として現れず、レビュースレッドだけを投稿する場合もある。その場合は次のスレッド確認で判断する。
+   自動レビューは PR 作成時の 1 回だけで、以降のコミットを push しても再実行されない（PR #217 で実測）。push 後に新しいレビューを待たない
 
-3. レビュースレッドの解決状態を確認する。未解決（`isResolved: false`）のスレッドが 1 つでも残っていればマージへ進まない
+3. レビュースレッドの解決状態を確認する。未解決（`isResolved: false`）のスレッドが 1 つでも残っていればマージへ進まない。後続コミットで指摘行が動くとスレッドは `isOutdated: true` になるが、`isResolved` とは独立であり、outdated でも未解決ならマージはブロックされる
 
    ```bash
    gh api graphql -f query='
