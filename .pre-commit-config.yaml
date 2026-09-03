@@ -1,0 +1,13 @@
+# pre-commit 設定
+#
+# 目的: terraform-checks.yml が CI で実行する `terraform fmt -check -recursive terraform/` を
+#       commit 前にローカルで自動適用し、「push -> CI で落ちる -> 直す」の往復をなくす。
+#
+# 有効化は任意（各自 1 回 `uvx pre-commit install`）。有効化しなくても CI が検査する。
+# .tf は terraform/ 配下にしかないため files / exclude での絞り込みは不要。
+
+repos:
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.0
+    hooks:
+      - id: terraform_fmt
