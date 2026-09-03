@@ -136,11 +136,14 @@ PR はテンプレートと helper を使って作成します。
 
 PR タイトルも Conventional Commits 形式にします。
 
-PR 本文には、次のいずれかを必ず含めます。
+PR 本文には、次のいずれかの Issue 参照が必要です。
 
 - `Closes #<issue番号>`
 - `Fixes #<issue番号>`
 - `Refs #<issue番号>`
+
+helper を使う場合はこの要件が上記の自動追記で満たされるため、`--body-file` には自分で書きません。
+書くと PR 本文に `Closes` が 2 回現れます。
 
 ### 6. マージ後 cleanup
 
@@ -202,7 +205,7 @@ Issue 起票前プランと PR 作成前プランで、ラベル・変更対象�
 - [ ] Issue を作成または確認したか
 - [ ] ブランチ名が `<issue番号>-<kebab-case要約>` 形式か
 - [ ] コミットメッセージが Conventional Commits 形式か
-- [ ] PR 本文に `Closes #XX` / `Fixes #XX` / `Refs #XX` のいずれかを記載したか
+- [ ] PR 作成時に helper へ `--issue <issue番号>` を渡したか（`Closes #XX` は helper が自動追記するため本文には書かない）
 - [ ] 必須ラベル `type / area / risk / cost` を付けたか
 
 ## 関連ドキュメント
