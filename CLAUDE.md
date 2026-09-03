@@ -156,7 +156,9 @@ npm run commitlint -- --from origin/main --to HEAD --verbose
 | `risk:*` | ちょうど 1 つ |
 | `cost:*` | ちょうど 1 つ |
 
-PR 本文には `Closes #<issue番号>` / `Fixes #<issue番号>` / `Refs #<issue番号>` のいずれかを必須で含める。
+PR 本文には `Closes #<issue番号>` / `Fixes #<issue番号>` / `Refs #<issue番号>` のいずれかが必須。
+ただしこれは helper が `--issue` の値から `Closes #<issue番号>` を本文末尾に自動追記して満たすため、
+`--body-file` には自分で書かない。書くと PR 本文に `Closes` が 2 回現れる。
 
 ## ラベル一覧
 
