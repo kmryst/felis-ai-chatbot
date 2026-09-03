@@ -119,7 +119,7 @@ Conventional Commits に従う。`commitlint.config.mjs` の制約:
 ```bash
 git add <対象ファイル>
 git commit -m "<type>: <summary>"
-npx commitlint --from origin/main --to HEAD --verbose
+npm run commitlint -- --from origin/main --to HEAD --verbose
 ```
 
 `.env` を `git add` しない。secret / credential 値をコミットメッセージや本文に書かない。

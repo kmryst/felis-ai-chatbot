@@ -15,7 +15,7 @@ Issue / PR 駆動開発を基本とします。
 
 ### 正規コマンド
 
-Issue と PR の作成は、原則として以下のヘルパーを使います。
+Issue / PR の作成と、PR マージ後のブランチ整理は、原則として以下のヘルパーを使います。
 
 ```bash
 # Issue
@@ -23,12 +23,9 @@ Issue と PR の作成は、原則として以下のヘルパーを使います�
 
 # PR
 ./scripts/github/create-pr-with-labels.sh ...
-```
 
-PR マージ後のブランチ整理には次を使います。
-
-```bash
-./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
+# マージ後 cleanup
+./scripts/github/cleanup-merged-pr-branch.sh ...
 ```
 
 ### 1. Issue 作成
@@ -58,6 +55,10 @@ Issue に必要な最小項目:
 - `目的`
 - `対象`
 - `受け入れ条件`
+
+見出しは `##` または `###` で、見出しテキストは完全一致、各セクションの中身は空にしません。
+helper（`scripts/github/lib/common.sh` の `validate_issue_body_template`）と `issue-template-check` workflow が同じ条件で検査し、
+満たさない Issue には `needs-template` ラベルが付きます。
 
 Issue 必須ラベル:
 
@@ -138,6 +139,9 @@ PR はテンプレートと helper を使って作成します。
 
 PR タイトルも Conventional Commits 形式にします。
 
+PR にも Issue と同じ必須ラベル 4 種（要件は `### 1. Issue 作成` と同じ）を付けます。
+必須ラベルと下記の Issue 参照は `pr-policy-check` workflow が検査します。
+
 PR 本文には、次のいずれかの Issue 参照が必要です。
 
 - `Closes #<issue番号>`
@@ -151,6 +155,16 @@ helper を使う場合はこの要件が上記の自動追記で満たされる�
 
 ```bash
 ./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
+```
+
+## ローカル検証
+
+CI と同じ markdownlint / commitlint をローカルで実行できます。push 前に通します。
+
+```bash
+npm ci
+npm run lint:md
+npm run commitlint -- --from origin/main --to HEAD --verbose
 ```
 
 ## 運用モード
