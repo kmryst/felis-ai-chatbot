@@ -10,7 +10,7 @@ Usage:
     --body-file path/to/body.md \
     --issue 123 \
     --type type:feature \
-    --area area:backstage \
+    --area area:app \
     --risk risk:low \
     --cost cost:none \
     [--area area:docs] \

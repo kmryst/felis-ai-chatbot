@@ -436,7 +436,7 @@ push 直後に `sync-labels` workflow が起動する（トリガー: main へ�
 branch protection の required checks は「一度も実行されていない check」を required に指定すると PR が恒久ブロックされ得るため、**先に実行実績を作る**（`docs/operations/branch-protection.md` 冒頭注意・ADR-0006 に明記の実測済み落とし穴）。
 
 1. 軽微な変更（例: README への1行追記）の Issue を作る。skeleton の `scripts/github/create-issue-with-labels.sh` を使う。
-2. branch を切って PR を作る（`scripts/github/create-pr-with-labels.sh`）。**PR Policy Check は必須ラベルと Issue リンクを検査する**ため、ラベル付与と `Refs #<issue>` を忘れない。
+2. branch を切って PR を作る（`scripts/github/create-pr-with-labels.sh`）。**PR Policy Check は必須ラベルと Issue リンクを検査する**ため、helper に必須ラベル 4 種と `--issue <issue番号>` を渡す（Issue リンクは helper が `Closes #<issue番号>` として本文末尾へ自動追記する）。
 3. 4つの required check がすべて green になることを確認する:
 
 ```bash

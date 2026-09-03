@@ -36,10 +36,12 @@ PR マージ後のブランチ整理には次を使います。
 新しい機能追加、検証、ドキュメント更新は、原則として Issue から始めます。
 軽運用でも Issue は必須です。ただし簡潔で構いません。
 
+`--body-file` には `docs/issue-templates/feature_request.md` をそのまま渡さず、テンプレートを埋めたコピーを別ファイルとして作成して渡します。
+
 ```bash
 ./scripts/github/create-issue-with-labels.sh \
   --title "短い要約" \
-  --body-file docs/issue-templates/feature_request.md \
+  --body-file /path/to/filled-issue-body.md \
   --type type:feature \
   --area area:app \
   --risk risk:low \

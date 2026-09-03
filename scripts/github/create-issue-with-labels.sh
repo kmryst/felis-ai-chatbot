@@ -9,7 +9,7 @@ Usage:
     --title "Issue title" \
     --body-file path/to/body.md \
     --type type:feature \
-    --area area:backstage \
+    --area area:app \
     --risk risk:low \
     --cost cost:none
 

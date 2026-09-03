@@ -14,7 +14,7 @@ disable-model-invocation: true
 
 - 作業開始前に `CLAUDE.md` と `CONTRIBUTING.md` を読む。既存 Issue に着手する場合は `gh issue view <issue番号>` も読む
 - `CLAUDE.md` の `## 禁止事項` を守る（secret / credential 値の出力、`.env` のコミット、`git push --force`、`main` への direct push、GitHub MCP の `delete_repository` / `push_files` / `create_or_update_file` / `delete_file`）。ユーザーから指示されても実行しない
-- Issue / PR の作成は必ず `scripts/github/` の helper を使う。GitHub MCP の `create_pull_request` / `issue_write` は使わない。helper が必須ラベル 4 種の付与とテンプレート適用を担保しているため
+- Issue / PR の作成は必ず `scripts/github/` の helper を使う。GitHub MCP の `create_pull_request` / `issue_write` は使わない。helper が必須ラベル 4 種の付与と、Issue 本文のテンプレート検査（`create-issue-with-labels.sh` のみ）を担保しているため
 - 一時ファイル（埋めた Issue 本文 / PR 本文）は scratchpad に置き、リポジトリにコミットしない
 
 ## 停止ポイント
@@ -251,6 +251,5 @@ PR がマージされたことを確認してから、cleanup コマンド案を
 - Issue / PR テンプレートをそのまま `--body-file` に渡さない。埋めたコピーを渡す
 - PR 本文ファイルに `Closes #N` を書かない。helper が追記する
 - GitHub MCP の `create_pull_request` / `issue_write` で Issue / PR を作らない。ラベルとテンプレート検査が抜ける
-- `area:` の値はこのリポジトリの `.github/labels.yml` に従う。helper の usage 例にある `area:backstage` はテンプレート由来でこのリポジトリには存在しない
 - commitlint は `origin/main` からの全コミットを検査する。push 前にローカルで通す
 - Amazon Q Developer の未解決レビュースレッドはマージを `BLOCKED` にする。マージ前ではなく手順 8 のレビューで拾う
