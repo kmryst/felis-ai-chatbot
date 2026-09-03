@@ -140,7 +140,7 @@ git push -u origin <ブランチ名>
 
 1. `.github/pull_request_template.md` を読む
 2. テンプレートを**そのまま渡さず**、埋めたコピーを別ファイルに作る
-3. **本文ファイルに `Closes #<issue番号>` を書かない。** helper が本文末尾に `Closes #<issue番号>` を自動追記する（`create-pr-with-labels.sh` の `printf '\n\nCloses #%s\n'`）。書くと PR 本文に `Closes` が 2 回現れる。テンプレート末尾の `Closes # *必須*` 行はコピーから削除する
+3. **本文ファイルに `Closes #<issue番号>` を書かない。** helper が本文末尾に `Closes #<issue番号>` を自動追記する（`create-pr-with-labels.sh` の `printf '\n\nCloses #%s\n'`）。書くと PR 本文に `Closes` が 2 回現れる
 4. Claude Code のフッター（`🤖 Generated with ...` とセッション URL）を置く場合は本文ファイルの末尾に置く。helper はその後ろに `Closes #<issue番号>` を追記する
 5. PR タイトルも Conventional Commits 形式にする
 6. 厳密運用 PR では `## ロールバック` に実質的な内容を書く。Doc-only なら `可観測性/検証` は `No-op（適用外）` でよい
