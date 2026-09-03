@@ -167,16 +167,19 @@ PR 本文を後から更新する場合は `gh pr edit <PR番号> --body-file <�
 
 PR 作成後、マージ前に必ずレビューを通す。レビュー結果と未解決スレッドの有無を提示して停止し、確認を得てからマージへ進む（停止ポイント）。
 
-1. 差分をレビューする。このリポジトリでは code-review skill を使い、PR 番号を引数に渡せる
+1. 差分をレビューする。深さは運用モードに合わせる（判定基準は `CONTRIBUTING.md` の `## 運用モード`）。
+   厳密運用の PR は code-review skill に PR 番号を渡して実行する。軽運用の PR は差分を直接読むことをレビューとしてよい。
+   どちらの場合も、以降の CI 結果の確認と未解決レビュースレッドの確認は省略しない
 
    ```text
    /code-review 217
    ```
 
-2. Amazon Q Developer の自動レビュー結果を確認する。PR 作成直後は結果がまだ出ていないことがあるため、`Amazon Q Developer` が完了しているかを確認してから判断する
+2. Amazon Q Developer の自動レビュー結果を確認する。PR 作成直後は結果がまだ出ていないことがあるため、`Amazon Q Developer` が完了しているかを確認してから判断する。
+   `--watch` で完了まで待つ。この環境では素の `sleep` がブロックされるため、`sleep` で待たない
 
    ```bash
-   gh pr checks <PR番号>
+   gh pr checks <PR番号> --watch --interval 15
    ```
 
    Amazon Q が check として現れず、レビュースレッドだけを投稿する場合もある。その場合は次のスレッド確認で判断する。
