@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr
-description: felis-ai-chatbot の Issue 起票からブランチ作成・実装・検証・コミット・push・PR 作成・マージ・cleanup までを、CLAUDE.md / CONTRIBUTING.md の作法どおりに通しで実行する。新しい作業を Issue から始める時、または既存 Issue の実装をマージまで進める時にユーザーが /issue-to-pr で明示的に呼ぶ。
+description: felis-ai-chatbot の Issue 起票からブランチ作成・実装・検証・コミット・push・PR 作成・レビュー・マージ・cleanup までを、CLAUDE.md / CONTRIBUTING.md の作法どおりに通しで実行する。新しい作業を Issue から始める時、または既存 Issue の実装をマージまで進める時にユーザーが /issue-to-pr で明示的に呼ぶ。
 disable-model-invocation: true
 ---
 
@@ -28,6 +28,7 @@ disable-model-invocation: true
 | コミット | コミット前サマリ |
 | git push | コミット確認後の明示的な許可 |
 | PR 作成 | タイトル・本文・ラベル・コマンド案 |
+| レビュー | レビュー結果と未解決スレッドの有無 |
 | マージ | マージ対象と CI の状態 |
 | ブランチ削除 | cleanup コマンド案 |
 
@@ -158,7 +159,61 @@ git push -u origin <ブランチ名>
 
 作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #'` が `1` であることと、ラベル 4 種が付いていることを確認する。
 
-### 8. マージ
+### 8. レビュー
+
+PR 作成後、マージ前に必ずレビューを通す。レビュー結果と未解決スレッドの有無を提示して停止し、確認を得てからマージへ進む（停止ポイント）。
+
+1. 差分をレビューする。このリポジトリでは code-review skill を使い、PR 番号を引数に渡せる
+
+   ```text
+   /code-review 217
+   ```
+
+2. Amazon Q Developer の自動レビュー結果を確認する。PR 作成直後は結果がまだ出ていないことがあるため、`Amazon Q Developer` が完了しているかを確認してから判断する
+
+   ```bash
+   gh pr checks <PR番号>
+   ```
+
+   Amazon Q が check として現れず、レビュースレッドだけを投稿する場合もある。その場合は次のスレッド確認で判断する
+
+3. レビュースレッドの解決状態を確認する。未解決（`isResolved: false`）のスレッドが 1 つでも残っていればマージへ進まない
+
+   ```bash
+   gh api graphql -f query='
+   query($owner:String!, $repo:String!, $number:Int!) {
+     repository(owner:$owner, name:$repo) {
+       pullRequest(number:$number) {
+         reviewThreads(first:50) {
+           nodes {
+             id
+             isResolved
+             path
+             comments(first:1) { nodes { author { login } body } }
+           }
+         }
+       }
+     }
+   }' -F owner=kmryst -F repo=felis-ai-chatbot -F number=<PR番号> \
+     --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)'
+   ```
+
+4. 指摘に対応する。どちらの場合も判断根拠を残す（取り込む場合はコミットメッセージまたは PR コメント、resolve する場合はスレッドへの返信）
+   - 妥当な指摘: 修正して commit / push し直す（手順 5・6 に戻る）
+   - 妥当でない指摘: 理由をスレッドに書いてから `resolveReviewThread` で resolve する
+
+   ```bash
+   gh api graphql -f query='
+   mutation($threadId:ID!) {
+     resolveReviewThread(input:{threadId:$threadId}) {
+       thread { id isResolved }
+     }
+   }' -F threadId=<スレッドの id>
+   ```
+
+`main` は `required_conversation_resolution: true` である。未解決スレッドを残したままマージへ進むと `mergeStateStatus` が `BLOCKED` になり、`gh pr merge` が `the base branch policy prohibits the merge` で失敗する。これはマージ時ではなくこの手順で拾う（PR #217 で実際に発生した）。
+
+### 9. マージ
 
 マージは `CLAUDE.md` の確認必須操作である。マージ対象と CI の状態を提示して停止し、確認を得てから実行する（停止ポイント）。
 
@@ -176,7 +231,7 @@ gh pr merge <PR番号> --squash
 
 GitHub MCP の `merge_pull_request` は使わず、`gh pr merge` を使う。
 
-### 9. マージ後 cleanup
+### 10. マージ後 cleanup
 
 PR がマージされたことを確認してから、cleanup コマンド案を提示して実行する（停止ポイント）。
 
@@ -193,4 +248,4 @@ PR がマージされたことを確認してから、cleanup コマンド案を
 - GitHub MCP の `create_pull_request` / `issue_write` で Issue / PR を作らない。ラベルとテンプレート検査が抜ける
 - `area:` の値はこのリポジトリの `.github/labels.yml` に従う。helper の usage 例にある `area:backstage` はテンプレート由来でこのリポジトリには存在しない
 - commitlint は `origin/main` からの全コミットを検査する。push 前にローカルで通す
-- `main` は `required_conversation_resolution: true` のため、Amazon Q Developer のレビュースレッドが未解決だと `mergeStateStatus` が `BLOCKED` になり、`gh pr merge` が `the base branch policy prohibits the merge` で失敗する。指摘が妥当なら取り込み、妥当でなければ GitHub API でスレッドを resolve してからマージする（PR #217 で実際に発生した）
+- Amazon Q Developer の未解決レビュースレッドはマージを `BLOCKED` にする。マージ前ではなく手順 8 のレビューで拾う
