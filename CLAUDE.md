@@ -39,6 +39,7 @@ Issue / PR の作成には `scripts/github/` の helper スクリプトを使う
 GitHub MCP の `create_pull_request` / `issue_write` は使わない。
 helper が必須ラベル 4 種の付与と、Issue 本文のテンプレート検査（`create-issue-with-labels.sh` のみ）を担保しているため。
 コマンド例は `CONTRIBUTING.md`、オプションの正本は各 helper の `--help`。
+マージ後のブランチ整理は `CONTRIBUTING.md` の `### 6. マージ後 cleanup`。
 
 この一連の手順は `.claude/skills/issue-to-pr/SKILL.md` にまとめてあり、`/issue-to-pr` で呼べる。
 
@@ -68,12 +69,6 @@ PR は作成前にプランを提示してユーザーに確認してもらう�
 `--body-file` には `.github/pull_request_template.md` をそのまま渡さず、テンプレートを埋めたコピーを別ファイルとして作成して渡す。
 `--body-file` に `Closes #<issue番号>` を書かない。helper が `--issue` から本文末尾に自動追記する。
 必須ラベル 4 種と Issue 参照の要件は `pr-policy-check` が検査する。詳細は `CONTRIBUTING.md` の `### 5. Pull Request 作成`。
-
-### マージ後 cleanup
-
-```bash
-./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
-```
 
 ## 設計判断の記録
 

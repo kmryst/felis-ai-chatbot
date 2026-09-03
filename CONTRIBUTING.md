@@ -15,7 +15,7 @@ Issue / PR 駆動開発を基本とします。
 
 ### 正規コマンド
 
-Issue と PR の作成は、原則として以下のヘルパーを使います。
+Issue / PR の作成と、PR マージ後のブランチ整理は、原則として以下のヘルパーを使います。
 
 ```bash
 # Issue
@@ -23,12 +23,9 @@ Issue と PR の作成は、原則として以下のヘルパーを使います�
 
 # PR
 ./scripts/github/create-pr-with-labels.sh ...
-```
 
-PR マージ後のブランチ整理には次を使います。
-
-```bash
-./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
+# マージ後 cleanup
+./scripts/github/cleanup-merged-pr-branch.sh ...
 ```
 
 ### 1. Issue 作成
