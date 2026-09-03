@@ -38,6 +38,7 @@ Issue / PR 駆動開発を必ず守る。
 Issue / PR の作成には `scripts/github/` の helper スクリプトを使う。
 GitHub MCP の `create_pull_request` / `issue_write` は使わない。
 helper が必須ラベル 4 種の付与と、Issue 本文のテンプレート検査（`create-issue-with-labels.sh` のみ）を担保しているため。
+コマンド例は `CONTRIBUTING.md`、オプションの正本は各 helper の `--help`。
 
 この一連の手順は `.claude/skills/issue-to-pr/SKILL.md` にまとめてあり、`/issue-to-pr` で呼べる。
 
@@ -45,23 +46,8 @@ helper が必須ラベル 4 種の付与と、Issue 本文のテンプレート�
 
 Issue は起票前にプランを提示してユーザーに確認してもらう。
 
-Issue 本文はテンプレートに沿って書く。必須見出しは `## 目的` / `## 対象` / `## 受け入れ条件`
-（`##` または `###`、見出しテキストは完全一致、各セクションの中身必須）。
-CLI 用テンプレートは `docs/issue-templates/feature_request.md`、Web UI 用は
-`.github/ISSUE_TEMPLATE/feature_request.yml`。沿っていない Issue には
-issue-template-check が `needs-template` ラベルを付ける。
-
 `--body-file` には `docs/issue-templates/feature_request.md` をそのまま渡さず、テンプレートを埋めたコピーを別ファイルとして作成して渡す。
-
-```bash
-./scripts/github/create-issue-with-labels.sh \
-  --title "短い要約" \
-  --body-file <埋めた本文ファイル> \
-  --type type:feature \
-  --area area:app \
-  --risk risk:low \
-  --cost cost:none
-```
+必須見出しは `## 目的` / `## 対象` / `## 受け入れ条件`。検査条件の詳細は `CONTRIBUTING.md` の `### 1. Issue 作成`。
 
 ### Issue 着手
 
@@ -80,18 +66,8 @@ git switch -c <issue番号>-<kebab-case要約>
 PR は作成前にプランを提示してユーザーに確認してもらう。
 
 `--body-file` には `.github/pull_request_template.md` をそのまま渡さず、テンプレートを埋めたコピーを別ファイルとして作成して渡す。
-
-```bash
-./scripts/github/create-pr-with-labels.sh \
-  --title "feat: 変更の要約" \
-  --body-file /path/to/filled-pr-body.md \
-  --issue <issue番号> \
-  --type type:feature \
-  --area area:app \
-  --risk risk:low \
-  --cost cost:none \
-  --base main
-```
+`--body-file` に `Closes #<issue番号>` を書かない。helper が `--issue` から本文末尾に自動追記する。
+必須ラベル 4 種と Issue 参照の要件は `pr-policy-check` が検査する。詳細は `CONTRIBUTING.md` の `### 5. Pull Request 作成`。
 
 ### マージ後 cleanup
 
@@ -104,24 +80,10 @@ PR は作成前にプランを提示してユーザーに確認してもらう�
 トレードオフを伴う設計判断は `docs/adr/` に ADR として記録する。
 書き方と運用ルールは `docs/adr/README.md` に従う。番号は ADR を追加する PR の時点で確定する。
 
-## コミットメッセージ
+## コミットメッセージとローカル検証
 
-`CONTRIBUTING.md` の Conventional Commits ルールに従う。
-`wip`、`fix` のみ、`update files` のような曖昧なメッセージを使わない。
-
-```bash
-npx commitlint --from origin/main --to HEAD --verbose
-```
-
-## ローカル検証
-
-CI と同じチェックをローカルで実行できる。
-
-```bash
-npm ci
-npm run lint:md      # Markdown lint
-npm run commitlint -- --from origin/main --to HEAD --verbose
-```
+コミットメッセージは `CONTRIBUTING.md` の Conventional Commits ルールに従う。
+push 前に CI と同じ markdownlint / commitlint をローカルで通す。コマンドは `CONTRIBUTING.md` の `## ローカル検証`。
 
 ## 禁止事項
 
@@ -154,26 +116,7 @@ npm run commitlint -- --from origin/main --to HEAD --verbose
 | PR のマージ（`gh pr merge --squash`） | マージ対象と CI の状態を提示してから |
 | ブランチ削除 | cleanup コマンド案を提示してから |
 
-## PR 必須ラベル（4種類）
+## ラベル
 
-| ラベル | 要件 |
-| --- | --- |
-| `type:*` | ちょうど 1 つ |
-| `area:*` | 1 つ以上（複数可） |
-| `risk:*` | ちょうど 1 つ |
-| `cost:*` | ちょうど 1 つ |
-
-PR 本文には `Closes #<issue番号>` / `Fixes #<issue番号>` / `Refs #<issue番号>` のいずれかが必須。
-ただしこれは helper が `--issue` の値から `Closes #<issue番号>` を本文末尾に自動追記して満たすため、
-`--body-file` には自分で書かない。書くと PR 本文に `Closes` が 2 回現れる。
-
-## ラベル一覧
-
-`.github/labels.yml` が正本。
-
-| 種別 | 値 |
-| --- | --- |
-| type | `type:feature` / `type:bug` / `type:docs` / `type:infra` / `type:chore` / `type:refactor` / `type:test` |
-| area | `area:app` / `area:api` / `area:infra` / `area:ci-cd` / `area:docs` / `area:architecture` |
-| risk | `risk:low` / `risk:medium` / `risk:high` |
-| cost | `cost:none` / `cost:small` / `cost:medium` / `cost:large` |
+必須ラベル 4 種（`type` / `area` / `risk` / `cost`）の値は `.github/labels.yml` が正本。
+要件は `pr-policy-check` が検査する。詳細は `CONTRIBUTING.md`。

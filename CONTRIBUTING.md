@@ -59,6 +59,10 @@ Issue に必要な最小項目:
 - `対象`
 - `受け入れ条件`
 
+見出しは `##` または `###` で、見出しテキストは完全一致、各セクションの中身は空にしません。
+helper（`scripts/github/lib/common.sh` の `validate_issue_body_template`）と `issue-template-check` workflow が同じ条件で検査し、
+満たさない Issue には `needs-template` ラベルが付きます。
+
 Issue 必須ラベル:
 
 - `type:*`: ちょうど 1 つ
@@ -138,6 +142,9 @@ PR はテンプレートと helper を使って作成します。
 
 PR タイトルも Conventional Commits 形式にします。
 
+PR にも Issue と同じ必須ラベル 4 種（要件は `### 1. Issue 作成` と同じ）を付けます。
+必須ラベルと下記の Issue 参照は `pr-policy-check` workflow が検査します。
+
 PR 本文には、次のいずれかの Issue 参照が必要です。
 
 - `Closes #<issue番号>`
@@ -151,6 +158,16 @@ helper を使う場合はこの要件が上記の自動追記で満たされる�
 
 ```bash
 ./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
+```
+
+## ローカル検証
+
+CI と同じ markdownlint / commitlint をローカルで実行できます。push 前に通します。
+
+```bash
+npm ci
+npm run lint:md
+npm run commitlint -- --from origin/main --to HEAD --verbose
 ```
 
 ## 運用モード
