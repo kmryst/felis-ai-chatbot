@@ -1,13 +1,20 @@
 # pre-commit 設定
 #
-# 目的: terraform-checks.yml が CI で実行する `terraform fmt -check -recursive terraform/` を
-#       commit 前にローカルで自動適用し、「push -> CI で落ちる -> 直す」の往復をなくす。
+# 目的: terraform-checks.yml が CI で実行する `terraform fmt -check -recursive terraform/` と
+#       各 root module の `terraform init -backend=false` + `terraform validate` を
+#       commit 前にローカルで実行し、「push -> CI で落ちる -> 直す」の往復をなくす。
 #
 # 有効化は任意（各自 1 回 `uvx pre-commit install`）。有効化しなくても CI が検査する。
 # .tf は terraform/ 配下にしかないため files / exclude での絞り込みは不要。
+#
+# terraform_validate は内部で `terraform init -backend=false` を実行する。backend を
+# 初期化しないため Azure の認証情報は不要で、CI と同じ条件になる。
+# `.terraform/` が未生成の初回は provider のダウンロードで時間がかかる（実測 9 秒程度）が、
+# 2 回目以降は 1 秒程度。生成される `.terraform/` は .gitignore 済み。
 
 repos:
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: v1.109.0
     hooks:
       - id: terraform_fmt
+      - id: terraform_validate
