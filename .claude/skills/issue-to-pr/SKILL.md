@@ -1,6 +1,6 @@
 ---
 name: issue-to-pr
-description: felis-ai-chatbot の Issue 起票からブランチ作成・実装・検証・コミット・push・PR 作成・ready までを、CLAUDE.md / CONTRIBUTING.md の作法どおりに通しで実行する。新しい作業を Issue から始める時、または既存 Issue の実装を PR まで進める時にユーザーが /issue-to-pr で明示的に呼ぶ。
+description: felis-ai-chatbot の Issue 起票からブランチ作成・実装・検証・コミット・push・PR 作成・マージ・cleanup までを、CLAUDE.md / CONTRIBUTING.md の作法どおりに通しで実行する。新しい作業を Issue から始める時、または既存 Issue の実装をマージまで進める時にユーザーが /issue-to-pr で明示的に呼ぶ。
 disable-model-invocation: true
 ---
 
@@ -28,6 +28,7 @@ disable-model-invocation: true
 | コミット | コミット前サマリ |
 | git push | コミット確認後の明示的な許可 |
 | PR 作成 | タイトル・本文・ラベル・コマンド案 |
+| マージ | マージ対象と CI の状態 |
 | ブランチ削除 | cleanup コマンド案 |
 
 ユーザーが「一気にやってよい」と明示した場合は、上記で停止せず通しで実行してよい。
@@ -155,17 +156,29 @@ git push -u origin <ブランチ名>
   --base main
 ```
 
-helper は PR を **draft** で作成する（`gh pr create --draft`）。
-作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #'` が `1` であることと、ラベル 4 種が付いていることを確認してから ready にする。
+作成後に `gh pr view <PR番号> --json body --jq .body | grep -c 'Closes #'` が `1` であることと、ラベル 4 種が付いていることを確認する。
+
+### 8. マージ
+
+マージは `CLAUDE.md` の確認必須操作である。マージ対象と CI の状態を提示して停止し、確認を得てから実行する（停止ポイント）。
+
+まず CI が全 pass していることを確認する。
 
 ```bash
-gh pr ready <PR番号>
+gh pr checks <PR番号>
 ```
 
-### 8. マージ後 cleanup
+`gh pr view <PR番号> --json mergeStateStatus` が `CLEAN` であることも確認してからマージする。
+
+```bash
+gh pr merge <PR番号> --squash
+```
+
+GitHub MCP の `merge_pull_request` は使わず、`gh pr merge` を使う。
+
+### 9. マージ後 cleanup
 
 PR がマージされたことを確認してから、cleanup コマンド案を提示して実行する（停止ポイント）。
-マージ自体はユーザーの判断で行う。GitHub MCP の `merge_pull_request` はマージ対象と CI の状態を提示してからでなければ使わない。
 
 ```bash
 ./scripts/github/cleanup-merged-pr-branch.sh <PR番号>
@@ -177,7 +190,7 @@ PR がマージされたことを確認してから、cleanup コマンド案を
 
 - Issue / PR テンプレートをそのまま `--body-file` に渡さない。埋めたコピーを渡す
 - PR 本文ファイルに `Closes #N` を書かない。helper が追記する
-- helper は PR を draft で作る。`gh pr ready` を忘れない
 - GitHub MCP の `create_pull_request` / `issue_write` で Issue / PR を作らない。ラベルとテンプレート検査が抜ける
 - `area:` の値はこのリポジトリの `.github/labels.yml` に従う。helper の usage 例にある `area:backstage` はテンプレート由来でこのリポジトリには存在しない
 - commitlint は `origin/main` からの全コミットを検査する。push 前にローカルで通す
+- `main` は `required_conversation_resolution: true` のため、Amazon Q Developer のレビュースレッドが未解決だと `mergeStateStatus` が `BLOCKED` になり、`gh pr merge` が `the base branch policy prohibits the merge` で失敗する。指摘が妥当なら取り込み、妥当でなければ GitHub API でスレッドを resolve してからマージする（PR #217 で実際に発生した）
