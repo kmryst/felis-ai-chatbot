@@ -88,8 +88,6 @@ PR は作成前にプランを提示してユーザーに確認してもらう�
   --base main
 ```
 
-helper は PR を draft で作成する。PR 内容を確認したら `gh pr ready <PR番号>` で ready にする。
-
 ### マージ後 cleanup
 
 ```bash

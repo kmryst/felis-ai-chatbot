@@ -132,8 +132,7 @@ PR はテンプレートと helper を使って作成します。
   --base main
 ```
 
-この helper は PR 本文へ `Closes #<issue番号>` を自動追記し、PR を **draft** で作成します。
-PR 内容を確認したら `gh pr ready <PR番号>` で ready にしてください。
+この helper は PR 本文へ `Closes #<issue番号>` を自動追記し、PR を作成します。
 
 PR タイトルも Conventional Commits 形式にします。
 
