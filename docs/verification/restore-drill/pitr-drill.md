@@ -1,15 +1,51 @@
-# PITR ドリル 1 回目: custom restore（任意時刻への WAL 再生を伴う復元）
+# PITR ドリル実測記録（Issue #230）
 
-Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の実測記録。時刻はすべて UTC。
+Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ドリルの実測記録。時刻はすべて UTC。
 用語（`t0` / `t1` / 実測復元所要区間 / 復元点精度）の定義は Issue #230 §1 が正本であり、本ファイルはその定義に従って実測値だけを残す。
 実測値は **RPO / RTO とは呼ばない**（[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) §6-1）。
 
-- 実施日: 2026-09-04
+**記録の単位は「復元手法」ではなく「1 回の演習」である。** digest ベースラインとセンチネル S1 / S2 / S3 は 2 回の復元で共有しており、
+2 回の `t1 − t0` / 復元点精度を並べた比較こそがこの演習の成果物なので、1 ファイルにまとめる。
+次回以降の演習は日付付きの別ファイルにして系列にする。
+
+## このドリルの構成
+
+| # | 復元方式 | 状態 | 記録先 |
+| --- | --- | --- | --- |
+| 手順 0 | （共通の前提）digest ベースライン固定・センチネル S1 投入 | 完了（2026-09-04） | [手順 0](#手順-0-digest-ベースラインの固定2026-09-04t133630895z) |
+| 1 回目 | custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [1 回目](#1-回目-custom-restore完了) |
+| 2 回目 | fast restore（最新 Full backup 起点） | **未実施**（2026-09-05 実施予定） | [2 回目](#2-回目-fast-restore未実施) |
+
+**2 回目の追記先は「2 回目: fast restore」節と、次の比較表の fast 列。** 知見・残作業も同じファイルの末尾で更新する。
+
+### 共通の前提
+
 - 元サーバー: `pgsql-felisaichatbot-dev`（rg-felisaichatbot-dev-tf / Japan East / PostgreSQL 17.10 / Standard_B1ms）
-- 復元先: `pgsql-felisaichatbot-dev-restored`（同 VNet・委任サブネット・private DNS zone。検証後に削除済み）
+- 復元先: `pgsql-felisaichatbot-dev-restored`（同 VNet・委任サブネット・private DNS zone。各回とも検証後に削除する）
 - 実行経路: `az containerapp exec` → `ca-felisaichatbot-dev-ops`（revision `ca-felisaichatbot-dev-ops--0000006`）→ `psql`
 - **元サーバーは全工程を通じて無傷**。元サーバーへの操作は SELECT と `obs.pitr_sentinel` への `CREATE TABLE` / `INSERT` のみで、破壊的操作（`DROP TABLE` など）は一切行っていない
-- **fast restore（2 回目）は未実施**。残作業は本ファイル末尾の「残作業」を参照
+- 照合の正本は手順 0 で 1 回だけ取得した固定 digest。照合のために元サーバーを読み直さない
+
+## 1 回目と 2 回目の比較（この演習の成果物）
+
+fast restore は未実施のため右列は空欄。実施後にここを埋める。
+
+| 項目 | 1 回目: custom restore | 2 回目: fast restore |
+| --- | --- | --- |
+| 実施日時 | 2026-09-04 | （未実施） |
+| 復元指定時刻 | 2026-09-04T13:50:00Z | （未実施） |
+| 起点 Full backup（completedTime） | `backup_639241036648747354` / 2026-09-04T07:27:45.874735Z | （未実施） |
+| **WAL 再生スパン** | **6 h 22 min 14.125 s** | （未実施。fast は原理上ほぼゼロ） |
+| `t0`（Activity Log `Accepted`） | 14:06:55.069282Z | （未実施） |
+| `t1`（最初の `SELECT 1` 成功） | 14:13:46.224Z | （未実施） |
+| **実測復元所要区間 `t1 − t0`** | **6 min 51.155 s** | （未実施） |
+| `state=Ready` 初観測 − `t0` | 8 min 12.499 s | （未実施） |
+| Activity Log `Succeeded` − `t0` | 9 min 6.539 s | （未実施） |
+| **復元点精度** | **39.035 s**（heartbeat 1 分粒度の標本化誤差を含む） | （未実施） |
+| digest 4 テーブルの一致 | 全一致 | （未実施） |
+| `documents WHERE embedding IS NULL` | 0 | （未実施） |
+| センチネル期待 → 実測 | S1 存在 / S2・S3 不在 → 一致 | S1・S2 存在 / S3 不在 → （未実施） |
+| 復元先サーバーの削除 | 完了（所要 1 min 32.319 s） | （未実施） |
 
 ## 実施順序を Issue #230 の記載と入れ替えた
 
@@ -80,7 +116,11 @@ backup_639241036648747354  Full          2026-09-04T07:27:45.874735+00:00  Autom
 最新 = `backup_639241036648747354`（completedTime **2026-09-04T07:27:45.874735+00:00**）。これは S1 投入より前に完了しているため、
 fast restore に使う「S1 投入後に完了した最新 Full backup」としては使えない。翌 2026-09-05 07:2xZ の日次分を待つ必要がある。
 
-## custom restore の実行
+## 1 回目: custom restore（完了）
+
+実施日 2026-09-04。復元指定時刻を任意に指定し、直前の Full backup から WAL を再生して到達させる方式。
+
+### 復元の実行
 
 - 復元指定時刻（`--restore-time`）: **2026-09-04T13:50:00Z**
 - 直前 Full backup: `backup_639241036648747354` / completedTime 2026-09-04T07:27:45.874735+00:00
@@ -103,7 +143,7 @@ restore_cli_rc=0
 t0-cli-after=2026-09-04T14:06:55.013Z
 ```
 
-## タイムライン
+### タイムライン
 
 | 項目 | 時刻 | 備考 |
 | --- | --- | --- |
@@ -125,7 +165,7 @@ t0-cli-after=2026-09-04T14:06:55.013Z
 | delete 発行 / 完了 | 14:15:34.008 / 14:17:06.327 | rc=0 |
 | `flexible-server list` で不在確認 | 14:17:06.329 | |
 
-## 実測復元所要区間（`t1 − t0`）
+### 実測復元所要区間（`t1 − t0`）
 
 正本 `t0` = Activity Log の `status=Accepted` の `eventTimestamp`。
 
@@ -140,7 +180,7 @@ t0-cli-after=2026-09-04T14:06:55.013Z
 
 `t0-cli`（送信直前 14:06:50.984Z）は `Accepted` より **4.085 s** 早い。`Started` と `Accepted` の差は本回 **1.12 s** だった。
 
-## 復元点精度
+### 復元点精度
 
 - 復元サーバーの `max(obs.heartbeat.ts)` = 2026-09-04 13:49:20.964559+00
 - **復元指定時刻 − `max(heartbeat.ts)` = 39.035 s**
@@ -148,7 +188,7 @@ t0-cli-after=2026-09-04T14:06:55.013Z
   13:49:20 の次の heartbeat は 13:50:20 頃であり、復元指定時刻 13:50:00 より後になる。
   したがって 39.035 s は「復元点のずれ」ではなく「1 分粒度の観測点で測れる上限」である
 
-## 検証結果（verify2、`state=Ready` 観測後の 14:15:26Z）
+### 検証結果（verify2、`state=Ready` 観測後の 14:15:26Z）
 
 | table | n | digest | ベースライン（手順 0） | 判定 |
 | --- | --- | --- | --- | --- |
@@ -172,6 +212,38 @@ hb_rows|hb_max
 id|note|ts
 S1|PITR drill S1: before restore-time #1 (fast restore)|2026-09-04 13:36:31.223339+00
 ```
+
+### 復元先サーバーの削除と後始末
+
+```text
+delete_start=2026-09-04T14:15:34.008Z
+delete_rc=0
+delete_end=2026-09-04T14:17:06.327Z
+list_check=2026-09-04T14:17:06.329Z
+Name                      Resource Group            Location    Version   Tier       SKU            State
+------------------------  ------------------------  ----------  --------  ---------  -------------  -----
+pgsql-felisaichatbot-dev  rg-felisaichatbot-dev-tf  Japan East  17        Burstable  Standard_B1ms  Ready
+```
+
+- 削除所要 1 min 32.319 s。`az postgres flexible-server list` は**元サーバーのみ**を返し、復元先は不在
+- 削除後の private DNS zone のレコードは**元サーバーの A レコード（→ 10.10.0.71）のみ**。復元先の A レコードは残っていない
+- 復元先が課金対象だったのは 14:06:55（`Accepted`）〜 14:17:06（削除完了）の約 10 分
+
+## 2 回目: fast restore（未実施）
+
+最新の Full backup そのものを起点にする方式（WAL 再生スパンがほぼゼロ）。
+**2026-09-05 の日次 Full backup（07:2xZ 完了見込み。S1・S2 投入より後）の完了を待って実施し、本節に追記する。**
+
+追記する項目は 1 回目と同じ構成にする。
+
+- 復元指定時刻 / 起点 Full backup / WAL 再生スパン
+- タイムライン（S3 投入・`t0-cli`・Activity Log `Started` / `Accepted` / `Succeeded`・`state` 遷移・`t1`・`pg_postmaster_start_time`・検証・削除）
+- 実測復元所要区間（`t1 − t0`。`t0` は Activity Log `Accepted`）
+- 復元点精度（復元指定時刻 − 復元サーバーの `max(obs.heartbeat.ts)`）
+- 検証結果（手順 0 の固定 digest との照合、`embedding IS NULL`、センチネル **S1・S2 存在 / S3 不在**）
+- 復元先サーバーの削除と後始末
+
+実施時の注意は「知見 1」（`SELECT 1` 成功後に `state=Ready` を待ってから内容検証を行う）を必ず適用する。
 
 ## 知見
 
@@ -244,25 +316,10 @@ VNet 統合により PostgreSQL はプライベート到達のみで、ops コ�
 **運用上の含意**: 「7 日前まで復元できる」とは限らない。復元可能な最古時刻は日次バックアップの完了時刻に量子化されており、
 毎朝のジャンプ直後がもっとも窓が狭い。復元時刻を選ぶ前に必ず `earliestRestoreDate` の実値を確認する。
 
-## 復元先サーバーの削除と後始末
-
-```text
-delete_start=2026-09-04T14:15:34.008Z
-delete_rc=0
-delete_end=2026-09-04T14:17:06.327Z
-list_check=2026-09-04T14:17:06.329Z
-Name                      Resource Group            Location    Version   Tier       SKU            State
-------------------------  ------------------------  ----------  --------  ---------  -------------  -----
-pgsql-felisaichatbot-dev  rg-felisaichatbot-dev-tf  Japan East  17        Burstable  Standard_B1ms  Ready
-```
-
-- 削除所要 1 min 32.319 s。`az postgres flexible-server list` は**元サーバーのみ**を返し、復元先は不在
-- 削除後の private DNS zone のレコードは**元サーバーの A レコード（→ 10.10.0.71）のみ**。復元先の A レコードは残っていない
-- 復元先が課金対象だったのは 14:06:55（`Accepted`）〜 14:17:06（削除完了）の約 10 分
-
 ## 残作業
 
-- **fast restore（2 回目）は未実施**。2026-09-05 の日次 Full backup（07:2xZ 完了見込み。S1・S2 投入より後）の完了を待って実施する
+- **fast restore（2 回目）は未実施**。2026-09-05 の日次 Full backup（07:2xZ 完了見込み。S1・S2 投入より後）の完了を待って実施し、
+  本ファイルの「2 回目: fast restore」節と「1 回目と 2 回目の比較」表の fast 列に追記する
 - fast restore では S3 を投入したうえで、期待値を **S1・S2 存在 / S3 不在** として照合する
 - fast restore では `SELECT 1` 成功後に `state=Ready` を待ってから内容検証を行う（本ファイル「知見 1」）
 - 両回の実測値が揃った時点で、[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) の

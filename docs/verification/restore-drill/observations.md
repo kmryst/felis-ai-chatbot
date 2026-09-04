@@ -66,7 +66,7 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
 - **窓が動き出す予測**: サーバー作成 2026-08-22T07:16:21Z + 7 日 = **2026-08-29T07:16Z 頃**。
   以降は `earliestRestoreDate` が「現在時刻 − 7 日」を追って毎日スライドし始めるはず（**未検証の予測**）。
   → **2026-09-04 の PITR ドリルで反証された。連続スライドではなく、日次 Full backup の完了に合わせて
-  約 24 時間ずつジャンプする鋸歯状の動きだった**（[pitr-drill-custom-restore.md](./pitr-drill-custom-restore.md) 知見 4）
+  約 24 時間ずつジャンプする鋸歯状の動きだった**（[pitr-drill.md](./pitr-drill.md) 知見 4）
 - 予測日 8/29 はフェーズ 2a（高負荷 × B1ms。8/29〜8/30 目安）の初日にあたる。
   **スライド開始の瞬間を取り逃さないよう、8/28〜8/30 は取得頻度を上げる**（日次 → 数時間おき）
 - PITR ドリル 1 回目（8/28 目安）はこの窓がまだ「作成時刻に固定」の状態で行われる。
@@ -110,12 +110,13 @@ az monitor metrics list \
 
 ## フェーズ 2: PITR ドリル本体（2026-09-04 開始）
 
-実測記録は別ファイルに分けている。本ファイルはバックアップ状態の時系列観測、別ファイルは復元そのものの実測。
+実測記録は [pitr-drill.md](./pitr-drill.md) に分けている。本ファイルはバックアップ状態の時系列観測、
+`pitr-drill.md` は復元そのものの実測で、**1 回の演習（2 回の復元）を 1 ファイルにまとめる**単位で書く。
 
-| ドリル | 記録 | 状態 |
+| ドリル | 状態 | 記録先 |
 | --- | --- | --- |
-| 1 回目: custom restore（任意時刻 + WAL 再生） | [pitr-drill-custom-restore.md](./pitr-drill-custom-restore.md) | **完了**（2026-09-04） |
-| 2 回目: fast restore（最新 Full backup 起点） | 未作成 | **未実施**（2026-09-05 の日次 Full backup 完了後に実施予定） |
+| 1 回目: custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [pitr-drill.md](./pitr-drill.md) |
+| 2 回目: fast restore（最新 Full backup 起点） | **未実施**（2026-09-05 の日次 Full backup 完了後に実施予定） | 同ファイルへ追記 |
 
 1 回目で本ファイルの記録に対して確定した事項:
 
