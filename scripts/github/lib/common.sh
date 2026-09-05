@@ -39,9 +39,12 @@ validate_required_labels() {
 	done
 }
 
-# Issue 本文のテンプレート検証（issue-template-check と同条件のローカル版）
+# Issue 本文のテンプレート検証（起票前のローカル事前検査）
 # 必須見出し（## または ###、完全一致）と中身が空でないことを検証する。
-# 検査ロジックの正本は idp-golden-path の reusable workflow（@v1）側。
+# この awk は本リポジトリ独自の実装であり、正本はこのファイル。
+# 同種の検査は CI の issue-template-check（idp-golden-path の reusable workflow）にもあるが、
+# あちらは actions/github-script の JavaScript による別実装で、ここのバグは持たない。
+# 役割の違い: ここは起票「前」に弾く事前検査、CI は起票「後」に走り needs-template を付ける。
 # 境界テスト: scripts/test/issue-body-template-test.sh（ローカル実行）
 # 使い方: validate_issue_body_template path/to/body.md
 validate_issue_body_template() {

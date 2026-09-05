@@ -7,9 +7,10 @@
 # 実行: scripts/test/issue-body-template-test.sh
 # 依存: bash / awk
 #
-# 検査ロジックの正本は idp-golden-path の reusable workflow（issue-template-check@v1）側であり、
-# ここで検証するのは本リポジトリの helper 側（ローカル版）の実装である。
-# 同じ修正の横展開が必要かどうかは idp-golden-path 側で別途判断する。
+# 検証対象の awk は本リポジトリ独自の実装で、正本は scripts/github/lib/common.sh にある。
+# CI の issue-template-check（idp-golden-path の reusable workflow）は JavaScript による別実装で
+# 同じバグを持たないため、上流への横展開は不要。
+# 役割の違い: helper は起票「前」の事前検査、CI は起票「後」の検査。
 
 set -euo pipefail
 
