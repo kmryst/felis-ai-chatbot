@@ -110,7 +110,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 | 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | threshold 1 / threshold 2 の値、SLO target |
 | 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget を Issue に記録して判断すれば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない） |
 | 6 living document、4 つの出口 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は Approval + 6 か月 | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
-| dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。独立性を仮定した積（約 99.74%）が current SLO の上限の目安。dependency 起因の bad event も budget を消費する | composite 上限 | dependency 起因の miss の扱い（policy に暫定で記録） |
+| dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。独立性を仮定した積（約 99.74%）は dependency risk を考えるための参考値であり、current SLO の上限には使わない。dependency 起因の bad event も budget を消費する | composite の参考値 | dependency 起因の miss の扱い（policy に暫定で記録） |
 
 以下は、この導出結果を Workbook Appendix A の形に流し込んだものである。
 
@@ -482,7 +482,7 @@ SLI implementation version、query または tool version、supporting evidence 
 | --- | --- | --- |
 | 2026-08-30 | user-facing SLI specification、現在の evidence boundary、将来の decision procedure を記録 | なし |
 | 2026-09-07 | ADR-0028 決定 11 の 2 閾値 measurement semantics を正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
-| 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite 上限、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
+| 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite の参考値、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
 
 ## 参考資料
 
