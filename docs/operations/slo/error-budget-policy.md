@@ -26,17 +26,16 @@ compliance period にだけ適用する。
 この policy は [slo-document.md](./slo-document.md) の「原則 5: error budget は objective で reproducible な意思決定のためにある」と
 「原則 6: SLO は living document であり、4 つの出口で iterate する」から導く。
 
-> "The error budget provides a clear, objective metric that determines how unreliable the service is allowed to be within a single quarter. This metric removes the politics from negotiations"
-> 訳: error budget は、service が 1 四半期にどれだけ unreliable でよいかを決める、明確で objective な metric を与える。この metric は交渉から politics を取り除く。
+error budget は、許容する失敗量を明示し、reliability と feature delivery の優先順位を evidence に基づいて判断するための指標である。
 
-出典: SRE Book Ch.3「Embracing Risk」§Forming Your Error Budget。
+根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)。
 
 この service への帰結は次のとおりである。
 
 | 事実 | 帰結 |
 | --- | --- |
-| repository の主目的は Backup / Restore / Maintenance の設計・検証で、`POST /chat` と無関係な作業が多い | 全面 freeze は §対象外 の "Halting change is undesirable"（訳: 変更を止めることは望ましくない）と衝突する。freeze の対象を critical user journey の code path に限定する |
-| critical dependency（Azure OpenAI ほか）の composite 上限が約 99.74% | dependency 起因の miss で freeze しても本 service 側に打つ手が無い期間が生じる。freeze せず、hard dependency への対策の検討を must にする |
+| repository の主目的は Backup / Restore / Maintenance の設計・検証で、`POST /chat` と無関係な作業が多い | policy は罰や全面的な変更停止ではない。freeze の対象を critical user journey の code path に限定する |
+| critical dependency（Azure OpenAI ほか）の composite 参考値が約 99.74% | dependency 起因の miss で freeze しても本 service 側に打つ手が無い期間が生じる。freeze せず、hard dependency への対策の検討を must にする |
 | 実測 0 件、low-traffic | 20% や Table 5-8 は Workbook の starting point として置き、baseline 後に見直す。paging はせず ticket のみ |
 | 最初の iteration | この policy も Draft であり、Revisit Date で 4 つの出口とあわせて見直す |
 
@@ -58,22 +57,17 @@ release を行う開発者は**すべて同一人物（project owner）**であ�
 [slo-document.md](./slo-document.md) のヘッダ注記を正本とする。この policy に固有の帰結は、
 Workbook が求める product / development / production の 3 者合意が 1 人の中で完結することである。
 
-> "In the absence of a dedicated product team, the engineers building the system often play this role either knowingly or unknowingly."
-> 訳: 専任の product team が無い場合、system を作っている engineer が、意識的にせよ無意識にせよ、この役割を担うことが多い。
+専任 product team がない場合は、開発者が risk tolerance と優先順位を明示的に引き受ける必要がある。
 
-出典: SRE Book Ch.3「Embracing Risk」§Identifying the Risk Tolerance of Consumer Services。
+根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)。
 
-したがってこの policy の拘束力は自己拘束に依存する。SRE Book Ch.3 が "this outcome relies on an SRE team having the authority to actually stop launches if the SLO is broken"
-（訳: この結果は、SLO が破られた時に launch を実際に止める権限を SRE team が持っていることに依存する）と書く authority は、
-本 project では project owner 自身にしかない。それを補うため、policy の発動・解除・例外の判断はすべて Issue に evidence とともに記録し、
+したがってこの policy の拘束力は自己拘束に依存する。SLO miss 時に変更を止める権限は project owner 自身にしかない。
+それを補うため、policy の発動・解除・例外の判断はすべて Issue に evidence とともに記録し、
 Revisit Date まで policy 本文を変更しない。
 
 ## 目的（Goals）
 
-> "Protect customers from repeated SLO misses" / "Provide an incentive to balance reliability with other features"
-> 訳: 繰り返される SLO miss から customer を守る / reliability と他の feature との balance を取る incentive を与える。
-
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§Goals。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 本 project では次のとおりとする。
 
@@ -84,10 +78,9 @@ Revisit Date まで policy 本文を変更しない。
 
 ## 対象外（Non-Goals）
 
-> "This policy is not intended to serve as a punishment for missing SLOs. Halting change is undesirable; this policy gives teams permission to focus exclusively on reliability when data indicates that reliability is more important than other product features."
-> 訳: この policy は SLO miss に対する罰として機能することを意図していない。変更を止めることは望ましくない。この policy は、reliability が他の product feature より重要だと data が示す時に、reliability だけに集中する許可を team に与えるものである。
+policy は SLO miss に対する罰ではなく、evidence が reliability を優先すべきことを示す場合に作業を振り向けるためのものである。
 
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§Non-Goals。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 - この policy は SLO miss に対する罰ではない
 - 単一の bad event やすべての SLO miss を理由に、feature 開発を自動的にすべて停止しない
@@ -105,15 +98,10 @@ release は通常どおり進める。各変更について reliability risk と
 budget が十分残っている期間には、reliability risk のある変更（dependency の upgrade、scaling 設定の実験、cold start の再検証など）を
 この期間に寄せる。SRE Book と Workbook は余剰 budget を能動的に使うことを推す。
 
-> "When the budget is large, the product developers can take more risks."
-> 訳: budget が大きい時、product developer はより多くの risk を取れる。
+余剰 budget は、reliability を維持しながら変更速度を上げる余地として扱う。
 
-出典: SRE Book Ch.3「Embracing Risk」§Benefits。
-
-> "If a service is well within SLO and has ample error budget left, we recommend using the spare error budget to increase feature velocity rather than spending overproportional efforts on service improvements."
-> 訳: service が SLO を十分満たし error budget が十分残っているなら、service の改善に不釣り合いな労力を割くのではなく、余った error budget を feature velocity の向上に使うことを推奨する。
-
-出典: The Site Reliability Workbook Ch.18「SRE Engagement Model」§Adjusting Priorities According to Your SLOs and Error Budget。
+根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)、
+[The Site Reliability Workbook Ch.18「SRE Engagement Model」](https://sre.google/workbook/engagement-model/)。
 
 ### error budget が枯渇した場合: critical path 限定 freeze（暫定）
 
@@ -130,30 +118,23 @@ budget が十分残っている期間には、reliability risk のある変更�
 - security fix
 - budget 消費の原因に対する bug fix
 
-> "If the service has exceeded its error budget for the preceding four-week window, we will halt all changes and releases other than P0 issues or security fixes until the service is back within its SLO."
-> 訳: 直前の four-week window で service が error budget を超過していたら、P0 issue と security fix を除くすべての変更と release を、service が SLO 内に戻るまで停止する。
-
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§SLO Miss Policy。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 docs、backup / restore、CI、監視の追加など、critical user journey の code path に触れない変更は継続できる。
 境界上の変更（例: 監視の追加が `backend/app/` に触れる）は freeze 対象として扱い、例外にする場合はその理由を PR に書く。
 
 Rationale（暫定である理由を含む）:
 
-- Workbook は policy に specific action と実行者の明記を要求する。現行の「裁量的な変更を延期する」では満たさない
-  > "This policy should cover the specific actions that must be taken when a service has consumed its entire error budget for a given period of time, and specify who will take them."
-  > 訳: この policy は、service がある期間の error budget をすべて消費した時に取らなければならない具体的な action と、誰がそれを取るかを定めるべきである。
-
-  出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Establishing an Error Budget Policy。
-- SRE Book は全面停止より段階的な制御を推す
-  > "More subtle and effective approaches are available than this simple on/off technique: for instance, slowing down releases or rolling them back when the SLO-violation error budget is close to being used up."
-  > 訳: この単純な on/off の手法より繊細で効果的な方法がある。例えば、SLO 違反の error budget が使い切られそうな時に release を遅らせたり rollback したりする。
-
-  出典: SRE Book Ch.3「Embracing Risk」§Benefits。
+- policy には、budget 枯渇時に必要な action と実行者を明記する。裁量的な延期だけでは足りない
+- 全面停止ではなく、risk に比例した release 制御を採る
 - 本 repository の主目的（Backup / Restore / Maintenance の設計・検証）は `POST /chat` の reliability と無関係な作業が多く、
-  全面 freeze は §対象外 の "Halting change is undesirable"（訳: 変更を止めることは望ましくない）と衝突する
+  全面 freeze は policy の目的と衝突する
 - freeze 対象を path で列挙することで、開発者と承認者が同一人物でも機械的に判定できる
 - 全面 freeze（Workbook Example と 1:1）と現行の裁量的な運用を比較し、暫定で限定 freeze を採る。Revisit Date で見直す
+
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)、
+[The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)、
+[SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)。
 
 ### 強制の手段: label と PR template の欄（暫定）
 
@@ -169,13 +150,9 @@ label と PR 本文の記録が繰り返し守られない場合は Revisit Date
 
 ### 原因別の must / may
 
-> "The team must work on reliability if: A code bug or procedural error caused the service itself to exceed the error budget. / A postmortem reveals an opportunity to soften a hard dependency. / Miscategorized errors fail to consume budget that would have caused the service to miss its SLO."
-> 訳: 次の場合、team は reliability に取り組まなければならない。code の bug または手順の誤りにより service 自身が error budget を超過した。postmortem が hard dependency を緩める機会を明らかにした。誤分類された error が budget を消費せず、消費していれば service が SLO を miss していた。
->
-> "The team may continue to work on non-reliability features if: The outage was caused by a company-wide networking problem. / The outage was caused by a service maintained by another team, who have themselves frozen releases to address their reliability issues. / The error budget was consumed by users out of scope for the SLO (e.g., load tests or penetration testers). / Miscategorized errors consume budget even though no users were impacted."
-> 訳: 次の場合、team は reliability 以外の feature の作業を続けてよい。outage が全社的な network の問題で起きた。outage が他の team の service で起きており、その team 自身が reliability の問題に対処するため release を凍結している。error budget が SLO の scope 外の user（load test や penetration tester など）によって消費された。誤分類された error が、user に影響が無いのに budget を消費した。
+原因に応じて reliability work を必須または任意とし、scope 外 traffic や user impact のない誤分類は再現性を確認した上で別扱いにする。
 
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§SLO Miss Policy。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 本 project では次のとおりとする。
 
@@ -190,15 +167,10 @@ label と PR 本文の記録が繰り返し守られない場合は Revisit Date
 
 ### dependency 起因の SLO miss（暫定）
 
-Workbook は 2 つの流派を示し、決めて記録せよと言う。
+dependency 起因の SLO miss では、原因に関係なく freeze する方式と、freeze せず resilience を高める方式がある。
+本 project は service と dependency の性質を踏まえて後者を採り、決定理由を記録する。
 
-> "There are two schools of thought regarding how an error budget policy should address a missed SLO when the failure is caused by a dependency that's handled by another team: Your team should not halt releases or devote more time to reliability, as your system didn't cause the issue. / You should enact a change freeze in order to minimize the chances of future outages, regardless of the cause of that outage."
-> 訳: 他の team が扱う dependency に起因する SLO miss を error budget policy がどう扱うべきかについて、2 つの流派がある。自分の system が問題を起こしたのではないので、release を止めたり reliability に時間を割いたりすべきでない、という立場。outage の原因にかかわらず、将来の outage の可能性を最小化するために change freeze を発動すべきだ、という立場。
->
-> "The second approach will make your users happier. You have some flexibility in how you apply this principle. Depending on the nature of the outage and dependency, freezing changes may not be practical. Decide what is most appropriate for your service and its dependencies, and record that decision for posterity in your documented error budget."
-> 訳: 後者の方が user は幸せになる。この原則の適用にはある程度の柔軟性がある。outage と dependency の性質によっては、変更の凍結が現実的でないこともある。自分の service と dependency にとって最も適切なものを決め、その決定を後世のために error budget の文書に記録せよ。
-
-出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Modeling Dependencies。
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
 
 本 project は暫定で次を採る。
 
@@ -207,16 +179,11 @@ Workbook は 2 つの流派を示し、決めて記録せよと言う。
 - ただし hard dependency への対策（caching、graceful degradation、代替経路、retry 境界の再検討）の検討を **must** とし、
   postmortem または Issue に検討結果と採否の理由を記録する
 
-Rationale: 本 service の SLO は critical dependency の composite 上限（約 99.74%）に縛られ、Azure 側の障害で freeze しても
-本 service 側に打つ手が無い期間が生じる。Workbook の Example と同じ構造（may continue）を採りつつ、
-"soften a hard dependency"（訳: hard dependency を緩める）の検討を must にすることで、user をより幸せにするという趣旨を部分的に取り込む。
-Workbook が "The second approach will make your users happier"（訳: 後者の方が user は幸せになる）と評価する原因不問の freeze は採らないが、
-この判断は暫定であり Revisit Date で見直す。
+Rationale: Azure 側の障害で freeze しても本 service 側に打つ手が無い期間が生じる。dependency の composite 参考値は
+SLO target の硬い上限ではないが、dependency risk の input である。原因不問の freeze は採らず、hard dependency を
+緩める設計（caching、graceful degradation、代替経路、retry 境界）を検討して記録する。この判断は暫定であり Revisit Date で見直す。
 
-> "If the user journey that depends upon it needs a higher level of availability than that component can reasonably provide, you need to engineer around that condition. You can either use a different component or add sufficient defenses (caching, offline store-and-forward processing, graceful degradation, etc.) to handle failures in that component."
-> 訳: その component に依存する user journey が、その component が合理的に提供できる水準より高い availability を必要とするなら、その条件を回避するよう engineering しなければならない。別の component を使うか、その component の failure に対処するのに十分な防御（caching、offline の store-and-forward 処理、graceful degradation など）を加える。
-
-出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Modeling Dependencies。
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
 
 ### 例外
 
@@ -242,10 +209,7 @@ evidence の記録、変更の scope、validation、rollback plan を省略し�
 - 直近の compliance period で current SLO 内に戻っている
 - budget 消費の原因に対する action item が Issue として起票されている
 
-> "exit criteria—typically that the service is within SLO and that you've taken steps to decrease the chances of a subsequent SLO miss"
-> 訳: 終了条件 — 典型的には、service が SLO 内にあり、次の SLO miss の可能性を下げる手を打ったこと。
-
-出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Decision Making Using SLOs and Error Budgets。
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
 
 単発の良好な測定結果だけで自動的に解除しない。解除前に、測定方法が有効であること、直近の user impact を封じ込めたか復旧したこと、
 問題を示した evidence と比較可能な条件で再測定したことを確認し、解除の判断を Issue に記録する。
@@ -257,40 +221,29 @@ postmortem には root cause に対する action item を 1 件以上 Issue と�
 
 同一 class の outage が四半期で error budget の 20% 超を消費した場合、翌四半期の作業計画に対応項目を置く。
 
-> "If a single incident consumes more than 20% of error budget over four weeks, then the team must conduct a postmortem. The postmortem must contain at least one P0 action item to address the root cause."
-> 訳: 単一の incident が 4 週間の error budget の 20% 超を消費したら、team は postmortem を実施しなければならない。postmortem には root cause に対処する P0 の action item を少なくとも 1 件含めなければならない。
->
-> "If a single class of outage consumes more than 20% of error budget over a quarter, the team must have a P0 item on their quarterly planning document to address the issues in the following quarter."
-> 訳: 単一 class の outage が四半期の error budget の 20% 超を消費したら、team は翌四半期にその問題に対処する P0 項目を四半期計画に置かなければならない。
-
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§Outage Policy。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 20% は Workbook の Example の値を starter として採用したものであり、本 service の evidence に基づく値ではない。
 low-traffic では単一の bad event が 20% を超えうるため、最初の baseline 後に measurement frequency とあわせて見直す。
 
 postmortem の trigger は事前に定義する。
 
-> "It is important to define postmortem criteria before an incident occurs so that everyone knows when a postmortem is necessary."
-> 訳: いつ postmortem が必要かを全員が分かるように、incident が起きる前に postmortem の基準を定義しておくことが重要である。
-
-出典: SRE Book Ch.15「Postmortem Culture: Learning from Failure」§Google's Postmortem Philosophy。
+根拠: [SRE Book Ch.15「Postmortem Culture: Learning from Failure」](https://sre.google/sre-book/postmortem-culture/)。
 
 本 project の trigger は、上記の 20% 条件に加えて、data loss、手動介入（rollback、traffic の切替）、monitoring failure
 （SLO alert が鳴らずに手動で発見した incident）とする。
 
-> "postmortems that did not trigger a page are even more valuable, as they likely point to clear monitoring gaps."
-> 訳: page を発生させなかった postmortem はいっそう価値がある。明確な monitoring の gap を指していることが多いからである。
+alert が発火しなかった incident は monitoring gap を示すため、postmortem の対象にする。
 
-出典: SRE Book Ch.1「Introduction」§Ensuring a Durable Focus on Engineering。
+根拠: [SRE Book Ch.1「Introduction」](https://sre.google/sre-book/introduction/)。
 
 postmortem は既存の `docs/verification/<campaign>/observations.md` pattern に置き、新しい evidence framework を追加しない。
 
 ## escalation（Escalation Policy）
 
-> "In the event of a disagreement between parties regarding the calculation of the error budget or the specific actions it defines, the issue should be escalated to the CTO to make a decision."
-> 訳: error budget の計算や、それが定める具体的な action について当事者間で意見が分かれた場合、CTO に escalate して決定してもらう。
+error budget の計算または policy action に疑義がある場合は、決定責任者へ escalate し、根拠と決定を記録する。
 
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§Escalation Policy。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 §サービス概要 のとおり、本 project では disagreement の当事者と決定者が同一人物である。計算または action の妥当性に疑義がある場合、
 project owner は疑義の内容、evidence、決定を Issue に記録し、その決定を Revisit Date まで維持する。
@@ -307,10 +260,9 @@ project owner は疑義の内容、evidence、決定を Issue に記録し、そ
 [slo-document.md](./slo-document.md) の §error budget を正本とする。
 この policy はその結果を engineering decision に接続する側だけを定める。
 
-> "An error budget is just an SLO for meeting other SLOs!"
-> 訳: error budget とは、他の SLO を満たすための SLO にすぎない。
+error budget の運用は、SLO を満たすための engineering decision を一貫させる。
 
-出典: SRE Book Ch.4「Service Level Objectives」§Choosing Targets。
+根拠: [SRE Book Ch.4「Service Level Objectives」](https://sre.google/sre-book/service-level-objectives/)。
 
 [slo-document.md](./slo-document.md) に記録した eligible event と good event の規則、SLI implementation version、
 compliance period を使用する。error budget の単位は SLI と同じ request-based の単位とし、downtime の分数へ変換しない。
@@ -339,36 +291,27 @@ burn rate = alerting window における観測 bad event の割合を
 burn rate alerting を採用する場合、Workbook Table 5-8 を starting point とし、four-week（28 日 = 672 時間）window 用に
 再計算した値を alert source に記録する。
 
-> "We recommend the parameters listed in Table 5-8 as the starting point for your SLO-based alerting configuration."
-> 訳: SLO ベースの alerting 設定の starting point として、Table 5-8 に挙げた parameter を推奨する。
+根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
 
-出典: The Site Reliability Workbook Ch.5「Alerting on SLOs」§6: Multiwindow, Multi-Burn-Rate Alerts。
-
-Table 5-8 は 30 日 window 前提で、long window / short window / burn rate / error budget consumed が
-1 h / 5 min / 14.4 / 2%、6 h / 30 min / 6 / 5%、3 d / 6 h / 1 / 10% である。これは引用であって本 service の採用値ではない。
+Table 5-8 の parameter は 30 日 window を前提とするため、本 service の採用値ではない。
 本 service の compliance period は four-week（28 日）なので burn rate は window 長に応じた再計算が要る
 （burn rate = 消費割合 × window 時間 ÷ long window 時間）。再計算値は baseline に対して replay してから記入する（未記入）。
 
 low-traffic のため paging は行わず、ticket（GitHub Issue の起票）のみとする。
 
-> "If an issue will exhaust the error budget within hours or a few days, sending an active notification is appropriate. Otherwise, a ticket-based notification to address the alert the next working day is more appropriate."
-> 訳: 問題が数時間から数日で error budget を使い切るなら、能動的な通知が適切である。そうでなければ、翌営業日に対処する ticket ベースの通知の方が適切である。
+通知手段は、budget の消費速度と対応の緊急性に合わせる。本 service は low-traffic のため ticket のみとする。
 
-出典: The Site Reliability Workbook Ch.5「Alerting on SLOs」§5: Multiple Burn Rate Alerts。
+根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
 
 緩い SLO（例 90〜95%）を採る場合は 1 h / 2% の条件が発火しないことに注意する。
 
-> "consider a service that has a 90% availability target. Table 5-8 says to page when 2% of the error budget in a single hour is consumed. Because a 100% outage consumes only 1.4% of the budget in that hour, this alert could never fire."
-> 訳: availability target が 90% の service を考える。Table 5-8 は 1 時間で error budget の 2% を消費したら page せよと言う。100% の outage でもその 1 時間で budget の 1.4% しか消費しないので、この alert は決して発火しない。
+緩い SLO では短い alerting window の条件が構造上発火しないことがあるため、採用前に replay で確認する。
 
-出典: The Site Reliability Workbook Ch.5「Alerting on SLOs」§Extreme Availability Goals。
+根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
 
 low-traffic での誤発火を防ぐ原型として、比率と絶対数の両方を条件にし、最小持続時間を設ける SRE Book Ch.10 の例を参考にする。
 
-> "The following example creates an alert when the error ratio over 10 minutes exceeds 1% and the total number of errors exceeds 1 per second"
-> 訳: 次の例は、10 分間の error 比率が 1% を超え、かつ error の総数が毎秒 1 を超えた時に alert を作る。
-
-出典: SRE Book Ch.10「Practical Alerting from Time-Series Data」§Alerting。
+根拠: [SRE Book Ch.10「Practical Alerting from Time-Series Data」](https://sre.google/sre-book/practical-alerting/)。
 
 採用前に、project の evidence に対して候補の logic を replay し、event volume、event がない interval、telemetry gap、
 ingestion delay、alert precision、alert recall、detection time、reset time、運用対応能力を検証する。
@@ -378,9 +321,7 @@ ingestion delay、alert precision、alert recall、detection time、reset time�
 
 collection gap、eligible event の母集団を特定できない状態、query の不具合、timeout による censoring、
 warm と cold の semantics の混在、configuration boundary、必要な field の欠落により信頼できる評価ができない場合は、
-次のように記録する。
-
-> この SLO を信頼できる形で評価するための evidence が不足している。
+evidence record に「この SLO を信頼できる形で評価するための evidence が不足している」と記録する。
 
 欠落した telemetry を good event に分類しない。未検証の値から error budget の消費や回復を算出しない。
 利用可能な telemetry に合わせて SLO を変更しない。raw evidence の保持、影響期間の特定、測定の復旧、
@@ -424,13 +365,10 @@ policy の変更によって、過去の SLO の結果を遡って変更した�
 
 この節は Workbook の Example と同じく boilerplate であり、error budget に馴染みのない読者向けの要約である。
 
-> "Error budgets are the tool SRE uses to balance service reliability with the pace of innovation. Changes are a major source of instability, representing roughly 70% of our outages, and development work for features competes with development work for stability. The error budget forms a control mechanism for diverting attention to stability as needed."
-> 訳: error budget は、service の reliability と innovation の速度との balance を取るために SRE が使う道具である。変更は不安定さの主要な源であり、outage のおよそ 70% を占める。feature のための開発作業は安定性のための開発作業と競合する。error budget は、必要に応じて注意を安定性へ振り向ける control mechanism を成す。
->
-> "An error budget is 1 minus the SLO of the service. A 99.9% SLO service has a 0.1% error budget."
-> 訳: error budget は 1 から service の SLO を引いたものである。SLO が 99.9% の service は 0.1% の error budget を持つ。
+error budget は、SLO で定めた許容失敗量を使って、reliability と変更速度の優先順位を制御する。割合の定義と計算式は
+`slo-document.md` を正本とする。
 
-出典: The Site Reliability Workbook Appendix B「Example Error Budget Policy」§Background。
+根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 本 service での定義と計算式は [slo-document.md](./slo-document.md) の §error budget を参照する。
 
@@ -445,6 +383,7 @@ policy の変更によって、過去の SLO の結果を遡って変更した�
 
 ### 主な方法論上の根拠
 
+- [the Google SRE books（公式書籍一覧）](https://sre.google/books/)
 - [Introduction](https://sre.google/sre-book/introduction/)
 - [Embracing Risk](https://sre.google/sre-book/embracing-risk/)
 - [Service Level Objectives](https://sre.google/sre-book/service-level-objectives/)

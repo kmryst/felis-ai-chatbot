@@ -9,16 +9,13 @@ engineering decision にどう適用するかの正本である。規範的な�
 
 ## 位置づけ: iterate するための手順
 
-SRE Book Ch.4 は SLI / SLO を control loop の要素として置く。
+SLI を測定し、SLO と比較して必要な action を決め、実施結果を次の review へ戻す。この control loop を SLO 運用の基本とする。
 
-> "Monitor and measure the system's SLIs. / Compare the SLIs to the SLOs, and decide whether or not action is needed. / If action is needed, figure out what needs to happen in order to meet the target. / Take that action."
-> 訳: system の SLI を監視し測定する。SLI を SLO と比較し、action が必要かを決める。必要なら、target を満たすために何が起きる必要があるかを見極める。その action を取る。
-
-出典: SRE Book Ch.4「Service Level Objectives」§Control Measures。
+根拠: [SRE Book Ch.4「Service Level Objectives」](https://sre.google/sre-book/service-level-objectives/)。
 
 Workbook Ch.2 は、最初の SLI / SLO は正しくなくてよく、置いて測って feedback loop を作ることが最重要だと言う（slo-document.md「位置づけ」）。
-この runbook はその feedback loop の手順であり、slo-document.md の「原則 6」の 4 つの出口（Change your SLO / Change your SLI implementation /
-Institute an aspirational SLO / Iterate）へ review を接続する。
+この runbook はその feedback loop の手順であり、slo-document.md の「原則 6」の 4 つの出口（SLO target の変更 /
+SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ review を接続する。
 
 ## 現在の前提
 
@@ -66,7 +63,7 @@ SLO の決定項目ではなく、それぞれの正本に記録する（slo-doc
 | --- | --- | --- | --- |
 | threshold 1（最初の content event まで） | good event rule の時間条件。ADR-0028 決定 11。measurement timeout とは区別する | baseline の分布、丸め単位の選択理由 | 候補を比較し `slo-document.md` に記録する。client、dependency、distribution の変更後に review する |
 | threshold 2（content event 間、最後の content event → `done`） | 同上 | 同上 | 同上 |
-| SLO target（current） | eligible event のうち good event を求める割合。baseline を切り下げた starter SLO から始め、Table 2-5 SLO decision matrix で tighten / loosen を判断する | baseline、failure impact、dependency の composite 上限、切り下げ規則 | `slo-document.md` と Rationale に記録し、将来に向けてのみ revision する |
+| SLO target（current） | eligible event のうち good event を求める割合。baseline を切り下げた starter SLO から始め、Table 2-5 の decision matrix で厳格化 / 緩和を判断する | baseline、failure impact、dependency risk、切り下げ規則 | `slo-document.md` と Rationale に記録し、将来に向けてのみ revision する |
 | SLO target（aspirational） | current SLO より厳しく、policy の action を発動しない値 | current SLO の運用実績、client-side instrumentation の有無 | 任意。採用時は `slo-document.md` と policy に記録する |
 | Compliance period | SLO compliance と error budget を評価する期間。default は four-week rolling window | default から逸脱する場合に限り historical replay | `slo-document.md` に記録する |
 | Alerting window（alert look-back window） | 特定の alert が使用する data interval。compliance period とは異なる | effective な SLO、event volume、検出要件 | alert source に記録し policy から参照する |
@@ -133,10 +130,9 @@ resource name が変わった場合は、command の実行前に Terraform と A
 
 この手作業を 3 回目以降も手動で行う場合は automation の Issue を起票する。
 
-> "If you're performing a task for the first time ever, or even the second time, this work is not toil. Toil is work you do over and over."
-> 訳: ある作業を初めて、あるいは 2 回目に行うなら、それは toil ではない。toil とは何度も繰り返し行う作業である。
+同じ手作業が繰り返し必要になる場合は toil として扱い、automation を検討する。
 
-出典: SRE Book Ch.5「Eliminating Toil」§Toil Defined。
+根拠: [SRE Book Ch.5「Eliminating Toil」](https://sre.google/sre-book/eliminating-toil/)。
 
 ### classification の coverage を検証する
 
@@ -169,9 +165,8 @@ SSE の系列は ADR-0028 決定 9 の共有 contract fixture（[docs/contracts/
 gap distribution、unclassifiable record、timeout censoring、configuration change、warm / cold semantics を確認する。
 普遍的に適用できる sample size は定められていない。
 
-事前に宣言した基準を満たさない場合は、次のとおり記録し、無理に pass または fail と判定しない。
-
-> この SLO を信頼できる形で評価するための evidence が不足している。
+事前に宣言した基準を満たさない場合は、evidence record に「この SLO を信頼できる形で評価するための evidence が不足している」と記録し、
+無理に pass または fail と判定しない。
 
 判定は evidence record に、対象の decision または compliance period、事前に宣言した基準、結果（`sufficient` / `insufficient`）、
 coverage、gap、unclassifiable record、timeout censoring、configuration boundary、evidence への link とともに記録する。
@@ -213,34 +208,34 @@ SLO が effective になった後、次の順序で実施する。Status が `Dr
 | engineering action を決定する | 有効な measurement、user impact、残りの error budget、提案する作業の risk | policy の action（freeze の発動・解除・例外）と根拠 | evidence が矛盾する | 関連する Issue または PR と evidence record |
 | 調査する | 下記「調査順序」 | timeline、observation、否定した原因、evidence link | user、security、data への即時 risk を先に封じ込める必要がある | incident または evidence record |
 | hypothesis を立て controlled change を行い再測定する | 下記「hypothesis と controlled change」 | hypothesis、change identity、before / after の evidence | 安全性、rollback、attribution が不十分 | code、Terraform、ADR、Issue または PR |
-| SLI、SLO、policy を review する | Table 2-5 SLO decision matrix と 4 つの出口 | 維持または将来に向けた revision の decision | SLO miss だけが target を緩める根拠になっている | 該当する SLO document、policy、runbook |
+| SLI、SLO、policy を review する | Table 2-5 の decision matrix と 4 つの出口 | 維持または将来に向けた revision の decision | SLO miss だけが target を緩める根拠になっている | 該当する SLO document、policy、runbook |
 
-review の判断は Workbook Table 2-5「SLO decision matrix」を使う。SLO の達成状況、toil、customer satisfaction の 3 軸で action を決める。
+review の判断は Workbook Table 2-5 の三軸（SLO の達成状況、toil、customer satisfaction）を使う。
 
-| SLO | Toil | Customer satisfaction | Action（原文） | 訳 |
-| --- | --- | --- | --- | --- |
-| Met | Low | High | "Choose to (a) relax release and deployment processes and increase velocity, or (b) step back from the engagement and focus engineering time on services that need more reliability." | (a) release と deployment の手順を緩めて velocity を上げるか、(b) この engagement から手を引いて、より reliability を必要とする service に engineering の時間を向ける |
-| Met | Low | Low | "Tighten SLO." | SLO を締める |
-| Met | High | High | "If alerting is generating false positives, reduce sensitivity. Otherwise, temporarily loosen the SLOs (or offload toil) and fix product and/or improve automated fault mitigation." | alert が false positive を出しているなら感度を下げる。そうでなければ SLO を一時的に緩め（または toil を減らし）、product を直すか自動の fault mitigation を改善する |
-| Met | High | Low | "Tighten SLO." | SLO を締める |
-| Missed | Low | High | "Loosen SLO." | SLO を緩める |
-| Missed | Low | Low | "Increase alerting sensitivity." | alert の感度を上げる |
-| Missed | High | High | "Loosen SLO." | SLO を緩める |
-| Missed | High | Low | "Offload toil and fix product and/or improve automated fault mitigation." | toil を減らし、product を直すか自動の fault mitigation を改善する |
+| SLO | Toil | Customer satisfaction | 本 project で検討する action |
+| --- | --- | --- | --- |
+| 達成 | 低い | 高い | release / deployment の手順を見直して変更速度を上げる、または他の reliability 課題へ時間を振り向ける |
+| 達成 | 低い | 低い | SLO target を締める |
+| 達成 | 高い | 高い | false positive を減らす。必要なら一時的に SLO を緩めるか toil を減らし、product または自動 mitigation を改善する |
+| 達成 | 高い | 低い | SLO target を締める |
+| 未達 | 低い | 高い | SLO target を緩める |
+| 未達 | 低い | 低い | alerting の感度を上げる |
+| 未達 | 高い | 高い | SLO target を緩める |
+| 未達 | 高い | 低い | toil を減らし、product または自動 mitigation を改善する |
 
-出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Decision Making Using SLOs and Error Budgets、Table 2-5。
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)（Table 2-5）。
 
 本 project では customer satisfaction は project owner 自身の判断であり、その事実を review record に書く。
-「SLO miss だけを理由に緩めない」は維持するが、Missed / Low toil / High satisfaction なら緩めてよい経路を Table 2-5 は明示している。
+「SLO miss だけを理由に緩めない」は維持するが、SLO 未達・toil が低い・customer satisfaction が高い場合に
+緩める経路を Table 2-5 は示している。
 一時的な緩和に期限と恒久修正の計画を付ける形も、SLO revision の一形態として認める。
 
-> "we also temporarily dialed back our SLO target, using the 75th percentile request latency."
-> 訳: 我々はまた、75 パーセンタイルの request latency を使って、SLO target を一時的に引き下げた。
+一時的に target を緩める場合も、baseline、期限、恒久修正の計画を record に残す。
 
-出典: SRE Book Ch.6「Monitoring Distributed Systems」§Bigtable SRE: A Tale of Over-Alerting。
+根拠: [SRE Book Ch.6「Monitoring Distributed Systems」](https://sre.google/sre-book/monitoring-distributed-systems/)。
 
-review で coverage の不足が見つかった場合の出口は slo-document.md「原則 6」の 4 つ（Change your SLO / Change your SLI implementation /
-Institute an aspirational SLO / Iterate）であり、最初の数回は "err on the side of quicker and cheaper"（訳: より速く安い方に倒す）を選ぶ。
+review で coverage の不足が見つかった場合の出口は slo-document.md「原則 6」の 4 つ（SLO target の変更 /
+SLI implementation の変更 / aspirational SLO の設定 / 反復改善）であり、最初の数回は低コストで早く検証できる改善を優先する。
 
 ## 調査順序
 
@@ -399,6 +394,7 @@ page を発生させなかった incident ほど monitoring の gap を示すと
 
 ### 方法論の primary source
 
+- [the Google SRE books（公式書籍一覧）](https://sre.google/books/)
 - [Introduction](https://sre.google/sre-book/introduction/)
 - [Service Level Objectives](https://sre.google/sre-book/service-level-objectives/)
 - [Embracing Risk](https://sre.google/sre-book/embracing-risk/)
