@@ -5,6 +5,7 @@
 | 項目 | 値 |
 | --- | --- |
 | Status | Draft |
+| SLO Version | 未定（Status を Published にする時に記入） |
 | Author | project owner（kmryst） |
 | Date | 2026-09-07 |
 | Reviewers | project owner |
@@ -21,8 +22,7 @@ Workbook が 3 役を分けて記録させる理由は technical accuracy の確
 
 出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§Documenting the SLO and Error Budget Policy。
 
-Status `Draft` は Workbook の Example に無い値（Example は `Published` のみ）だが一般語であり、
-数値が空欄で [error-budget-policy.md](./error-budget-policy.md) の action を発動できない状態を表す。
+Status `Draft` は、数値が空欄で [error-budget-policy.md](./error-budget-policy.md) の action を発動できない状態を表す。
 
 ## 位置づけ: 最初の iteration
 
@@ -38,8 +38,8 @@ Status `Draft` は Workbook の Example に無い値（Example は `Published` �
 出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§What to Measure: Using SLIs、§Improving the Quality of Your SLO。
 
 したがってこの改訂は、(1) the Google SRE books の大原則を明文化し、(2) そこからこの service に何が導かれるかを導出し、(3) 導出結果を
-Workbook Appendix A「Example SLO Document」の形（Service Overview → SLIs and SLOs → Rationale → Error Budget →
-Clarifications and Caveats）に流し込む。安い implementation（authenticated synthetic transaction）から始め、
+Workbook Appendix A「Example SLO Document」の節構成（Service Overview → SLIs and SLOs → Rationale → Error Budget →
+Clarifications and Caveats）に流し込む。見出しは既存の運用文書に合わせて日本語で置き、対応する Workbook の節名を各見出しに併記する。安い implementation（authenticated synthetic transaction）から始め、
 実測後に「原則 6」の 4 つの出口で見直す。原則から導けない項目は無理に埋めず未決定のまま残す。
 
 SLO 採用後の engineering decision は [error-budget-policy.md](./error-budget-policy.md)、
@@ -169,7 +169,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 | 原則 | この service への帰結 | 決まったこと | 未決定のまま残すこと |
 | --- | --- | --- | --- |
 | 1 測定は user に近いほど良い | measurement point は supported client boundary。ingress log と application log は client 側の DNS、TLS、parse、render を観測できないので診断に限る | measurement point | — |
-| 1 取れないなら proxy | 実利用が無いので client-side instrumentation は event を生まない。authenticated synthetic transaction（black-box monitoring の層）を proxy として primary SLI implementation に採る。限界（real user の分布を表さない、撤回の UI 挙動は検証できない）は Clarifications and Caveats に書く | SLI implementation の方式 | payload / identity / location / schedule / measurement timeout の値 |
+| 1 取れないなら proxy | 実利用が無いので client-side instrumentation は event を生まない。authenticated synthetic transaction（black-box monitoring の層）を proxy として primary SLI implementation に採る。限界（real user の分布を表さない、撤回の UI 挙動は検証できない）は §補足と留意点に書く | SLI implementation の方式 | payload / identity / location / schedule / measurement timeout の値 |
 | 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ | schema / tool / version |
 | 3 少なく単純に、request-driven は availability と latency | availability と latency は両方要る。ただし ADR-0028 決定 11 が両者を 1 つの比率（threshold 超過を policy として error に数える）に畳んでおり、これを 1 本の SLI とする。`done` 到達率は availability の diagnostic として別に持ち、SLO を増やさない | SLI の本数 | — |
 | 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | threshold 1 / threshold 2 の値、SLO target |
@@ -179,7 +179,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 
 以下は、この導出結果を Workbook Appendix A の形に流し込んだものである。
 
-## Service Overview
+## サービス概要（Service Overview）
 
 対象とするサービス体験は、supported client と認証済みの `POST /chat` endpoint で構成される RAG chatbot の操作である。
 `POST /chat` の response は [ADR-0028](../../adr/0028-chat-sse-response-contract.md) が定める SSE stream
@@ -196,7 +196,7 @@ backend image は `backend:sha-b6d90f7` で、deployment 済み image と `main`
 
 release は PR のマージ（GitHub Actions による image build と deployment）であり、Terraform apply はユーザー承認後に手動で行う。
 
-### User
+### ユーザー
 
 現在の intended user は、Easy Auth（Entra ID）で認証し、アプリのロール `Chat.Use` を割り当てられたアカウントから chatbot を
 操作する project owner である。`Chat.Use` の割当は 2026-09-02 時点で所有者 1 アカウントのみで、他のアカウントは `AADSTS50105` で
@@ -239,7 +239,7 @@ semantic correctness は application test と、将来必要になった quality
 
 SLO は **four-week rolling window** を compliance period とする（暫定。Rationale 参照）。
 
-## SLIs and SLOs
+## SLI と SLO（SLIs and SLOs）
 
 | Category | SLI | SLO（current） | SLO（aspirational） |
 | --- | --- | --- | --- |
@@ -325,7 +325,6 @@ eligible population または outcome を再構築できない場合は、SLO �
 primary SLI implementation は **authenticated synthetic transaction** とする（導出の原則 1）。intended user を模擬する
 identity（synthetic 用 service principal。[entra-easy-auth-setup.md](../entra-easy-auth-setup.md)）で supported client と同じ経路
 （BFF 経由）の `POST /chat` を周期的に実行し、ADR-0028 決定 9 の共有 fixture で検証した verifier が SSE stream を good / bad に分類する。
-verifier は分類コンポーネントの名前であり、測定方式の意味では使わない。
 
 | Data source | 観測できるもの | この SLI に対する limitation | 状態 |
 | --- | --- | --- | --- |
@@ -357,14 +356,14 @@ supported client には時間ベースの timeout がなく（#199 で `REQUEST_
 
 | 項目 | 決まったこと | 空欄 | 記入先 |
 | --- | --- | --- | --- |
-| threshold 1 / threshold 2 | semantics（ADR-0028 決定 11） | 値 | SLIs and SLOs |
-| SLO target（current） | baseline を切り下げた starter SLO | 値 | SLIs and SLOs と Rationale |
+| threshold 1 / threshold 2 | semantics（ADR-0028 決定 11） | 値 | §SLI と SLO |
+| SLO target（current） | baseline を切り下げた starter SLO | 値 | §SLI と SLO と §根拠 |
 | SLO target（aspirational） | 任意。policy の action を発動しない | 値と採否 | 同上と policy |
 | SLI implementation | authenticated synthetic transaction | schema / tool / version、payload / identity / location / schedule | SLI implementation |
 | Measurement frequency / measurement timeout | 上下限の決め方 | 値 | 同上 |
 | Alerting window と burn rate | Workbook Table 5-8 を starting point。ticket のみ | 値 | policy と alert source |
 
-## Rationale
+## 根拠（Rationale）
 
 数値は synthetic transaction による baseline の後に、Workbook の Example と同じ文型で記入する。
 
@@ -393,20 +392,42 @@ supported client には時間ベースの timeout がなく（#199 で `REQUEST_
 - review cadence（monthly → quarterly）: 原則 6 の引用のとおり。安定の目安は暫定で「3 回連続で revision 不要」とする
 - Revisit Date（Approval + 6 か月）: Example は約 1 年後だが、本 service は数値が空欄で最初の baseline 後に見直しが確実に要るため短くする
 
-## Error Budget
+## error budget（Error Budget）
 
 各 objective は個別の error budget を持ち、100% から target を引いた値と定義する。直近の four-week rolling window の
-eligible synthetic transaction が N 件、current SLO target が p% なら、error budget は N × (1 − p / 100) 件の bad event である。
-request-based の単位で扱い、downtime minutes に変換しない。
+eligible synthetic transaction が N 件、current SLO target が p% の場合、error budget は request-based の event 数として
+次のように計算する。downtime minutes に変換しない。
+
+```text
+許容する bad event の割合 = 1 − (SLO target / 100)
+
+許容する bad event 数 = eligible event 数 × 許容する bad event の割合
+
+残りの error budget = 許容する bad event 数 − 観測した bad event 数
+```
 
 > "Each objective has a separate error budget, defined as 100% minus (–) the goal for that objective. ... We will enact the error budget policy (see Example Error Budget Policy) when any of our objectives has exhausted its error budget."
 > 訳: 各 objective は個別の error budget を持ち、100% からその objective の goal を引いた値と定義する。（中略）いずれかの objective が error budget を使い切った時、error budget policy を発動する。
 
 出典: The Site Reliability Workbook Appendix A「Example SLO Document」§Error Budget。
 
+### 有効化の条件
+
+current SLO とその error budget は、次のすべてを満たした `Published` SLO Version についてだけ有効になる。
+
+- ヘッダ表に SLO Version と Approval Date が記入されている
+- current SLO target と compliance period が記入されている
+- SLI implementation、schema、query または tool の version、validation evidence への link が記録されている
+
+SLO Version は、承認した SLI specification、current SLO target、compliance period の組合せを識別する。これらを変更する時は
+新しい SLO Version を記録する。effective boundary は Approval Date から開始し、過去の event には遡及しない。
+
+各 compliance period の評価では、[slo-review-runbook.md](./slo-review-runbook.md) の「evidence が十分かを確認する」で
+`sufficient` と記録された evidence だけを使用する。`Draft`、または evidence が `insufficient` の期間については、
+SLO compliance、残りの error budget、[error-budget-policy.md](./error-budget-policy.md) の action を計算または発動しない。
+
 current SLO の error budget が枯渇した時に [error-budget-policy.md](./error-budget-policy.md) を発動する。aspirational SLO の
-budget は追跡するが policy を発動しない。effective SLO target、compliance period、validated measurement が揃うまで
-effective error budget は存在せず、Status が `Draft` の間は計算しない。
+budget は追跡するが policy を発動しない。
 
 low-traffic の注意: 分母が synthetic transaction の件数 N なので、N が小さいと単一の bad event が budget の大きな割合を消費する。
 
@@ -417,7 +438,7 @@ low-traffic の注意: 分母が synthetic transaction の件数 N なので、N
 
 したがって measurement frequency と SLO target は一緒に決める。
 
-## Clarifications and Caveats
+## 補足と留意点（Clarifications and Caveats）
 
 ### synthetic transaction は proxy であり、次が見えない
 
@@ -492,7 +513,7 @@ dependency 起因の bad event も error budget を消費する。
 
 出典: SRE Book Ch.3「Embracing Risk」§Benefits。
 
-dependency 起因の SLO miss への対応は [error-budget-policy.md](./error-budget-policy.md) の SLO Miss Policy に記録する。
+dependency 起因の SLO miss への対応は [error-budget-policy.md](./error-budget-policy.md) の §SLO miss 時の対応に記録する。
 
 ### Warm / cold の series boundary
 
@@ -541,7 +562,7 @@ SLO の体裁を整えるためだけに決定項目を増やさない（原則 
 
 ## 変更履歴
 
-ヘッダ表の Date / Approval Date / Revisit Date と Status が SLO の version と effective boundary を表す。最初の採用時に
+ヘッダ表の SLO Version、Approval Date、Revisit Date と Status が SLO の version と effective boundary を表す。最初の採用時に
 SLI implementation version、query または tool version、supporting evidence の link をあわせて記録する。
 
 | 日付 | 変更内容 | 定量的 decision |

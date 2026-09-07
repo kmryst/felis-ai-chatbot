@@ -51,7 +51,7 @@ Institute an aspirational SLO / Iterate）へ review を接続する。
 | compliance period を確認する | 暫定値（four-week rolling window） | rolling か calendar か、週の整数倍かを確認し、逸脱する場合に限り理由と historical replay を記録する | 確定した compliance period | default から逸脱する場合に限り historical replay または baseline analysis | window が週の整数倍でない、または rolling / calendar の選択理由が無い場合に停止する。Workbook の default を採ることは停止理由にしない | 暫定値あり |
 | measurement frequency と measurement timeout を決める | implementation の試行結果、cost | frequency は cost の上限と error budget の粒度の下限の間で選ぶ。measurement timeout は threshold 2 より長くし、censoring の影響を確認する | configuration と根拠 | 試行、gap analysis、censoring analysis、cost | 設定によって SLI の意味が変わる、または報告されない censoring が生じるなら停止する | 未着手 |
 | error budget と policy の適用方法を確認する | SLO と compliance period の案 | request-based error budget を導出し、policy の action（critical path 限定 freeze）が実行可能であることを scenario walkthrough で確認する | error budget の計算と適用する policy | event 単位の計算、scenario walkthrough | error budget を downtime に変換している場合、または policy の action を実行できない場合は停止する | policy は暫定で記録済み |
-| SLO を承認して記録する | 完成した案と validation evidence | ヘッダ表（Status / Author / Date / Reviewers / Approvers / Approval Date / Revisit Date）を記入し、Status を `Published` にする | 将来に向けて effective になる SLO | review record と関連 evidence | 定量項目に Rationale がなければ停止し、過去へ遡って適用しない | 未着手 |
+| SLO を承認して記録する | 完成した案、validation evidence、evidence sufficiency decision | ヘッダ表（Status / SLO Version / Author / Date / Reviewers / Approvers / Approval Date / Revisit Date）を記入し、Status を `Published` にする | 将来に向けて effective になる SLO | review record、関連 evidence、`sufficient` の判定 | 定量項目に Rationale がない、evidence が `insufficient`、または SLO Version / Approval Date が未記入なら停止する。過去へ遡って適用しない | 未着手 |
 | 測定を開始する | effective な SLO と検証済みの implementation | 承認済みの収集を開始し、raw evidence の到着を確認して最初の evidence record を作成する | 収集開始を確認した evidence | 最初の record、収集状態、deployment / configuration identity | 収集または classification が承認済みの implementation と一致しなければ compliance の報告を停止する | 未着手 |
 
 ## 定量値の決定手順
@@ -172,6 +172,11 @@ gap distribution、unclassifiable record、timeout censoring、configuration cha
 事前に宣言した基準を満たさない場合は、次のとおり記録し、無理に pass または fail と判定しない。
 
 > この SLO を信頼できる形で評価するための evidence が不足している。
+
+判定は evidence record に、対象の decision または compliance period、事前に宣言した基準、結果（`sufficient` / `insufficient`）、
+coverage、gap、unclassifiable record、timeout censoring、configuration boundary、evidence への link とともに記録する。
+最初の `Published` SLO には、SLI implementation validation と baseline の両方について `sufficient` の判定が必要である。
+その後も、`insufficient` と判定した compliance period の SLO compliance、error budget、policy action は報告または発動しない。
 
 ## 測定と評価
 
@@ -387,10 +392,8 @@ review cadence は立ち上げ期 monthly、安定後 quarterly（暫定）。ca
 - burn rate alerting を採用し、noise が多い、incident を見逃す、または action に必要な event volume がない
 - aspirational SLO を current SLO に昇格する条件（current SLO の運用実績と client-side instrumentation の有無）が揃った
 
-> "postmortems that did not trigger a page are even more valuable, as they likely point to clear monitoring gaps."
-> 訳: page を発生させなかった postmortem はいっそう価値がある。明確な monitoring の gap を指していることが多いからである。
-
-出典: SRE Book Ch.1「Introduction」§Ensuring a Durable Focus on Engineering。
+page を発生させなかった incident ほど monitoring の gap を示すという趣旨と、その引用は
+[error-budget-policy.md](./error-budget-policy.md) の §outage 時の対応 を正本とする。
 
 ## 参考資料
 
