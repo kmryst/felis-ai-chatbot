@@ -44,7 +44,7 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 | SLI implementation を実装し検証する | 選んだ方式 | payload、identity、location、schedule、measurement timeout を決め、下記「SLI implementation の検証」を通す | schema、tool、version、validation evidence | prototype record と field 単位の coverage | 必須 case が誤分類されるか、暗黙に失われるなら有効化を停止する | 未着手 |
 | baseline を収集する | 検証済みの implementation | four-week rolling window と同じ長さ以上の期間、raw event、execution coverage、gap、configuration boundary を保存する。この期間は compliance period ではない | 再現可能な baseline evidence | raw record、tool version、timestamp、revision、image、configuration | eligible event または measurement coverage を確認できなければ停止する | 未着手 |
 | threshold 1 / threshold 2 を提案する | baseline evidence（それぞれの分布） | 観測 percentile を単位で丸めて starter 値とし、測定期間・丸め単位・「user experience との相関は未検証」を Rationale に記録する | 根拠を伴う threshold 1 / threshold 2 の案 | 分布と丸め規則 | current timeout や platform 制約（ingress idle timeout 等）だけが根拠なら停止する。baseline の観測 percentile を丸めて starter 値とすること自体は停止理由にしない | 未着手 |
-| SLO target を提案する | baseline evidence と threshold の案 | baseline を切り下げて starter SLO とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の案 | 切り下げ規則、dependency の composite 上限との比較 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
+| SLO target を提案する | baseline evidence と threshold の案 | baseline を切り下げて starter SLO とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の案 | 切り下げ規則、dependency risk の評価 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
 | compliance period を確認する | 暫定値（four-week rolling window） | rolling か calendar か、週の整数倍かを確認し、逸脱する場合に限り理由と historical replay を記録する | 確定した compliance period | default から逸脱する場合に限り historical replay または baseline analysis | window が週の整数倍でない、または rolling / calendar の選択理由が無い場合に停止する。Workbook の default を採ることは停止理由にしない | 暫定値あり |
 | measurement frequency と measurement timeout を決める | implementation の試行結果、cost | frequency は cost の上限と error budget の粒度の下限の間で選ぶ。measurement timeout は threshold 2 より長くし、censoring の影響を確認する | configuration と根拠 | 試行、gap analysis、censoring analysis、cost | 設定によって SLI の意味が変わる、または報告されない censoring が生じるなら停止する | 未着手 |
 | error budget と policy の適用方法を確認する | SLO と compliance period の案 | request-based error budget を導出し、policy の action（critical path 限定 freeze）が実行可能であることを scenario walkthrough で確認する | error budget の計算と適用する policy | event 単位の計算、scenario walkthrough | error budget を downtime に変換している場合、または policy の action を実行できない場合は停止する | policy は暫定で記録済み |
@@ -295,8 +295,8 @@ measurement、application、platform を確認した後に限り、次を review
 - reliability とコストの trade-off に根拠があるか
 - risk tolerance、architecture、dependency、service scope が変わったか
 - incident または user impact が error budget の消費に反映されていないか
-- current performance を limit と誤認しているのではなく、実在する dependency constraint（slo-document.md「Critical dependency と
-  composite 上限」）のためにのみ SLO を達成できないのか
+- current performance や dependency の composite の参考値を SLO target の上限と誤認していないか。SLO 未達の原因に実在する
+  dependency constraint がある場合は、その evidence と対策を記録しているか
 
 ## hypothesis と controlled change
 
