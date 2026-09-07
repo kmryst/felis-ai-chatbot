@@ -129,6 +129,10 @@ az monitor diagnostic-settings list \
   --output json
 ```
 
+上の query が返す `probes` は、Terraform に probe の定義が無い場合、Azure が ingress 有効化時に
+付与した default の TCP probe である。default による付与か明示定義かを区別して evidence に
+記す（後述の「Platform の確認」）。
+
 resource name が変わった場合は、command の実行前に Terraform と Azure resource inventory から
 resolve する。environment variable を抽出する query は、測定の解釈に必要な
 non-secret configuration だけを表示する。
@@ -148,12 +152,21 @@ source version で確認する。checkout の code だけから runtime の既�
 - intended interaction に対する誤った authentication または authentication の欠落
 - request が FastAPI に到達する前の failure
 - application、database、LLM または provider の failure
-- SLI threshold の案より遅い response
+- `error` event での終端（class 別: `timeout` / `rate_limit` / `server_error` / `bad_request` /
+  `content_filter`）
+- 終端 event（`done` / `error`）なしの切断
+- 最初の content event が threshold 1 の案を超えた response
+- content event 間、または最後の content event から `done` までの間隔が threshold 2 の案を
+  超えた response
+- `content_filter` 終端で表示済み partial text の撤回を伴う系列
 - client timeout と measurement timeout
 - 不正または欠落した telemetry
 - exclusion とする user 以外の traffic、または事前に宣言した test traffic
 - collection の中断と再開
 - deployment または measurement version の boundary
+
+SSE の系列は、ADR-0028 決定 9 の共有 contract fixture
+（[docs/contracts/chat-sse/README.md](../../contracts/chat-sse/README.md)）を test input に使う。
 
 各 path について、期待する eligibility と outcome、観測した field、実際の classification、
 timestamp、raw record を保存する。必須 path が失われる、誤分類される、または識別不能な場合は
@@ -272,9 +285,17 @@ Microsoft Azure の terminology と current configuration に基づき、次を�
 readiness probe は、replica が request を処理できる準備状態を示す signal であり、
 critical user journey の成功を証明するものではない。
 
-現在の Terraform と Azure runtime には明示的な HTTP probe がない。application の `/readyz`
-endpoint と、それを呼び出す GitHub Actions workflow を、Azure Container Apps の
-`readiness probe` とみなさない。
+Terraform には probe の定義がない。Azure Container Apps は ingress が有効な container app の
+main container に、probe 種別ごとの定義が無ければ default の **TCP probe**（startup /
+readiness / liveness。port は ingress の target port）を自動付与する。したがって現在の runtime
+には TCP の default probe があり、HTTP probe は定義されていない。
+`az containerapp show --query 'properties.template.containers[0].probes'` の出力で確認し、
+default による付与か明示定義かを evidence に記す。
+
+TCP probe は port が listen していることしか確認せず、application の `/readyz` も critical user
+journey も観測しない。application の `/readyz` endpoint と、それを呼び出す GitHub Actions
+workflow は Azure Container Apps の `readiness probe` ではなく、この SLI の implementation でも
+ない。
 
 ### SLO の妥当性
 
@@ -395,6 +416,8 @@ Review frequency は未決定であり、上記の手順で選択する。将来
 - [Implementing SLOs](https://sre.google/workbook/implementing-slos/)
 - [Monitoring](https://sre.google/workbook/monitoring/)
 - [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/)
+- [Example SLO Document](https://sre.google/workbook/slo-document/)
+- [Example Error Budget Policy](https://sre.google/workbook/error-budget-policy/)
 
 ### platform guidance と cross-check
 
@@ -406,3 +429,8 @@ Review frequency は未決定であり、上記の手順で選択する。将来
 - [Health probes in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/health-probes)
 - [\[O.SI.5\] Set and monitor service level objectives against performance standards](https://docs.aws.amazon.com/wellarchitected/latest/devops-guidance/o.si.5-set-and-monitor-service-level-objectives-against-performance-standards.html)
 - [REL06-BP06 Regularly review monitoring scope and metrics](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel_monitor_aws_resources_review_monitoring.html)
+
+### project の根拠資料
+
+- [ADR-0028: /chat の SSE 化と応答契約の固定](../../adr/0028-chat-sse-response-contract.md)
+- [`/chat` SSE 共有 contract fixture](../../contracts/chat-sse/README.md)

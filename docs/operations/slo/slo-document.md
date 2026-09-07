@@ -20,6 +20,12 @@ revision の手順は [slo-review-runbook.md](./slo-review-runbook.md) を正本
 対象とするサービス体験は、supported client と認証済みの `POST /chat` endpoint で
 構成される RAG chatbot の操作である。
 
+`POST /chat` の response は [ADR-0028](../../adr/0028-chat-sse-response-contract.md) が定める
+SSE stream（`message` / `notice` / `error` / `done` event）であり、supported client は有効な終端
+event である `done` を受信するまで応答を確定しない。以下ではこの文書を通して、`message` と
+`notice` をあわせて content event と呼ぶ。event の data schema と `error` event の class 識別子は
+[docs/contracts/chat-sse/README.md](../../contracts/chat-sse/README.md) を正本とする。
+
 構成は 2026-09-01〜09-02 に変わった。supported client は Azure Container Apps に
 deployment された frontend（`ca-felisaichatbot-dev-front`。Easy Auth 付き）であり、
 client は BFF（`POST /api/chat`）だけを呼ぶ。backend は internal ingress で、
@@ -57,9 +63,11 @@ contract、user expectation、failure impact、risk tolerance を記録する。
 ## Critical user journey
 
 intended user が、認証済みの supported client から構文上有効で supported な質問を送信し、
-client が render できる response を受け取る。no-context notice は application が意図した安全動作
-なので、client が受信して render できれば journey は完了している。client が response を
-parse または render できなければ、transport response が返っただけでは完了としない。
+有効な終端 event（`done`）まで response stream を受信して parse / render できる。no-context
+notice は application が意図した安全動作なので、`notice` → `done`（ADR-0010 の guard 経路）を
+受信して render できれば journey は完了している。client が stream を parse または render
+できなければ、transport response が返っただけでは完了としない。`error` event は有効な終端
+event ではないため、`error` で終端した stream は journey を完了していない。
 
 Semantic correctness は application test と、将来必要になった quality evaluation の
 手順で評価する。HTTP success から semantic correctness を推定せず、根拠のない別の
@@ -67,9 +75,37 @@ SLO として追加しない。
 
 ## SLI specification
 
-primary SLI specification は、eligible user request のうち、SLI threshold 以内に
-critical user journey を完了した request の割合である。SLI threshold は未決定なので、
-現時点ではこの比率から SLO compliance を判定できない。
+primary SLI specification は、eligible event のうち、supported client が最初の content event を
+threshold 1 以内に受信し、以後の content event の間隔、および最後の content event から有効な
+終端 event までの間隔が threshold 2 を超えることなく、有効な終端 event を受信して parse /
+render できたものの割合である。この measurement semantics は ADR-0028 決定 11 の prospective
+decision を正本化したものである。
+
+threshold 2 は content event 間だけでなく、最後の content event から終端 event までの区間にも
+適用する。content event が 1 件の stream（guard 経路の `notice` → `done`）で間隔条件が空適用に
+ならず、journey の完了までを有界に保つためである。
+
+threshold 1 と threshold 2 は未決定なので、現時点ではこの比率から SLO compliance を判定
+できない。
+
+疑似コードで書くと次のとおりである。
+
+```text
+count of eligible "chat" events which
+  received the first content event within threshold 1
+  and every subsequent gap (content -> content, last content -> done)
+      was within threshold 2
+  and terminated with a `done` event
+  and were parsed and rendered by the supported client
+divided by
+count of all eligible "chat" events
+```
+
+availability と latency を別々の SLI に分けず 1 本の比率に畳むのは、threshold を超えた
+response を policy として error とみなす扱いに従うためである。TTFT（time to first token）は
+Azure OpenAI への request から最初の生成 token までを指す diagnostic metric であり、
+threshold 1 が測る supported client boundary の「最初の content event まで」とは別の量である。
+両者を同じ名前で呼ばない（ADR-0028 決定 11）。
 
 ### Eligible event
 
@@ -88,10 +124,16 @@ intended user の authentication failure や routing failure が exclusion と�
 
 ### Good event
 
-eligible event のうち、supported client が文書化された response contract に合う response を
-SLI threshold 以内に受信し、parse して render できたものだけを good event とする。
-normal chatbot reply と意図した no-context notice は、どちらもこの条件を満たせば
-good event である。
+eligible event のうち、次の 4 条件をすべて満たすものだけを good event とする。
+
+- 最初の content event を threshold 1 以内に受信した
+- 以後の content event の間隔、および最後の content event から終端 event までの間隔が
+  threshold 2 を超えなかった
+- 有効な終端 event である `done` で終端した
+- supported client が stream を parse して render できた
+
+normal chatbot reply（`message` 列 → `done`）と意図した no-context notice（`notice` → `done`）は、
+どちらもこの条件を満たせば good event である。
 
 ### Bad event
 
@@ -102,12 +144,26 @@ intended interaction に影響する次の failure を含む。
 - authentication、routing、configuration の failure
 - server error または dependency failure
 - malformed response または response data の欠落
-- SLI threshold を超えて到着した response
+- `error` event で終端した stream。class は問わない（`timeout` / `rate_limit` / `server_error` /
+  `bad_request` / `content_filter`。識別子の正本は
+  [docs/contracts/chat-sse/README.md](../../contracts/chat-sse/README.md)）
+- `content_filter` 終端のうち、表示済み partial text の撤回を伴うもの（ADR-0028 決定 6 の
+  撤回契約）。撤回が起きても bad event であることは変わらない
+- 終端 event（`done` / `error`）なしに終了した stream（ADR-0028 決定 2 の失敗系列。
+  Azure Container Apps ingress の idle timeout による切断を含む）
+- 最初の content event が threshold 1 を超えて到着したもの
+- content event 間、または最後の content event から `done` までの間隔が threshold 2 を
+  超えたもの
 - qualifying response を観測する前に発生した client timeout または measurement timeout
-- supported client が parse または render できない response
+- supported client が parse または render できない stream
 
 intended user の request は、application code へ到達する前に失敗したことを理由に
 ineligible にしない。
+
+ADR-0028「本改訂で閉じない論点」が SLO 側に委ねた、単数形 `content_filter_result` の `error`
+による間欠的な `content_filter` 終端（再実行で再現しない系列）は、fail-closed の結果として
+bad event に分類する。分類はここで確定させ、発生頻度と error budget への影響は最初の baseline
+の review 項目として記録する。
 
 ### Exclusion
 
@@ -197,14 +253,21 @@ execution が発生した evidence ではない。
 
 ### Timeout
 
-SLI measurement に用いる measurement timeout、client timeout、request timeout は
-未決定であり、それぞれ SLI threshold とは意味が異なる。
+SLI measurement に用いる measurement timeout は未決定であり、threshold 1 / threshold 2 とは
+意味が異なる。measurement timeout は right-censoring を決める値なので、threshold 2 より
+長くなければならない。
 
-現在の configuration であり、target または recommendation ではない事実として、local
-frontend は `REQUEST_TIMEOUT_MS` を `15_000 ms` に設定している。別経路の `/readyz` workflow は
-`curl --max-time 30`（30 秒）を使用する。backend には `/chat` 全体を終了させる request timeout は
-なく、database と LLM の個別 timeout および retry configuration はさらに別の layer にある。
-これらの値と経路から、将来の `/chat` SLI threshold または measurement timeout を正当化
+現在の configuration であり、target または recommendation ではない事実として、supported client
+には時間ベースの timeout がない。#199 の SSE 化で単一の全体 timeout（`REQUEST_TIMEOUT_MS`）は
+廃止されており、client 側の打ち切りは `AbortController` によるユーザー操作（停止ボタン）だけで
+ある（`frontend/app/chat.tsx`。ADR-0028「影響」）。threshold 1 / threshold 2 の値が決まった後に
+client 側へどう組み込むかは実装 PR で決め、この文書から参照する。
+
+別経路の `/readyz` workflow は `curl --max-time 30`（30 秒）を使用する。backend には `/chat`
+全体を終了させる request timeout はなく、database と LLM の個別 timeout および retry
+configuration はさらに別の layer にある。Azure Container Apps ingress の idle timeout（既定
+240 秒。#183 でアイドル timeout として振る舞うことを実測）は platform 側の設定である。
+これらの値と経路から、将来の `/chat` threshold または measurement timeout を正当化
 してはならない。
 
 候補となる timeout は、censoring、resource use、dependency behavior、supported-client
@@ -241,7 +304,7 @@ evidence、trade-off、decision criteria を確認し、prospective に記録す
 | SLI implementation | 未決定 | measurement point、schema、query または tool、version、limitation をこの文書に記録する |
 | Measurement frequency | 未決定 | scheduler configuration と achieved coverage を分けてこの文書と evidence に記録する |
 | Measurement timeout | 未決定 | SLI threshold、client timeout、request timeout と区別してこの文書に記録する |
-| Client timeout | 現在の frontend の値はあるが、将来の decision は未決定 | client configuration とこの文書に記録する |
+| Client timeout | supported client に時間ベースの timeout はなく（#199）、将来の decision は未決定 | client configuration とこの文書に記録する |
 | Request timeout | `/chat` 全体の現在の設定はなく、将来の decision は未決定 | 実装する各 layer に記録し、この文書から参照する |
 | Synthetic transaction configuration | 採用の要否を含め未決定 | 採用する場合は payload、identity、location、outcome、schema、tool、exclusion、limitation をこの文書に記録する |
 | Evaluation period / alert look-back window | applicable な evaluation または alert の採用時に決定 | product と用途ごとの意味を query または alert source に記録し、compliance period と同じ期間を指す場合も関係を明示する |
@@ -339,6 +402,7 @@ compliance を確実に判定することはできない。必要な SLI impleme
 | 日付 | 変更内容 | 定量的 decision |
 | --- | --- | --- |
 | 2026-08-30 | user-facing SLI specification、現在の evidence boundary、将来の decision procedure を記録。日本語化と正本間の責任分担を整理 | なし。新しい定量値はすべて未決定 |
+| 2026-09-07 | ADR-0028 決定 11 の 2 閾値 measurement semantics を正本化。response contract を SSE 契約への参照に差し替え、bad event の列挙を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正 | なし。threshold 1 / threshold 2 を含む定量値はすべて未決定 |
 
 ## 参考資料
 
@@ -359,7 +423,12 @@ compliance を確実に判定することはできない。必要な SLI impleme
 
 ### Project の根拠資料
 
+- [ADR-0028: /chat の SSE 化と応答契約の固定](../../adr/0028-chat-sse-response-contract.md)
+- [ADR-0027: frontend の Azure デプロイと公開面の構成（Easy Auth + BFF + backend internal ingress）](../../adr/0027-frontend-azure-deployment-and-public-surface.md)
 - [ADR-0025: serving を min_replicas 1 へ変更し cold start による可用性 SLI の汚染を排除する](../../adr/0025-serving-min-replicas-1-for-sli-integrity.md)
+- [`/chat` SSE 共有 contract fixture](../../contracts/chat-sse/README.md)
+- [Azure OpenAI streaming の実測記録](../../verification/azure-openai-stream/observations.md)
+- [Easy Auth 付き Container App の実測記録](../../verification/easy-auth-container-app/observations.md)
 - [フェーズ 1（低負荷ベースライン 72h）の実測記録](../../verification/observation-phase1/observations.md)
 - [Issue #115: 外形監視の SLI 限定とコールドスタートコストの実測](https://github.com/kmryst/felis-ai-chatbot/issues/115)
 - [Terraform serving configuration](../../../terraform/ephemeral/main.tf)
