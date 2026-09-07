@@ -37,7 +37,7 @@ Status `Draft` は Workbook の Example に無い値（Example は `Published` �
 
 出典: The Site Reliability Workbook Ch.2「Implementing SLOs」§What to Measure: Using SLIs、§Improving the Quality of Your SLO。
 
-したがってこの改訂は、(1) 3 冊の大原則を明文化し、(2) そこからこの service に何が導かれるかを導出し、(3) 導出結果を
+したがってこの改訂は、(1) Site Reliability Engineering (2016) と The Site Reliability Workbook (2018) の大原則を明文化し、(2) そこからこの service に何が導かれるかを導出し、(3) 導出結果を
 Workbook Appendix A「Example SLO Document」の形（Service Overview → SLIs and SLOs → Rationale → Error Budget →
 Clarifications and Caveats）に流し込む。安い implementation（authenticated synthetic transaction）から始め、
 実測後に「原則 6」の 4 つの出口で見直す。原則から導けない項目は無理に埋めず未決定のまま残す。
@@ -45,7 +45,7 @@ Clarifications and Caveats）に流し込む。安い implementation（authentic
 SLO 採用後の engineering decision は [error-budget-policy.md](./error-budget-policy.md)、
 初回策定、measurement、review、revision の手順は [slo-review-runbook.md](./slo-review-runbook.md) を正本とする。
 
-## 原則: 3 冊が言っていること
+## 原則: Site Reliability Engineering (2016) と The Site Reliability Workbook (2018) が言っていること
 
 ### 原則 1: 測定は user に近いほど良い。取れないなら proxy でよく、その限界を書く
 
@@ -541,7 +541,7 @@ SLI implementation version、query または tool version、supporting evidence 
 | --- | --- | --- |
 | 2026-08-30 | user-facing SLI specification、現在の evidence boundary、将来の decision procedure を記録 | なし |
 | 2026-09-07 | ADR-0028 決定 11 の 2 閾値 measurement semantics を正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
-| 2026-09-07 | 3 冊の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite 上限、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
+| 2026-09-07 | Site Reliability Engineering (2016) と The Site Reliability Workbook (2018) の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite 上限、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
 
 ## 参考資料
 
