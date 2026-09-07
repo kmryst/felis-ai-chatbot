@@ -219,6 +219,13 @@ semantic correctness は application test と、将来必要になった quality
 
 ### SLO の範囲外
 
+この SLO は critical user journey の user-facing availability / latency を制御する control loop であり、本 service の reliability 全体を表すものではない。security、data integrity、recovery は独立した reliability objective として扱い、同じ error budget に混在させない。
+
+> "Although “reliability” is sometimes treated as synonymous with “availability,” this attribute really means upholding all of a system’s critical design guarantees—availability, durability, and security invariants, to name a few."
+> 訳: reliability は availability と同義に扱われることがあるが、実際には availability、durability、security invariants など、system の重要な設計保証を守ることを意味する。
+
+出典: Building Secure and Reliable Systems Ch.6「Design for Understandability」Conclusion。
+
 - 意図したユーザー操作ではない匿名の Internet traffic
 - `/livez`、`/readyz`、database observation の freshness、infrastructure metrics を単独で評価した結果。
   Workbook Ch.5 Table 5-10 の分類で **NO_SLO**（"For functionality that is completely invisible to the user"。
