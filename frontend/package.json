@@ -16,12 +16,12 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^26",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.1",
+    "eslint-config-next": "16.3.4",
     "typescript": "^5",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   }
 }
