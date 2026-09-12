@@ -2,7 +2,7 @@
 
 Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ドリルの実測記録。時刻はすべて UTC。
 用語（`restore_request_accepted_at` / `first_connection_succeeded_at` / 実測復元所要区間 / 復元点精度）の定義は Issue #230 §1 が正本であり、本ファイルはその定義に従って実測値だけを残す
-（Issue 側は `t0` / `t1` の記号のまま。記号との対応と改名の理由は「用語」節）。
+（Issue #230 / #237 の本文もこの名前に揃えてある。記号が残るのは #237 のコメントに置いた実行済み手順だけである。旧記号との対応と改名の理由は「用語」節）。
 実測値は **RPO / RTO とは呼ばない**（[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) §6-1）。
 
 **記録の単位は「復元手法」ではなく「1 回の演習」である。** digest ベースラインとセンチネル `sentinel-2026-09-04T13:36:31Z` / `sentinel-2026-09-04T14:04:30Z` / `sentinel-2026-09-05T07:28:52Z` は 2 回の復元で共有しており、
@@ -35,7 +35,7 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 - **時刻指標の命名**: 復元の経過を表す時刻は `<event>_<verb>_at`（イベント + timestamp）の形に揃える。
   業界で広く見られる `startTimestamp` / `completionTimestamp` / `CreationDate` / `CompletionDate` の命名パターンに乗せるためである。
   当初は `t0` / `t1` / `t_ready` / `t_final` という記号で呼んでいたが、記号は公式ドキュメントと突き合わせられず、
-  `CLAUDE.md` の「記号で略さない。説明的な名前を使う」に反するため、次のとおり改めた（Issue #230 §1 / #237 の本文は記号のまま。対応表がこの節）。
+  `CLAUDE.md` の「記号で略さない。説明的な名前を使う」に反するため、次のとおり改めた（Issue #230 §1 / #237 の本文もこの名前に揃えてある。記号のまま残しているのは #237 のコメントに置いた実行済み手順（§1〜§12）だけで、実行済みの記録なので変更していない。対応表がこの節）。
 
   | 旧記号 | 名前 | 定義 |
   | --- | --- | --- |
