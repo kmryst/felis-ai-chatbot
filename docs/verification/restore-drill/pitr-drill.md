@@ -1,11 +1,12 @@
 # PITR ドリル実測記録（Issue #230）
 
 Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ドリルの実測記録。時刻はすべて UTC。
-用語（`t0` / `t1` / 実測復元所要区間 / 復元点精度）の定義は Issue #230 §1 が正本であり、本ファイルはその定義に従って実測値だけを残す。
+用語（`restore_request_accepted_at` / `first_connection_succeeded_at` / 実測復元所要区間 / 復元点精度）の定義は Issue #230 §1 が正本であり、本ファイルはその定義に従って実測値だけを残す
+（Issue 側は `t0` / `t1` の記号のまま。記号との対応と改名の理由は「用語」節）。
 実測値は **RPO / RTO とは呼ばない**（[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) §6-1）。
 
 **記録の単位は「復元手法」ではなく「1 回の演習」である。** digest ベースラインとセンチネル `sentinel-2026-09-04T13:36:31Z` / `sentinel-2026-09-04T14:04:31Z` / `sentinel-2026-09-05T07:28:52Z` は 2 回の復元で共有しており、
-2 回の `t1 − t0` / 復元点精度を並べた比較こそがこの演習の成果物なので、1 ファイルにまとめる。
+2 回の `restore_to_first_connection_duration` / 復元点精度を並べた比較こそがこの演習の成果物なので、1 ファイルにまとめる。
 次回以降の演習は日付付きの別ファイルにして系列にする。
 
 ## このドリルの構成
@@ -15,6 +16,7 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 | 手順 0 | （共通の前提）digest ベースライン固定・センチネル `sentinel-2026-09-04T13:36:31Z` 投入 | 完了（2026-09-04） | [手順 0](#手順-0-digest-ベースラインの固定2026-09-04t133630895z) |
 | 1 回目 | custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [1 回目](#1-回目-custom-restore完了) |
 | 2 回目 | fast restore（最新 Full backup 起点） | **完了**（2026-09-05） | [2 回目](#2-回目-fast-restore完了) |
+| 3 回目（状態検証） | latest restore。HNSW / identity・sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)（別ファイル） |
 
 **2 回とも完了した。** 主成果物は次の「1 回目と 2 回目の比較」表と、そこから読み取れる考察である。
 
@@ -29,7 +31,27 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 ### 用語
 
 - **復元指定時刻（recovery target）**: PITR で「この時点の状態に戻す」と指定する時刻。PostgreSQL の `recovery_target_time` に対応する。
-  `t0` / `t1` / 実測復元所要区間 / 復元点精度の定義は Issue #230 §1 が正本（本 PR で変更していない）。
+  実測復元所要区間 / 復元点精度の定義は Issue #230 §1 が正本。
+- **時刻指標の命名**: 復元の経過を表す時刻は `<event>_<verb>_at`（イベント + timestamp）の形に揃える。
+  業界で広く見られる `startTimestamp` / `completionTimestamp` / `CreationDate` / `CompletionDate` の命名パターンに乗せるためである。
+  当初は `t0` / `t1` / `t_ready` / `t_final` という記号で呼んでいたが、記号は公式ドキュメントと突き合わせられず、
+  `CLAUDE.md` の「記号で略さない。説明的な名前を使う」に反するため、次のとおり改めた（Issue #230 §1 / #237 の本文は記号のまま。対応表がこの節）。
+
+  | 旧記号 | 名前 | 定義 |
+  | --- | --- | --- |
+  | `t0` | `restore_request_accepted_at` | Activity Log `flexibleServers/write` の `status=Accepted` の `eventTimestamp` |
+  | `t_ready` | `server_ready_observed_at` | `az postgres flexible-server show` の `state=Ready` を**こちらのポーリングで初めて観測した**時刻 |
+  | `t1` | `first_connection_succeeded_at` | 復元先専用 DSN への最初の `SELECT 1` 成功時刻 |
+  | `t_final` | `validation_completed_at` | `state=Ready` 観測後に内容検証（digest 照合）が通った最初の時刻 |
+  | `t1 − t0` | `restore_to_first_connection_duration` | `= first_connection_succeeded_at − restore_request_accepted_at`。日本語の呼称は**実測復元所要区間**（併用する。どちらも RTO とは呼ばない） |
+
+  - `server_ready_observed_at` の `observed_at` は、Azure が実際に Ready になった瞬間ではなく**こちらがポーリングで初めて観測した時刻**である、という区別を名前に持たせている（ポーリング間隔ぶんの上限値）
+  - `restore_started_at` / `restore_completed_at` を採らない理由: `started` は Azure 内部で復元処理が始まった時刻なのか API が要求を受理した時刻なのか曖昧で、こちらが持つ事実は Activity Log の `Accepted` だけである。
+    `completed` は deployment 完了 / `state=Ready` / 接続成功 / 検証完了のどれを指すか判別できない。Microsoft の PITR ドキュメント自身が
+    "the server can start being used once the deployment completes"（deployment が完了すればサーバーを使い始められる）という粒度でしか書いておらず、複数段階を表すフィールド名を提供していない
+  - `restore_time` を単独で使わない理由: Azure CLI の `--restore-time` は復元の**指定時刻**（recovery target）を指すため紛らわしい
+  - `restore_to_first_connection_duration` は標準用語ではなく、**この証跡系列の中で定義するローカルな measurement name** である
+  - 改名にあたり、実測値・digest・時刻の数値・psql / CLI の**生出力ブロックは一字も変更していない**（生出力中の `t0-cli-before=` 等のラベルは当時のシェル変数名のまま）
 - **センチネル**: 復元点の前後関係を判定するために意図的に置いた目印の行（sentinel value）。表は `obs.pitr_sentinel`。
   id は `sentinel-<投入時刻の ISO 8601、秒精度、UTC>` とする。**id は投入時刻だけを言い、どの復元指定時刻から見て前か後かは各回の表が語る。**
   役割は見る角度で変わる（`sentinel-2026-09-04T14:04:31Z` は custom restore の復元指定時刻より後だが、fast restore の復元指定時刻より前）ため、役割を id に埋め込まない。
@@ -49,11 +71,11 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 | 復元指定時刻 | 2026-09-04T13:50:00Z | 2026-09-05T07:28:18.423447Z |
 | 起点 Full backup（completedTime） | `backup_639241036648747354` / 2026-09-04T07:27:45.874735Z | `backup_639241900974234471` / 2026-09-05T07:28:18.423447Z |
 | **WAL 再生スパン** | **6 h 22 min 14.125 s** | **0 s** |
-| `t0`（Activity Log `Accepted`） | 14:06:55.069282Z | 07:29:09.978411Z |
-| `t1`（最初の `SELECT 1` 成功） | 14:13:46.224Z | 07:34:52.108Z |
-| **実測復元所要区間 `t1 − t0`** | **6 min 51.155 s** | **5 min 42.130 s** |
-| `state=Ready` 初観測 − `t0` | 8 min 12.499 s（60 s ポーリング） | 6 min 6.051 s（30 s ポーリング） |
-| Activity Log `Succeeded` − `t0` | 9 min 6.539 s | 7 min 9.751 s |
+| `restore_request_accepted_at`（Activity Log `Accepted`） | 14:06:55.069282Z | 07:29:09.978411Z |
+| `first_connection_succeeded_at`（最初の `SELECT 1` 成功） | 14:13:46.224Z | 07:34:52.108Z |
+| **実測復元所要区間 `restore_to_first_connection_duration`** | **6 min 51.155 s** | **5 min 42.130 s** |
+| `server_ready_observed_at`（`state=Ready` 初観測）− `restore_request_accepted_at` | 8 min 12.499 s（60 s ポーリング） | 6 min 6.051 s（30 s ポーリング） |
+| Activity Log `Succeeded` − `restore_request_accepted_at` | 9 min 6.539 s | 7 min 9.751 s |
 | **復元点精度** | **39.035 s**（heartbeat 1 分粒度の標本化誤差を含む） | **0.473 s**（同上） |
 | digest 4 テーブルの一致 | 全一致 | 全一致 |
 | `documents WHERE embedding IS NULL` | 0 | 0 |
@@ -68,9 +90,9 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 WAL を 6 時間 22 分ぶん再生する必要があり、そのぶん復元点の観測（1 分粒度の heartbeat）との距離が開く。
 どちらの値も heartbeat 1 分間隔による標本化誤差を含む上限値であり、0.473 s は「たまたま復元指定時刻の 0.47 s 前に
 heartbeat があった」ことによる小さい値である点も併記しておく。
-一方 `t1 − t0` は 6 min 51 s → 5 min 42 s で、差は約 1 分にとどまる。WAL 再生スパンが 6 時間 22 分から 0 s に減ったにもかかわらず
+一方 `restore_to_first_connection_duration` は 6 min 51 s → 5 min 42 s で、差は約 1 分にとどまる。WAL 再生スパンが 6 時間 22 分から 0 s に減ったにもかかわらず
 所要時間はほぼ変わらないので、**この規模のデータでは所要時間の支配項は WAL 再生ではなくサーバー作成そのもの**だと読める
-（`state=Ready − t0` と `Succeeded − t0` も同様に 2 分前後の差にとどまる）。ただし n = 1 ずつの観測であり、
+（`server_ready_observed_at − restore_request_accepted_at` と `Succeeded − restore_request_accepted_at` も同様に 2 分前後の差にとどまる）。ただし n = 1 ずつの観測であり、
 Azure 側の混雑条件も統制していないため、この読みは示唆であって断定ではない。
 
 ## 実施順序を Issue #230 の記載と入れ替えた
@@ -179,30 +201,30 @@ t0-cli-after=2026-09-04T14:06:55.013Z
 | 疎通ポーリング開始（15 s 間隔） | 14:04:31.010 | restore 発行より前から回した |
 | t0-cli（送信直前） | 14:06:50.984 | 参考値 |
 | Activity Log `Started` | 14:06:53.9443098 | 参考値 |
-| **t0（正本）= Activity Log `Accepted`** | **14:06:55.069282** | |
+| **restore_request_accepted_at（正本）= Activity Log `Accepted`** | **14:06:55.069282** | |
 | t0-cli（CLI 正常終了 rc=0） | 14:06:55.013 | |
 | `state=Provisioning` 初観測 | 14:08:01.938 | 60 s ポーリング（14:07:01 は `ResourceNotFound`） |
 | DNS 解決成功に転じた試行 | 14:11:03.642（try=27） | エラーが `could not translate host name` → `connection to server ...` に変化 |
-| **t1 = 最初の `SELECT 1` 成功** | **14:13:46.224**（試行開始 14:13:43.589, try=36） | ポーリング間隔 15 s を含む上限値 |
-| 復元サーバー `pg_postmaster_start_time()` | 14:14:58.587321 | **t1 より後**（後述の注記） |
-| `state=Ready` 初観測 | 14:15:07.568 | 60 s ポーリング（14:14:06 は Provisioning） |
+| **first_connection_succeeded_at = 最初の `SELECT 1` 成功** | **14:13:46.224**（試行開始 14:13:43.589, try=36） | ポーリング間隔 15 s を含む上限値 |
+| 復元サーバー `pg_postmaster_start_time()` | 14:14:58.587321 | **first_connection_succeeded_at より後**（後述の注記） |
+| `server_ready_observed_at`（`state=Ready` 初観測） | 14:15:07.568 | 60 s ポーリング（14:14:06 は Provisioning） |
 | 検証（verify2）実行 | 14:15:26.324 〜 14:15:27.240 | |
 | Activity Log `Succeeded` | 14:16:01.6082432 | |
 | delete 発行 / 完了 | 14:15:34.008 / 14:17:06.327 | rc=0 |
 | `flexible-server list` で不在確認 | 14:17:06.329 | |
 
-### 実測復元所要区間（`t1 − t0`）
+### 実測復元所要区間（`restore_to_first_connection_duration`）
 
-正本 `t0` = Activity Log の `status=Accepted` の `eventTimestamp`。
+正本 `restore_request_accepted_at` = Activity Log の `status=Accepted` の `eventTimestamp`。
 
 | 区間 | 値 | 注記 |
 | --- | --- | --- |
-| **`t1 − t0` = 14:13:46.224 − 14:06:55.069** | **6 min 51.155 s** | ポーリング間隔 15 s を含む**上限値**。ただし t1 時点の接続先は復元途中の中間状態（後述） |
-| `t1 − Started` | 6 min 52.280 s | 参考 |
-| `t1 − t0-cli`（送信直前） | 6 min 55.240 s | 参考。CLI の起動・認証・送信を含む |
-| `state=Ready` 初観測 − `t0` | 8 min 12.499 s | 60 s ポーリングを含む上限値 |
-| 復元指定時刻どおりの内容を確認できた最初の時刻（verify2）− `t0` | 8 min 31.255 s | `state=Ready` 観測後に exec を張った時間を含む |
-| Activity Log `Succeeded` − `t0` | 9 min 6.539 s | Azure 側の完了イベント |
+| **`restore_to_first_connection_duration` = 14:13:46.224 − 14:06:55.069** | **6 min 51.155 s** | ポーリング間隔 15 s を含む**上限値**。ただし first_connection_succeeded_at 時点の接続先は復元途中の中間状態（後述） |
+| `first_connection_succeeded_at − Started` | 6 min 52.280 s | 参考 |
+| `first_connection_succeeded_at − t0-cli`（送信直前） | 6 min 55.240 s | 参考。CLI の起動・認証・送信を含む |
+| `server_ready_observed_at`（`state=Ready` 初観測）− `restore_request_accepted_at` | 8 min 12.499 s | 60 s ポーリングを含む上限値 |
+| `validation_completed_at`（復元指定時刻どおりの内容を確認できた最初の時刻 = verify2）− `restore_request_accepted_at` | 8 min 31.255 s | `state=Ready` 観測後に exec を張った時間を含む |
+| Activity Log `Succeeded` − `restore_request_accepted_at` | 9 min 6.539 s | Azure 側の完了イベント |
 
 `t0-cli`（送信直前 14:06:50.984Z）は `Accepted` より **4.085 s** 早い。`Started` と `Accepted` の差は本回 **1.12 s** だった。
 
@@ -328,29 +350,29 @@ backup_639241900974234471  Full          2026-09-05T07:28:18.423447+00:00  Autom
 | t0-cli（送信直前） | 07:29:04.937 | 参考値 |
 | Activity Log `Started` | 07:29:08.8377657 | 参考値 |
 | t0-cli（CLI 正常終了 rc=0） | 07:29:08.432 | |
-| **t0（正本）= Activity Log `Accepted`** | **07:29:09.978411** | |
+| **restore_request_accepted_at（正本）= Activity Log `Accepted`** | **07:29:09.978411** | |
 | `state=NOTFOUND` → `Provisioning` | 07:29:15.038 → 07:29:47.856 | 30 s ポーリング |
 | DNS 解決成功に転じた試行 | 07:31:53.940（try=13） | エラーが `could not translate host name` → `connection to server ...` に変化 |
-| **t1 = 最初の `SELECT 1` 成功** | **07:34:52.108**（試行開始 07:34:51.960, try=23） | ポーリング間隔 15 s を含む上限値 |
-| t1 直後の観測（同セッション） | 07:34:52.383 | `pg_postmaster_start_time` = 07:34:27.065911、`obs.pitr_sentinel` **存在**、`max(heartbeat.ts)` = 07:28:17.950554 |
-| `state=Ready` 初観測 | 07:35:16.029 | 30 s ポーリング（07:34:43 は Provisioning） |
-| 検証（verify）実行 | 07:35:34.475 〜 07:35:35.387 | このとき `pg_postmaster_start_time` = 07:35:04.817384（**t1 後にもう一度再起動している**） |
+| **first_connection_succeeded_at = 最初の `SELECT 1` 成功** | **07:34:52.108**（試行開始 07:34:51.960, try=23） | ポーリング間隔 15 s を含む上限値 |
+| first_connection_succeeded_at 直後の観測（同セッション） | 07:34:52.383 | `pg_postmaster_start_time` = 07:34:27.065911、`obs.pitr_sentinel` **存在**、`max(heartbeat.ts)` = 07:28:17.950554 |
+| `server_ready_observed_at`（`state=Ready` 初観測） | 07:35:16.029 | 30 s ポーリング（07:34:43 は Provisioning） |
+| 検証（verify）実行 | 07:35:34.475 〜 07:35:35.387 | このとき `pg_postmaster_start_time` = 07:35:04.817384（**first_connection_succeeded_at 後にもう一度再起動している**） |
 | Activity Log `Succeeded` | 07:36:19.7290004 | |
 | delete 発行 / 完了 | 07:35:41.525 / 07:37:01.399 | rc=0 |
 | `flexible-server list` で不在確認 | 07:37:01.400 | `DELETE_CONFIRMED` |
 
-### 実測復元所要区間（`t1 − t0`）
+### 実測復元所要区間（`restore_to_first_connection_duration`）
 
-正本 `t0` = Activity Log の `status=Accepted` の `eventTimestamp`（1 回目と同一ルール）。
+正本 `restore_request_accepted_at` = Activity Log の `status=Accepted` の `eventTimestamp`（1 回目と同一ルール）。
 
 | 区間 | 値 | 注記 |
 | --- | --- | --- |
-| **`t1 − t0` = 07:34:52.108 − 07:29:09.978** | **5 min 42.130 s** | ポーリング間隔 15 s を含む**上限値** |
-| `t1 − Started` | 5 min 43.270 s | 参考 |
-| `t1 − t0-cli`（送信直前） | 5 min 47.171 s | 参考。CLI の起動・認証・送信を含む |
-| `state=Ready` 初観測 − `t0` | 6 min 6.051 s | 30 s ポーリングを含む上限値 |
-| 検証（verify）− `t0` | 6 min 24.497 s | `state=Ready` 観測後に exec を張った時間を含む |
-| Activity Log `Succeeded` − `t0` | 7 min 9.751 s | Azure 側の完了イベント |
+| **`restore_to_first_connection_duration` = 07:34:52.108 − 07:29:09.978** | **5 min 42.130 s** | ポーリング間隔 15 s を含む**上限値** |
+| `first_connection_succeeded_at − Started` | 5 min 43.270 s | 参考 |
+| `first_connection_succeeded_at − t0-cli`（送信直前） | 5 min 47.171 s | 参考。CLI の起動・認証・送信を含む |
+| `server_ready_observed_at`（`state=Ready` 初観測）− `restore_request_accepted_at` | 6 min 6.051 s | 30 s ポーリングを含む上限値 |
+| `validation_completed_at`（検証 = verify）− `restore_request_accepted_at` | 6 min 24.497 s | `state=Ready` 観測後に exec を張った時間を含む |
+| Activity Log `Succeeded` − `restore_request_accepted_at` | 7 min 9.751 s | Azure 側の完了イベント |
 
 `t0-cli`（送信直前 07:29:04.937Z）は `Accepted` より **5.041 s** 早い。`Started` と `Accepted` の差は本回 **1.14 s**（1 回目は 1.12 s）。
 なお CLI の正常終了（07:29:08.432Z）は `Accepted` の `eventTimestamp` より 1.5 s 早く、Activity Log の `eventTimestamp` が
@@ -395,7 +417,7 @@ S2|PITR drill S2: after custom restore-time 2026-09-04T13:50:00Z, before fast re
 
 ### Activity Log 生出力（取得 07:46:01Z）
 
-`t1` 確定から 11 分後に後追いで取得した。同一クエリに 09-04 の custom restore 分も含まれる。
+`first_connection_succeeded_at` 確定から 11 分後に後追いで取得した。同一クエリに 09-04 の custom restore 分も含まれる。
 
 ```text
 Ts                            Sub                   Status     Corr
@@ -463,7 +485,7 @@ DELETE_CONFIRMED
 ERROR:  relation "obs.pitr_sentinel" does not exist
 ```
 
-一方 `state` は 14:14:06 時点でまだ `Provisioning` で、復元サーバーの `pg_postmaster_start_time()` は **14:14:58.587321**（t1 より 1 分 12 秒あと）だった。
+一方 `state` は 14:14:06 時点でまだ `Provisioning` で、復元サーバーの `pg_postmaster_start_time()` は **14:14:58.587321**（first_connection_succeeded_at より 1 分 12 秒あと）だった。
 つまり **14:13:46 に接続できた相手は、復元処理の途中段階のインスタンス**（`sentinel-2026-09-04T13:36:31Z` 投入 13:36:31 より前、Full backup 直後に近い状態）であり、
 WAL 再生の完了後に postmaster が再起動して 14:14:58 に最終状態になったとみられる。
 `state=Ready` 観測（14:15:07）後の再検証（verify2, 14:15:26）では、`sentinel-2026-09-04T13:36:31Z` 存在 / `sentinel-2026-09-04T14:04:31Z` 不在 / heartbeat 13:49:20 と、復元指定時刻どおりの内容になっていた。
@@ -471,26 +493,26 @@ WAL 再生の完了後に postmaster が再起動して 14:14:58 に最終状態
 **運用上の教訓**: Azure Database for PostgreSQL Flexible Server の PITR では、**復元完了前に接続を受け付ける中間状態が存在する**。
 `SELECT 1` の成功だけを完了判定に使うと、復元されていないデータを「復元済み」と誤認しうる。
 **次回以降（fast restore を含む）は、`SELECT 1` 成功後に `state=Ready` を待ってから内容の検証を行う。**
-本ファイルでは定義どおり `t1` = 14:13:46.224 を記録しつつ、内容が復元指定時刻に到達していたことを確認できた最初の時刻（verify2 の 14:15:26）を併記する。
+本ファイルでは定義どおり `first_connection_succeeded_at` = 14:13:46.224 を記録しつつ、内容が復元指定時刻に到達していたことを確認できた最初の時刻（verify2 の 14:15:26）を併記する。
 
 #### 2 回目（fast restore）での再確認 — 別経路で同じ結論になった
 
-2 回目は 1 回目と現れ方が違った。`t1`（07:34:52.108）直後の同一セッション観測では **`obs.pitr_sentinel` が既に存在**し、
-`max(heartbeat.ts)` も最終値 07:28:17.950554 と一致していた。つまり「t1 の相手が中間状態だった」という 1 回目の症状は出ていない。
+2 回目は 1 回目と現れ方が違った。`first_connection_succeeded_at`（07:34:52.108）直後の同一セッション観測では **`obs.pitr_sentinel` が既に存在**し、
+`max(heartbeat.ts)` も最終値 07:28:17.950554 と一致していた。つまり「first_connection_succeeded_at の相手が中間状態だった」という 1 回目の症状は出ていない。
 
-それでも **`pg_postmaster_start_time()` は t1 直後 07:34:27.065911 → 検証時（07:35:34）07:35:04.817384 と変化している**。
-`t1` のあとにもう一度 postmaster の再起動が起きており、`t1` の時点のインスタンスは最終状態ではなかった。
+それでも **`pg_postmaster_start_time()` は first_connection_succeeded_at 直後 07:34:27.065911 → 検証時（07:35:34）07:35:04.817384 と変化している**。
+`first_connection_succeeded_at` のあとにもう一度 postmaster の再起動が起きており、`first_connection_succeeded_at` の時点のインスタンスは最終状態ではなかった。
 症状（センチネルの有無）は異なるが、**「`SELECT 1` の成功は復元完了の判定に使えない」という 1 回目の教訓は別経路で裏づけられた**。
 2 回目も `state=Ready` 初観測（07:35:16）を待ってから内容検証を行っており、この運用は次回以降も維持する。
 
-### 2. `t0` は Activity Log の `Accepted` を正本にする
+### 2. `restore_request_accepted_at` は Activity Log の `Accepted` を正本にする
 
 - `az monitor activity-log list` で復元先の `resourceId` に対する `Microsoft.DBforPostgreSQL/flexibleServers/write` を引くと、
   同一 `correlationId` に `Started` → `Accepted` → `Succeeded` が並ぶ。`eventTimestamp` は 100 ns 分解能で取れる
 - `Started` と `Accepted` の差は本回 1.12 s。Issue #230 §1 で参照した過去の実測では 1.8 s / 11.8 s。
   **どちらを採るかで最大十数秒ぶれる**ため、両回に同一ルール（`Accepted` を正本）を適用する
 - Activity Log には**取り込み遅延**がある（本回の `submissionTimestamp` − `eventTimestamp` は約 55 s 〜 2 min 13 s）。
-  そのため **`t1` 確定から 10 分以上あとに後追いで取得する**（本回は 14:26:06Z に取得。t1 の 12 分後）
+  そのため **`first_connection_succeeded_at` 確定から 10 分以上あとに後追いで取得する**（本回は 14:26:06Z に取得。first_connection_succeeded_at の 12 分後）
 - Activity Log は 90 日保持されるので、**復元先サーバーを削除したあとでも取得できる**。
   実際、本回のサーバー削除完了（14:17:06）より後の 14:26:06 に取得している
 
@@ -549,8 +571,8 @@ fast restore に専用の引数はなく、`az postgres flexible-server backup l
 | 復元サーバー `pgsql-felisaichatbot-dev-restored` の削除 | **完了** | 両回とも `flexible-server list` で不在確認済み（14:17:06Z / 07:37:01Z） |
 | 元サーバーでの digest 再取得（不変性の裏づけ） | **完了** | 2026-09-05T12:12:52.846Z。4 テーブルすべてベースライン一致 |
 | 元サーバーの無傷 | **確認済み** | 破壊的操作なし。SELECT と `obs.pitr_sentinel` への `CREATE TABLE` / `INSERT` のみ |
-| `obs.pitr_sentinel` の DROP | **未実施（意図的に残す）** | 3 回目のドリルはセンチネル表を作り直す設計（確定設計では同一トランザクションの目印を `obs.pitr_update_log` 自身が担うため、旧設計で仮称していた 4 つ目のセンチネルは存在しない）で、開始時に `DROP TABLE obs.pitr_sentinel` してから作り直す。ここで先に消して数日後に作り直す churn を避ける判断。残っているのはセンチネル 3 行だけのドリル用一時テーブルで実害はない。Issue #230 の受け入れ条件「`obs.pitr_sentinel` を元サーバーから削除した」は 3 回目の完了時に持ち越す |
-| ops コンテナの `min_replicas` を 0 に戻す | **未実施（残作業）** | terraform 管理のため、本ドリルのセッションでは実行していない |
+| `obs.pitr_sentinel` の DROP | **完了**（2026-09-12T06:42:23Z） | 3 回目のドリル（状態検証）の baseline 直後に、3 行を証跡に控えてから `DROP TABLE` した（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。作り直しはしていない（時点証明は後半のドリルで別設計にする） |
+| ops コンテナの `min_replicas` を 0 に戻す | **作業は存在しない（記述誤り）** | 当初「未実施（残作業）」と書いたが誤り。ADR-0015 追記（2026-08-22）で 0 → 1 に是正済みで、terraform も `min_replicas = 1`（`terraform/ephemeral/main.tf`）、実機も 1。戻す先の 0 は存在しない |
 
 ## この検証方式の限界
 
@@ -563,12 +585,10 @@ fast restore に専用の引数はなく、`az postgres flexible-server backup l
 - **digest は `t::text` に落としたヒープ行しか見ていない。** HNSW インデックス・シーケンスの現在値・サーバーパラメータ・
   インストール済み拡張は、この照合を素通りする。これらが復元後に正しい状態かどうかは今回測っていない
 
-**3 回目のドリルでは、この 2 点を推論ではなく直接測定に変える計画がある**（設計は別途レビュー中のため、本ファイルには詳細を書かない）。
+**3 回目のドリル（状態検証、2026-09-12）で 2 点目を直接測定に置き換えた**（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。1 点目（時点の正当性）は後半のドリル（時点証明）で扱う。
 
 ## 残作業
 
 - 両回の実測値が揃ったので、[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) の
   aspirational target と実測の突き合わせを行う（本 Issue の対象外。別 Issue で扱う）
-- ops コンテナの `min_replicas` を 0 に戻す（terraform 管理）
-- `obs.pitr_sentinel` の DROP は 3 回目のドリル完了時まで持ち越す（上記「後片付けの状況」）
-- 3 回目のドリルで、上記「この検証方式の限界」を直接測定に置き換える
+- 時点の正当性（上記「この検証方式の限界」の 1 点目）を後半のドリル（時点証明）で直接測定に置き換える
