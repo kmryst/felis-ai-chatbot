@@ -117,6 +117,7 @@ az monitor metrics list \
 | --- | --- | --- |
 | 1 回目: custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [pitr-drill.md](./pitr-drill.md) |
 | 2 回目: fast restore（最新 Full backup 起点） | **完了**（2026-09-05） | 同ファイルに追記済み |
+| 3 回目（状態検証）: latest restore。HNSW / sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md) |
 
 2 回のドリルで本ファイルの記録に対して確定した事項:
 
