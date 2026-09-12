@@ -11,19 +11,19 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
 
 ## このドリルの構成
 
-| # | 復元方式 | 状態 | 記録先 |
+| ドリル | 内容 | 状態 | 記録先 |
 | --- | --- | --- | --- |
 | 手順 0 | （共通の前提）digest ベースライン固定・センチネル `sentinel-2026-09-04T13:36:31Z` 投入 | 完了（2026-09-04） | [手順 0](#手順-0-digest-ベースラインの固定2026-09-04t133630895z) |
-| 1 回目 | custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [1 回目](#1-回目-custom-restore完了) |
-| 2 回目 | fast restore（最新 Full backup 起点） | **完了**（2026-09-05） | [2 回目](#2-回目-fast-restore完了) |
-| 3 回目（状態検証） | latest restore。HNSW / identity・sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)（別ファイル） |
+| 2026-09-04 custom restore ドリル | 任意時刻 + WAL 再生 | **完了**（2026-09-04） | [custom restore ドリル](#2026-09-04-custom-restore-ドリル完了) |
+| 2026-09-05 fast restore ドリル | 最新 Full backup 起点 | **完了**（2026-09-05） | [fast restore ドリル](#2026-09-05-fast-restore-ドリル完了) |
+| 2026-09-12 state verification ドリル | latest restore。HNSW / identity・sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)（別ファイル） |
 
-**2 回とも完了した。** 主成果物は次の「1 回目と 2 回目の比較」表と、そこから読み取れる考察である。
+**custom restore / fast restore の 2 ドリルとも完了した。** 主成果物は次の「custom restore と fast restore の比較」表と、そこから読み取れる考察である。
 
 ### 共通の前提
 
 - 元サーバー: `pgsql-felisaichatbot-dev`（rg-felisaichatbot-dev-tf / Japan East / PostgreSQL 17.10 / Standard_B1ms）
-- 復元先: `pgsql-felisaichatbot-dev-restored`（同 VNet・委任サブネット・private DNS zone。各回とも検証後に削除する）
+- 復元先: `pgsql-felisaichatbot-dev-restored`（同 VNet・委任サブネット・private DNS zone。各ドリルとも検証後に削除する）
 - 実行経路: `az containerapp exec` → `ca-felisaichatbot-dev-ops`（revision `ca-felisaichatbot-dev-ops--0000006`）→ `psql`
 - **元サーバーは全工程を通じて無傷**。元サーバーへの操作は SELECT と `obs.pitr_sentinel` への `CREATE TABLE` / `INSERT` のみで、破壊的操作（`DROP TABLE` など）は一切行っていない
 - 照合の正本は手順 0 で 1 回だけ取得した固定 digest。照合のために元サーバーを読み直さない
@@ -53,19 +53,29 @@ Issue [#230](https://github.com/kmryst/felis-ai-chatbot/issues/230) の PITR ド
   - `restore_to_first_connection_duration` は標準用語ではなく、**この証跡系列の中で定義するローカルな measurement name** である
   - 改名にあたり、実測値・digest・時刻の数値・psql / CLI の**生出力ブロックは一字も変更していない**（生出力中の `t0-cli-before=` 等のラベルは当時のシェル変数名のまま）
 - **センチネル**: 復元点の前後関係を判定するために意図的に置いた目印の行（sentinel value）。表は `obs.pitr_sentinel`。
-  id は `sentinel-<投入時刻の ISO 8601、秒精度、UTC>` とする。**id は投入時刻だけを言い、どの復元指定時刻から見て前か後かは各回の表が語る。**
+  id は `sentinel-<投入時刻の ISO 8601、秒精度、UTC>` とする。**id は投入時刻だけを言い、どの復元指定時刻から見て前か後かは各ドリルの表が語る。**
   役割は見る角度で変わる（`sentinel-2026-09-04T14:04:31Z` は custom restore の復元指定時刻より後だが、fast restore の復元指定時刻より前）ため、役割を id に埋め込まない。
 - **改名の注記**: 当初はこの 3 行を `S1` / `S2` / `S3` と記号で呼んでいたが、記号は公式用語と突き合わせられず、存在しない系列を暗示するため、上記の命名に改めた。
   投入時刻・digest・合否などの**実測値は一切変更していない**。psql の**生出力ブロック内の `S1` 等も書き換えていない**（当時 DB 上にあった `id` 列の値そのものであるため）。
-  DB 上の行も当時の id のままであり、3 回目のドリルの開始時に表ごと `DROP TABLE` する。
-- 3 回目の設計の検討途中で使った仮称 `S4`（4 つ目のセンチネル）は、確定設計には存在しない。同一トランザクションの目印は `obs.pitr_update_log` 自身が担う。
+  DB 上の行も当時の id のままとし、2026-09-12 state verification ドリルの開始時に表ごと `DROP TABLE` した。
+- recovery point verification ドリルの設計の検討途中で使った仮称 `S4`（4 つ目のセンチネル）は、確定設計には存在しない。同一トランザクションの目印は `obs.pitr_update_log` 自身が担う。
 
-## 1 回目と 2 回目の比較（この演習の成果物）
+- **ドリルの呼称**: 個々のドリルは「日付 + 目的」で識別する: `2026-09-04 custom restore ドリル` / `2026-09-05 fast restore ドリル` / `2026-09-12 state verification ドリル` /
+  `recovery point verification ドリル`（未実施のため日付なし。実施日が決まったら日付を冠する）。
+  当初は「1 回目 / 2 回目 / 3 回目」「3a / 3b」「前半 / 後半」と序数・記号で呼んでいたが、序数は中身を語らず、実施順が変わると破綻する
+  （Issue #230 は「1 回目 = fast restore、2 回目 = custom restore」で起票したが、実施順は逆になった。後述「Issue #230 の当初計画と実施順の違い」）。
+  センチネルを `S1`〜`S3` から投入時刻ベースに改めたのと同じ判断である。序数は「これまで 3 回実施した」のように数を語る文脈でのみ使い、個々のドリルの識別には使わない。
+  目的の語は既に英語のまま使っている custom restore / fast restore に形を揃え、日本語に無理に訳さない。
+  `state verification`（復元先の HNSW・sequence・パラメータ・拡張・権限・統計の検証）/ `recovery point verification`（復元指定時刻どおりに復元されたことの直接測定）は
+  DR 分野で確立した固有名詞ではなく、構成要素（recovery point、verification）が標準語であるだけの、**この証跡系列の中で定義するローカルな名前**である。
+  `recovery point` は PostgreSQL / Azure の PITR における正式な語（recovery target と同義で使われる）であり、`point-in-time proof` のような直訳は使わない。
+
+## custom restore と fast restore の比較（この演習の成果物）
 
 2 回とも完了した。両回の値はそれぞれ独立に記録したものであり、差分を restore mode のみに帰属させて断定はしない
 （対象バックアップ・復元指定時刻・Azure 側の混雑条件も同時に変わる）。WAL 再生スパンは共変量として併記する。
 
-| 項目 | 1 回目: custom restore | 2 回目: fast restore |
+| 項目 | 2026-09-04 custom restore ドリル | 2026-09-05 fast restore ドリル |
 | --- | --- | --- |
 | 実施日時 | 2026-09-04 | 2026-09-05 |
 | 復元指定時刻 | 2026-09-04T13:50:00Z | 2026-09-05T07:28:18.423447Z |
@@ -95,11 +105,11 @@ heartbeat があった」ことによる小さい値である点も併記して�
 （`server_ready_observed_at − restore_request_accepted_at` と `Succeeded − restore_request_accepted_at` も同様に 2 分前後の差にとどまる）。ただし n = 1 ずつの観測であり、
 Azure 側の混雑条件も統制していないため、この読みは示唆であって断定ではない。
 
-## 実施順序を Issue #230 の記載と入れ替えた
+## Issue #230 の当初計画と実施順の違い
 
-Issue #230 は「1 回目 = fast restore、2 回目 = custom restore」の順で書かれているが、実際は **custom restore を先に実施した**。
+Issue #230 の当初計画は fast restore → custom restore の順だったが、実際は **2026-09-04 に custom restore、2026-09-05 に fast restore** の順で実施した。
 fast restore は「`sentinel-2026-09-04T13:36:31Z` 投入後に完了した最新 Full backup」を必要とし、それが得られるのは日次 Full backup の翌 2026-09-05 07:2xZ 以降になるためである。
-この入れ替えで壊れる受け入れ条件はない。センチネルの期待値だけを次の表のとおり読み替える。
+この入れ替えで壊れる受け入れ条件はなく、#230 の受け入れ条件は実施順どおりの呼称（日付 + 目的）に書き直した。センチネル 3 行の各復元指定時刻に対する配置は次のとおり。
 
 | id | 投入時刻（サーバー `ts`） | 位置づけ | custom restore（13:50:00Z）の期待 | fast restore（07:28:18.423447Z）の期待 |
 | --- | --- | --- | --- | --- |
@@ -107,8 +117,6 @@ fast restore は「`sentinel-2026-09-04T13:36:31Z` 投入後に完了した最�
 | `sentinel-2026-09-04T14:04:31Z` | 2026-09-04 14:04:30.993218+00 | custom 復元指定時刻より後、fast 復元指定時刻より前 | **不在**（否定側） | 存在（肯定側） |
 | `sentinel-2026-09-05T07:28:52Z` | 2026-09-05 07:28:52.696990+00 | fast 復元指定時刻より後 | 不在 | **不在**（否定側） |
 
-Issue 本文の受け入れ条件の文言「1 回目: S1 存在 / S2・S3 不在」「2 回目: S1・S2 存在 / S3 不在」は、
-**custom: `sentinel-2026-09-04T13:36:31Z` 存在 / `sentinel-2026-09-04T14:04:31Z`・`sentinel-2026-09-05T07:28:52Z` 不在**、**fast: `sentinel-2026-09-04T13:36:31Z`・`sentinel-2026-09-04T14:04:31Z` 存在 / `sentinel-2026-09-05T07:28:52Z` 不在** と読み替える。
 どちらの復元指定時刻についても、肯定側（あるべきものがある）と否定側（あってはならないものがない）の両方が成立する配置になっている。
 
 ## 手順 0: digest ベースラインの固定（2026-09-04T13:36:30.895Z）
@@ -164,7 +172,7 @@ backup_639241036648747354  Full          2026-09-04T07:27:45.874735+00:00  Autom
 最新 = `backup_639241036648747354`（completedTime **2026-09-04T07:27:45.874735+00:00**）。これは `sentinel-2026-09-04T13:36:31Z` 投入より前に完了しているため、
 fast restore に使う「`sentinel-2026-09-04T13:36:31Z` 投入後に完了した最新 Full backup」としては使えない。翌 2026-09-05 07:2xZ の日次分を待つ必要がある。
 
-## 1 回目: custom restore（完了）
+## 2026-09-04 custom restore ドリル（完了）
 
 実施日 2026-09-04。復元指定時刻を任意に指定し、直前の Full backup から WAL を再生して到達させる方式。
 
@@ -279,7 +287,7 @@ pgsql-felisaichatbot-dev  rg-felisaichatbot-dev-tf  Japan East  17        Bursta
 - 削除後の private DNS zone のレコードは**元サーバーの A レコード（→ 10.10.0.71）のみ**。復元先の A レコードは残っていない
 - 復元先が課金対象だったのは 14:06:55（`Accepted`）〜 14:17:06（削除完了）の約 10 分
 
-## 2 回目: fast restore（完了）
+## 2026-09-05 fast restore ドリル（完了）
 
 実施日 2026-09-05。最新の Full backup の `completedTime` そのものを `--restore-time` に指定する方式。
 公式手順どおり fast restore 専用の引数は存在しないため、`backup list` の `completedTime` をマイクロ秒まで逐語でコピーして渡した。
@@ -363,7 +371,7 @@ backup_639241900974234471  Full          2026-09-05T07:28:18.423447+00:00  Autom
 
 ### 実測復元所要区間（`restore_to_first_connection_duration`）
 
-正本 `restore_request_accepted_at` = Activity Log の `status=Accepted` の `eventTimestamp`（1 回目と同一ルール）。
+正本 `restore_request_accepted_at` = Activity Log の `status=Accepted` の `eventTimestamp`（custom restore ドリルと同一ルール）。
 
 | 区間 | 値 | 注記 |
 | --- | --- | --- |
@@ -374,7 +382,7 @@ backup_639241900974234471  Full          2026-09-05T07:28:18.423447+00:00  Autom
 | `validation_completed_at`（検証 = verify）− `restore_request_accepted_at` | 6 min 24.497 s | `state=Ready` 観測後に exec を張った時間を含む |
 | Activity Log `Succeeded` − `restore_request_accepted_at` | 7 min 9.751 s | Azure 側の完了イベント |
 
-`t0-cli`（送信直前 07:29:04.937Z）は `Accepted` より **5.041 s** 早い。`Started` と `Accepted` の差は本回 **1.14 s**（1 回目は 1.12 s）。
+`t0-cli`（送信直前 07:29:04.937Z）は `Accepted` より **5.041 s** 早い。`Started` と `Accepted` の差は本回 **1.14 s**（custom restore ドリルは 1.12 s）。
 なお CLI の正常終了（07:29:08.432Z）は `Accepted` の `eventTimestamp` より 1.5 s 早く、Activity Log の `eventTimestamp` が
 CLI の応答受信後に打刻されうることを示している。
 
@@ -397,7 +405,7 @@ CLI の応答受信後に打刻されうることを示している。
 
 - `documents WHERE embedding IS NULL` = 0
 - センチネル: **`sentinel-2026-09-04T13:36:31Z` 存在 / `sentinel-2026-09-04T14:04:31Z` 存在**（いずれも note 本文まで一致）/ **`sentinel-2026-09-05T07:28:52Z` 不在** → **肯定側・否定側の両方が成立**
-- `pg_is_in_recovery()` = `f`、復元サーバー `inet_server_addr()` = 10.10.0.68（1 回目と同じアドレスが再利用された）
+- `pg_is_in_recovery()` = `f`、復元サーバー `inet_server_addr()` = 10.10.0.68（custom restore ドリルと同じアドレスが再利用された）
 - 同時刻の元サーバー: `sentinel-2026-09-04T13:36:31Z` / `sentinel-2026-09-04T14:04:31Z` / `sentinel-2026-09-05T07:28:52Z` の 3 行すべて存在、heartbeat `max(ts)` = 07:35:17.871312+00（稼働継続。無傷）
 
 生出力（`verify` 抜粋）:
@@ -446,7 +454,7 @@ pgsql-felisaichatbot-dev  rg-felisaichatbot-dev-tf  Japan East  17        Bursta
 DELETE_CONFIRMED
 ```
 
-- 削除所要 **1 min 19.874 s**（1 回目は 1 min 32.319 s）。`az postgres flexible-server list` は**元サーバーのみ**を返す
+- 削除所要 **1 min 19.874 s**（custom restore ドリルは 1 min 32.319 s）。`az postgres flexible-server list` は**元サーバーのみ**を返す
 - 復元先が課金対象だったのは 07:29:09（`Accepted`）〜 07:37:01（削除完了）の約 8 分
 
 ### 本ドリル全期間を通じた元サーバーの不変性（2026-09-05T12:12:52.846Z 再取得）
@@ -467,7 +475,7 @@ DELETE_CONFIRMED
 
 ### 実行中断について（実測には影響なし）
 
-2 回目の実行中、2026-09-05T07:46:34Z にセッションのレート制限で作業エージェントの turn が中断された。
+fast restore ドリルの実行中、2026-09-05T07:46:34Z にセッションのレート制限で作業エージェントの turn が中断された。
 ただし**中断時点で検証・復元サーバーの削除・削除確認・Activity Log の取得はすべて完了しており、本節の実測値に影響はない**。
 復元サーバーが放置されることもなかった（07:37:01Z に不在確認済み）。事実として記録に残す。
 
@@ -495,15 +503,15 @@ WAL 再生の完了後に postmaster が再起動して 14:14:58 に最終状態
 **次回以降（fast restore を含む）は、`SELECT 1` 成功後に `state=Ready` を待ってから内容の検証を行う。**
 本ファイルでは定義どおり `first_connection_succeeded_at` = 14:13:46.224 を記録しつつ、内容が復元指定時刻に到達していたことを確認できた最初の時刻（verify2 の 14:15:26）を併記する。
 
-#### 2 回目（fast restore）での再確認 — 別経路で同じ結論になった
+#### fast restore ドリルでの再確認 — 別経路で同じ結論になった
 
-2 回目は 1 回目と現れ方が違った。`first_connection_succeeded_at`（07:34:52.108）直後の同一セッション観測では **`obs.pitr_sentinel` が既に存在**し、
-`max(heartbeat.ts)` も最終値 07:28:17.950554 と一致していた。つまり「first_connection_succeeded_at の相手が中間状態だった」という 1 回目の症状は出ていない。
+fast restore ドリルは custom restore ドリルと現れ方が違った。`first_connection_succeeded_at`（07:34:52.108）直後の同一セッション観測では **`obs.pitr_sentinel` が既に存在**し、
+`max(heartbeat.ts)` も最終値 07:28:17.950554 と一致していた。つまり「first_connection_succeeded_at の相手が中間状態だった」という custom restore ドリルの症状は出ていない。
 
 それでも **`pg_postmaster_start_time()` は first_connection_succeeded_at 直後 07:34:27.065911 → 検証時（07:35:34）07:35:04.817384 と変化している**。
 `first_connection_succeeded_at` のあとにもう一度 postmaster の再起動が起きており、`first_connection_succeeded_at` の時点のインスタンスは最終状態ではなかった。
-症状（センチネルの有無）は異なるが、**「`SELECT 1` の成功は復元完了の判定に使えない」という 1 回目の教訓は別経路で裏づけられた**。
-2 回目も `state=Ready` 初観測（07:35:16）を待ってから内容検証を行っており、この運用は次回以降も維持する。
+症状（センチネルの有無）は異なるが、**「`SELECT 1` の成功は復元完了の判定に使えない」という custom restore ドリルの教訓は別経路で裏づけられた**。
+fast restore ドリルも `state=Ready` 初観測（07:35:16）を待ってから内容検証を行っており、この運用は次回以降も維持する。
 
 ### 2. `restore_request_accepted_at` は Activity Log の `Accepted` を正本にする
 
@@ -534,9 +542,9 @@ VNet 統合により PostgreSQL はプライベート到達のみで、ops コ�
 
 - **TTY が必要**: 非対話環境では `script -qec` で疑似 TTY に包んで実行する
 - **429 レート制限がある**（`retry-after: 600` を実測）。呼び出しを最小化し、1 回の exec で必要な処理をまとめて流す。
-  1 回目の当日の exec は 4 回（うち 1 回は上記の 404）で、429 は発生しなかった。
-  2 回目の当日（2026-09-05）の exec は **3 回**（疎通ポーリング / 検証 / 元サーバー digest 再取得）で、こちらも 429 は発生していない。
-  **gzip 圧縮でエンコード後 2 KB 未満に収める**という 1 回目の知見は 2 回目でもそのまま有効だった
+  custom restore ドリルの当日の exec は 4 回（うち 1 回は上記の 404）で、429 は発生しなかった。
+  fast restore ドリルの当日（2026-09-05）の exec は **3 回**（疎通ポーリング / 検証 / 元サーバー digest 再取得）で、こちらも 429 は発生していない。
+  **gzip 圧縮でエンコード後 2 KB 未満に収める**という custom restore ドリルの知見は fast restore ドリルでもそのまま有効だった
 
 ### 4. `earliestRestoreDate` は連続スライドではなく鋸歯状に動く（既存の予測を反証）
 
@@ -559,7 +567,7 @@ VNet 統合により PostgreSQL はプライベート到達のみで、ops コ�
 fast restore に専用の引数はなく、`az postgres flexible-server backup list` の `completedTime` を
 `--restore-time` へ渡すことが公式手順である。このとき **マイクロ秒を切り捨てずに逐語でコピーする**。
 
-2 回目では `2026-09-05T07:28:18.423447+00:00` をそのまま渡し、**WAL 再生スパン 0 s**（復元指定時刻 − 起点 backup の
+fast restore ドリルでは `2026-09-05T07:28:18.423447+00:00` をそのまま渡し、**WAL 再生スパン 0 s**（復元指定時刻 − 起点 backup の
 `completedTime` = 0）を成立させた。その帰結として復元点精度 0.473 s が観測されており、
 **指定値が Full backup の完了時刻と厳密に一致していたことが実測から裏づけられている**。
 秒未満を切り捨てて指定すると、その差だけ WAL 再生が入り、この性質は崩れる。
@@ -571,12 +579,12 @@ fast restore に専用の引数はなく、`az postgres flexible-server backup l
 | 復元サーバー `pgsql-felisaichatbot-dev-restored` の削除 | **完了** | 両回とも `flexible-server list` で不在確認済み（14:17:06Z / 07:37:01Z） |
 | 元サーバーでの digest 再取得（不変性の裏づけ） | **完了** | 2026-09-05T12:12:52.846Z。4 テーブルすべてベースライン一致 |
 | 元サーバーの無傷 | **確認済み** | 破壊的操作なし。SELECT と `obs.pitr_sentinel` への `CREATE TABLE` / `INSERT` のみ |
-| `obs.pitr_sentinel` の DROP | **完了**（2026-09-12T06:42:23Z） | 3 回目のドリル（状態検証）の baseline 直後に、3 行を証跡に控えてから `DROP TABLE` した（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。作り直しはしていない（時点証明は後半のドリルで別設計にする） |
+| `obs.pitr_sentinel` の DROP | **完了**（2026-09-12T06:42:23Z） | 2026-09-12 state verification ドリルの baseline 直後に、3 行を証跡に控えてから `DROP TABLE` した（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。作り直しはしていない（recovery point verification ドリルは別設計にする） |
 | ops コンテナの `min_replicas` を 0 に戻す | **作業は存在しない（記述誤り）** | 当初「未実施（残作業）」と書いたが誤り。ADR-0015 追記（2026-08-22）で 0 → 1 に是正済みで、terraform も `min_replicas = 1`（`terraform/ephemeral/main.tf`）、実機も 1。戻す先の 0 は存在しない |
 
 ## この検証方式の限界
 
-1〜2 回目で使った検証方式には既知の限界があり、そのまま 3 回目の設計課題になる。
+custom restore / fast restore ドリルで使った検証方式には既知の限界があり、そのまま後続ドリルの設計課題になる。
 
 - **digest 一致は「いつの時点に復元されたか」を直接証明していない。** アプリテーブル（`documents` / `object_properties` など）は
   2026-09-01 の embed Job 以降不変であり、どの復元指定時刻を選んでも digest は同じ値になる。
@@ -585,10 +593,10 @@ fast restore に専用の引数はなく、`az postgres flexible-server backup l
 - **digest は `t::text` に落としたヒープ行しか見ていない。** HNSW インデックス・シーケンスの現在値・サーバーパラメータ・
   インストール済み拡張は、この照合を素通りする。これらが復元後に正しい状態かどうかは今回測っていない
 
-**3 回目のドリル（状態検証、2026-09-12）で 2 点目を直接測定に置き換えた**（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。1 点目（時点の正当性）は後半のドリル（時点証明）で扱う。
+**2026-09-12 state verification ドリルで 2 点目を直接測定に置き換えた**（[2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md)）。1 点目（時点の正当性）は recovery point verification ドリル（state verification ドリルのあとに実施する）で扱う。
 
 ## 残作業
 
 - 両回の実測値が揃ったので、[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) の
   aspirational target と実測の突き合わせを行う（本 Issue の対象外。別 Issue で扱う）
-- 時点の正当性（上記「この検証方式の限界」の 1 点目）を後半のドリル（時点証明）で直接測定に置き換える
+- 時点の正当性（上記「この検証方式の限界」の 1 点目）を recovery point verification ドリルで直接測定に置き換える

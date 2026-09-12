@@ -1,15 +1,15 @@
-# PITR ドリル 3 回目（状態検証）実測記録（Issue #237）
+# 2026-09-12 state verification ドリル実測記録（Issue #237）
 
-Issue [#237](https://github.com/kmryst/felis-ai-chatbot/issues/237) の PITR ドリル 3 回目（前半 = 状態検証）の実測記録。時刻はすべて UTC。
-1〜2 回目の記録は [pitr-drill.md](./pitr-drill.md)、時刻指標の名前（`restore_request_accepted_at` など）の定義は同ファイルの「用語」節が正本。
+Issue [#237](https://github.com/kmryst/felis-ai-chatbot/issues/237) の 2026-09-12 state verification ドリルの実測記録。時刻はすべて UTC。
+2026-09-04 custom restore ドリル / 2026-09-05 fast restore ドリルの記録は [pitr-drill.md](./pitr-drill.md)、ドリルの呼称（日付 + 目的）と時刻指標の名前（`restore_request_accepted_at` など）の定義は同ファイルの「用語」節が正本。
 実測値は **RPO / RTO とは呼ばない**（[restore-drill-recovery-objectives.md](../../operations/restore-drill-recovery-objectives.md) §6-1）。
 
 ## 目的と #230 との関係
 
-1〜2 回目（[#230](https://github.com/kmryst/felis-ai-chatbot/issues/230)）は 4 テーブルのヒープ行 digest とセンチネルで「復元指定時刻どおりに復元された」ことを見たが、
+custom restore / fast restore ドリル（[#230](https://github.com/kmryst/felis-ai-chatbot/issues/230)）は 4 テーブルのヒープ行 digest とセンチネルで「復元指定時刻どおりに復元された」ことを見たが、
 digest はヒープ行のテキスト化しか見ておらず、**HNSW インデックス・identity / sequence の現在値・サーバーパラメータと拡張の許可リスト・ロール / 所有者 / 権限・統計カウンタ・タイムライン・スキーマ定義・Alembic リビジョン・アプリと同一ユーザーでの接続**を素通りしていた。
 本ドリルはこれらを復元先で実測し、「復元はできたがアプリ（RAG）が動かない」を見逃す穴を埋める回である。
-時点の正当性（元サーバーへの UPDATE を伴う直接測定）は後半のドリル（時点証明）で別途行う。
+時点の正当性（元サーバーへの UPDATE を伴う直接測定）は recovery point verification ドリル（state verification ドリルのあとに実施する）で別途行う。
 
 - 復元方式: latest restore point（`--restore-time` 省略）。復元指定時刻の精度を測る回ではない
 - 元サーバー `pgsql-felisaichatbot-dev` への書き込みは **`DROP TABLE obs.pitr_sentinel` の 1 回のみ**（#230 からの持ち越し）。それ以外は SELECT と `pg_dump --schema-only`
@@ -49,7 +49,7 @@ digest はヒープ行のテキスト化しか見ておらず、**HNSW インデ
 | `az postgres flexible-server list` | pass | `pgsql-felisaichatbot-dev` 1 台のみ（前回の復元先は残っていない） |
 | seed / embed Job の Running execution | pass | `caj-felisaichatbot-dev-seed running=0` / `caj-felisaichatbot-dev-embed running=0`（最終実行は 2026-09-01 の Succeeded） |
 | 元サーバー | Ready / PostgreSQL 17（minorVersion 10）/ Standard_B1ms / 32 GiB P4 / `geoRedundantBackup: Enabled` / retention 7 / HA NotEnabled / maintenanceWindow custom（dayOfWeek 3, 17:00）/ tags `{}` / availabilityZone 1 | |
-| `earliestRestoreDate` | `2026-09-05T07:28:18.423447+00:00` | `backup list` の最古 Full `backup_639241900974234471` の completedTime と一致（1〜2 回目の「鋸歯状」知見と整合） |
+| `earliestRestoreDate` | `2026-09-05T07:28:18.423447+00:00` | `backup list` の最古 Full `backup_639241900974234471` の completedTime と一致（custom restore / fast restore ドリルの「鋸歯状」知見と整合） |
 | ops コンテナ | Running、`minReplicas = 1` / `maxReplicas = 1`、replica 1 | |
 | 委任サブネット / private DNS zone | `10.10.0.64/27`、zone の A レコードは元サーバー分 1 件（`bf4b8e9cdc10 → 10.10.0.71`） | |
 
@@ -193,10 +193,10 @@ restore_cli_rc=0 t0-cli-after=2026-09-12T06:53:48.799Z
 
 | 区間 | 値 | 備考 |
 | --- | --- | --- |
-| `server_ready_observed_at − restore_request_accepted_at` | **8 min 57.474 s** | 30 s ポーリングを含む上限値。1 回目 8 min 12.499 s（60 s ポーリング）/ 2 回目 6 min 6.051 s（30 s） |
-| 実測復元所要区間 `restore_to_first_connection_duration` | 9 min 51.353 s | **欠測扱い**（知見 1）。1 回目 6 min 51.155 s / 2 回目 5 min 42.130 s と比較しない |
-| `validation_completed_at − restore_request_accepted_at` | **10 min 27.774 s** | 1 回目の verify2 − accepted = 8 min 31.255 s、2 回目の verify − accepted = 6 min 24.497 s に相当 |
-| Activity Log `Succeeded` − `restore_request_accepted_at` | 9 min 10.804 s | 1 回目 9 min 6.539 s / 2 回目 7 min 9.751 s |
+| `server_ready_observed_at − restore_request_accepted_at` | **8 min 57.474 s** | 30 s ポーリングを含む上限値。custom restore ドリル 8 min 12.499 s（60 s ポーリング）/ fast restore ドリル 6 min 6.051 s（30 s） |
+| 実測復元所要区間 `restore_to_first_connection_duration` | 9 min 51.353 s | **欠測扱い**（知見 1）。custom restore ドリル 6 min 51.155 s / fast restore ドリル 5 min 42.130 s と比較しない |
+| `validation_completed_at − restore_request_accepted_at` | **10 min 27.774 s** | custom restore ドリルの verify2 − accepted = 8 min 31.255 s、fast restore ドリルの verify − accepted = 6 min 24.497 s に相当 |
+| Activity Log `Succeeded` − `restore_request_accepted_at` | 9 min 10.804 s | custom restore ドリル 9 min 6.539 s / fast restore ドリル 7 min 9.751 s |
 
 ## 復元先での検証（`state=Ready` 観測後、07:04:17〜07:04:44Z）
 
@@ -295,14 +295,14 @@ Ts                            Sub                   Op                          
 
 ## 知見
 
-### 1. `first_connection_succeeded_at` は上限値であり、1〜2 回目と比較できない（欠測）
+### 1. `first_connection_succeeded_at` は上限値であり、custom restore / fast restore ドリルと比較できない（欠測）
 
 Issue #237 §6 の疎通ポーリングはホストを `<name>.felisaichatbot-dev.private.postgres.database.azure.com` としていたが、この名前は**存在しない**。
 private DNS zone の A レコードはハッシュ名（本回は `d88d28145a39 → 10.10.0.68`。元サーバーは `bf4b8e9cdc10 → 10.10.0.71`）で、正しいホストは `az postgres flexible-server show` の
 `fullyQualifiedDomainName` = `pgsql-felisaichatbot-dev-r3a-0912.postgres.database.azure.com`（zone のハッシュ名へ CNAME）である。
 誤ホストのポーリングは `Ready` 観測後も `could not translate host name` のまま（try=39 まで）だったため 07:03:35Z に止め、正しいホストで再送したところ try=1 で成功した。
 記録された `first_connection_succeeded_at`（07:03:41.980）は `server_ready_observed_at`（07:02:48.101）より後で、真の初回接続可能時刻を含んでいない。
-**本回の実測復元所要区間は欠測として扱い**、代替として `server_ready_observed_at − restore_request_accepted_at` = **8 min 57.474 s** を 1 回目 8 min 12.499 s / 2 回目 6 min 6.051 s と並べる（いずれもポーリング間隔ぶんの上限値）。
+**本回の実測復元所要区間は欠測として扱い**、代替として `server_ready_observed_at − restore_request_accepted_at` = **8 min 57.474 s** を custom restore ドリル 8 min 12.499 s / fast restore ドリル 6 min 6.051 s と並べる（いずれもポーリング間隔ぶんの上限値）。
 手順の `RHOST` は `show --query fullyQualifiedDomainName` の値を使う形に直すべきである。
 
 ### 2. `az containerapp exec` は TTY があるため psql のページャが起動して固まる
@@ -310,7 +310,7 @@ private DNS zone の A レコードはハッシュ名（本回は `d88d28145a39 
 exec セッションには TTY があり、psql は出力がスクリーン高を超えると `more` を起動してキー入力を待つ（`--More--`）。
 baseline の exec #2 は 18 パラメータ表の途中でこれに掛かり、6 分間出力が止まった（ローカル側の `script` のログも 4,096 バイトで止まり、原因の切り分けにも時間を要した）。
 ローカル側を kill するとコンテナ側のプロセスも SIGHUP で終了し、DROP には到達していなかったことを再実行時の `to_regclass` で確認した。
-**psql を exec で使うときは `-P pager=off`（および `export PAGER=cat`）が必須**。1〜2 回目の知見 3（`--command` の制約 / TTY / 2 KB / 429）に無かった項目である。
+**psql を exec で使うときは `-P pager=off`（および `export PAGER=cat`）が必須**。custom restore / fast restore ドリルの知見 3（`--command` の制約 / TTY / 2 KB / 429）に無かった項目である。
 併せて、`script` は `-f`（flush）を付けると途中経過をログで追える。
 
 ### 3. baseline の取得順序に欠陥がある
@@ -334,7 +334,7 @@ Issue #237 §5 は owner / grants digest と `pg_dump -s` を `obs.pitr_sentinel
 ### 6. 429 の閾値は未確定。実測された下限は 9 回 / 37 分
 
 本回の `az containerapp exec` は 06:34〜07:11 の 37 分間に 9 回（baseline A / baseline B（ページャ停止）/ baseline B 再実行 / 疎通ポーリング（誤ホスト）/ 疎通ポーリング再実行 / verify（読み取り）/ verify（書き込み）/ 元サーバー再確認 / 元サーバー最終確認）で、**429 は発生しなかった**。
-1 回目 4 回・2 回目 3 回・本回 9 回のいずれも 429 なしで、「1 run 5 回以内」という従来の目安は実測の裏づけがない自主規制だった。
+custom restore ドリル 4 回・fast restore ドリル 3 回・本ドリル 9 回のいずれも 429 なしで、「1 run 5 回以内」という従来の目安は実測の裏づけがない自主規制だった。
 今後は回数を節約するために手順を変えず、429 が返ったら `retry-after`（実測 600 s）だけ待って再試行する。
 
 ### 7. `az postgres flexible-server delete --ids` は使える
@@ -348,7 +348,7 @@ Issue #237 §5 は owner / grants digest と `pg_dump -s` を `obs.pitr_sentinel
 
 ### 9. 復元先が課金対象だった区間は約 16 分
 
-`Accepted` 06:53:50 〜 `delete Succeeded` 07:09:56。1 回目 約 10 分 / 2 回目 約 8 分より長いのは、検証項目の増加と知見 1 の再送ぶんによる。
+`Accepted` 06:53:50 〜 `delete Succeeded` 07:09:56。custom restore ドリル 約 10 分 / fast restore ドリル 約 8 分より長いのは、検証項目の増加と知見 1 の再送ぶんによる。
 
 ### 10. 実行上の細かい知見
 
