@@ -20,7 +20,8 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 ## 現在の前提
 
 - SLI specification は確定済み（ADR-0028 決定 11。PR #241）。SLI implementation の方式は authenticated synthetic transaction に
-  決定済みで、configuration（payload / identity / location / schedule / measurement timeout）は未決定
+  決定済み。measurement timestamp contract は確定済みで、その他の configuration
+  （payload / identity / location / schedule / measurement timeout）は未決定
 - effective な SLO target、threshold 1 / threshold 2 の値、error budget はない。Status は `Draft`
 - Status が `Draft` の間、recurring review は「measurement を検証する」までで停止し、compliance と error budget は報告しない
 - `/readyz` の結果を primary `/chat` SLI として使用しない（NO_SLO）
@@ -41,7 +42,8 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 | SLI specification を定義する | critical user journey | telemetry とは独立して user-visible result を記述する。request-driven なので availability と latency を対象にする | SLI specification | response contract、意図した no-context response、既知の failure mode | 測定不能または未定義の product requirement に成功条件が依存するなら停止する | 完了（ADR-0028 決定 11） |
 | eligible / good / bad / excluded event と unclassifiable record を定義する | SLI specification と service scope | intended user の識別や application 到達前の failure を含め、再現可能な event rule を記述する | event classification rule | request contract、authentication semantics、client behavior、incident の例 | telemetry の欠落や対象外 traffic が暗黙に good または exclusion になるなら停止する | 完了 |
 | SLI implementation を選ぶ | SLI specification と measurement point の候補 | 候補を quality、coverage、cost で比較し、最初の iteration では安い方を選ぶ。実測が無い場合は先に data source（authenticated synthetic transaction）を設定する | measurement point と方式 | 候補の比較 | event rule を再現できない方式なら停止する | 方式は完了（synthetic transaction）。configuration は未決定 |
-| SLI implementation を実装し検証する | 選んだ方式 | payload、identity、location、schedule、measurement timeout を決め、下記「SLI implementation の検証」を通す | schema、tool、version、validation evidence | prototype record と field 単位の coverage | 必須 case が誤分類されるか、暗黙に失われるなら有効化を停止する | 未着手 |
+| Measurement timestamp contract を定義する | critical user journey、measurement point、compliance period | wall clock field、SLI の event time、window boundary、latency 用 monotonic clock の取得位置を定義する | version 管理された timestamp contract | supported-client path、clock と window boundary の test case | event の期間帰属または latency を同じ raw record から再現できなければ停止する | 完了（slo-document.md「Measurement timestamp contract」） |
+| SLI implementation を実装し検証する | 選んだ方式と timestamp contract | contract に従って payload、identity、location、schedule、measurement timeout を決め、下記「SLI implementation の検証」を通す | schema、tool、version、validation evidence | prototype record と field 単位の coverage | 必須 case が誤分類されるか、暗黙に失われるなら有効化を停止する | 未着手 |
 | baseline を収集する | 検証済みの implementation | four-week rolling window と同じ長さ以上の期間、raw event、execution coverage、gap、configuration boundary を保存する。この期間は compliance period ではない | 再現可能な baseline evidence | raw record、tool version、timestamp、revision、image、configuration | eligible event または measurement coverage を確認できなければ停止する | 未着手 |
 | threshold 1 / threshold 2 を提案する | baseline evidence（それぞれの分布） | 観測 percentile を単位で丸めて starter 値とし、測定期間・丸め単位・「user experience との相関は未検証」を Rationale に記録する | 根拠を伴う threshold 1 / threshold 2 の案 | 分布と丸め規則 | current timeout や platform 制約（ingress idle timeout 等）だけが根拠なら停止する。baseline の観測 percentile を丸めて starter 値とすること自体は停止理由にしない | 未着手 |
 | SLO target を提案する | baseline evidence と threshold の案 | baseline を切り下げて starter SLO とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の案 | 切り下げ規則、dependency risk の評価 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
@@ -74,6 +76,20 @@ SLO の決定項目ではなく、それぞれの正本に記録する（slo-doc
 | Review frequency | 立ち上げ期は monthly、安定後は quarterly。Revisit Date は Approval Date + 6 か月（暫定） | review が適時で actionable か | この runbook に記録する |
 
 ## SLI implementation の検証
+
+### Measurement timestamp contract を検証する
+
+最初の実装と timestamp contract の変更時には、`slo-document.md` の定義を複製せず、prototype raw record と制御可能な test clock で
+次を検証する。
+
+- `scheduled_for`、`attempt_started_at`、`completed_at`、`ingested_at` が UTC、RFC 3339、millisecond precision、末尾 `Z` である
+- public frontend の `POST /api/chat` を開始する直前の境界で `attempt_started_at` と monotonic clock を取得する
+- `window_start` と同時刻の attempt を含み、`window_end` と同時刻の attempt を除外する
+- window をまたいで完了した attempt、遅延実行、late ingestion でも、`attempt_started_at` による期間帰属が変わらない
+- wall clock を前後へ補正しても monotonic elapsed time が負にならず、各 latency 区間を raw elapsed time から再計算できる
+- SSE の byte 分割や同一 chunk 内の複数 event に左右されず、完全に検証された event の受理時点を取得する
+- `done` の受理後に行う reader cleanup の時間が、最後の content event から `done` までの区間へ混入しない
+- threshold との比較に表示用の丸め値を使わず、stream の観測順を wall clock で並べ替えない
 
 ### repository と runtime の identity を記録する
 
@@ -156,7 +172,8 @@ SSE の系列は ADR-0028 決定 9 の共有 contract fixture（[docs/contracts/
 - collection の中断と再開
 - deployment または measurement version の boundary
 
-各 path について、期待する eligibility と outcome、観測した field、実際の classification、timestamp、raw record を保存する。
+各 path について、期待する eligibility と outcome、観測した field、実際の classification、timestamp contract に従う時刻、
+monotonic elapsed time、raw record を保存する。
 必須 path が失われる、誤分類される、または識別不能な場合は有効化を停止する。
 
 ### evidence が十分かを確認する
@@ -326,7 +343,7 @@ measurement 自体の検証が目的である場合を除き、effective な SLO
 - warm / cold state、`min_replicas`、`max_replicas`、CPU、memory
 - commit、application revision、container image、measurement tool version
 - dependency provider、state、limit、configuration、retry behavior
-- measurement point、schema、query、aggregation、collection coverage、ingestion behavior
+- measurement point、event time、clock source、schema、query、aggregation、collection coverage、ingestion behavior
 
 関連する条件に差がある場合は、予想される影響を説明する。その影響を分離できなければ、結果は直接比較できないと明記する。
 boundary を隠すために、互換性のない series を統合しない。
@@ -339,9 +356,10 @@ postmortem も同じ pattern に置く。SLO 作業だけのために新しい e
 measurement または review の record には、該当する次の情報を含める。
 
 - 目的、critical user journey、hypothesis、測定可能な success criterion
-- period boundary と timezone
+- UTC の半開区間 `[window_start, window_end)` と、期間帰属に使用した `attempt_started_at`
 - SLO version、SLI implementation version、query または tool version
-- timestamp、commit SHA、deployment revision、container image または digest、region
+- timestamp contract に従う `scheduled_for`、`attempt_started_at`、`completed_at`、`ingested_at`、clock source、commit SHA、
+  deployment revision、container image または digest、region
 - current `min_replicas`、`max_replicas`、CPU、memory、関連する platform configuration（observed configuration であることを明示する）
 - measurement source、location、command または tool、schema、raw evidence の path
 - payload class、authentication method、event count、concurrency、request interval、threshold 1 / threshold 2、measurement timeout
