@@ -69,8 +69,8 @@ az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaicha
   約 24 時間ずつジャンプする鋸歯状の動きだった**（[pitr-drill.md](./pitr-drill.md) 知見 4）
 - 予測日 8/29 はフェーズ 2a（高負荷 × B1ms。8/29〜8/30 目安）の初日にあたる。
   **スライド開始の瞬間を取り逃さないよう、8/28〜8/30 は取得頻度を上げる**（日次 → 数時間おき）
-- PITR ドリル 1 回目（8/28 目安）はこの窓がまだ「作成時刻に固定」の状態で行われる。
-  2 回目（9/2 目安）はスライド後の窓に対して 24 時間以上前へ復元する（計画 §2）
+- 計画時点では、8/28 目安のドリルはこの窓がまだ「作成時刻に固定」の状態で行われ、
+  9/2 目安のドリルはスライド後の窓に対して 24 時間以上前へ復元する想定だった（計画 §2）
 
 ### `backup_storage_used` の推移（同じ観測の一部。計画 §3 の 5）
 
@@ -115,9 +115,9 @@ az monitor metrics list \
 
 | ドリル | 状態 | 記録先 |
 | --- | --- | --- |
-| 1 回目: custom restore（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [pitr-drill.md](./pitr-drill.md) |
-| 2 回目: fast restore（最新 Full backup 起点） | **完了**（2026-09-05） | 同ファイルに追記済み |
-| 3 回目（状態検証）: latest restore。HNSW / sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md) |
+| 2026-09-04 custom restore ドリル（任意時刻 + WAL 再生） | **完了**（2026-09-04） | [pitr-drill.md](./pitr-drill.md) |
+| 2026-09-05 fast restore ドリル（最新 Full backup 起点） | **完了**（2026-09-05） | 同ファイルに追記済み |
+| 2026-09-12 state verification ドリル: latest restore。HNSW / sequence / パラメータ / 拡張 / 権限 / 統計を検証 | **完了**（2026-09-12） | [2026-09-12-pitr-drill-state-verification.md](./2026-09-12-pitr-drill-state-verification.md) |
 
 2 回のドリルで本ファイルの記録に対して確定した事項:
 
@@ -125,7 +125,7 @@ az monitor metrics list \
   `earliestRestoreDate` は保持ウィンドウ内の**最古スナップショットの `completedTime` とマイクロ秒まで一致**し、
   毎朝 07:2xZ の日次 Full backup 完了に合わせて約 24 時間ジャンプする**鋸歯状**の動きをする
 - 実測ウィンドウ幅は 2026-08-29T07:22:55 〜 2026-09-04T14:06:49 の**約 6 日 6.7 時間**で、公称の 7 日より短い時間帯が常に存在する
-- **鋸歯状の動きは 2 回目でも再現した。** 2026-09-05T07:29:04Z の `earliestRestoreDate` は
+- **鋸歯状の動きは fast restore ドリルでも再現した。** 2026-09-05T07:29:04Z の `earliestRestoreDate` は
   **2026-08-30T07:22:48.397652+00:00** で、当日 07:28:47Z の `backup list` の最古 Full
   `backup_639236713673976526`（completedTime 同値）とマイクロ秒まで一致する。
   前日 09-04 の実測値 2026-08-29T07:22:55.667670Z から約 24 時間ジャンプしている
