@@ -291,10 +291,6 @@ clock を定める。これは SLI specification（何を測るか）ではな�
 ADR-0028 決定 11 で確定済みの SLI specification は変更しない。欠損処理、event classification、
 schedule / frequency / timeout の値、synthetic transaction の実装、threshold 1 / threshold 2、SLO target はここでは決定しない。
 
-これらをまとめて `contract` とは呼ばない。このリポジトリでの `contract` は wire / interface の意味に統一されており
-（ADR-0028 の response contract、本文書の input contract、[slo-review-runbook.md](./slo-review-runbook.md) の request contract）、
-計測規約の意味へ流用すると語が二重化するためである。
-
 すべての timestamp は wall clock から取得し、UTC の RFC 3339 形式、millisecond precision、末尾 `Z`
 （例: `2026-09-12T10:15:30.123Z`）で記録する。
 
