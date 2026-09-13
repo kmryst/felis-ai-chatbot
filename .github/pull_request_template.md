@@ -11,6 +11,18 @@
 - **対象**:
 - **非対象**:
 
+## Error budget policy（必須）
+
+次のいずれか 1 つを選ぶ。
+
+- [ ] change freeze は発動していない
+- [ ] change freeze は発動中だが、この変更は `docs/operations/slo/error-budget-policy.md` が定める対象変更に該当しない
+- [ ] change freeze は発動中で、この変更は対象だが、policy の例外を適用する
+- [ ] change freeze は発動中で、この変更は対象かつ例外なし。解除条件を満たすまで merge しない
+- **change freeze の Issue**: なし / #...
+- **対象外の根拠、例外区分と必要性、または merge を待機する根拠**:
+- **Validation / rollback または containment / follow-up Issue**:
+
 ## PRラベル（必須）
 
 - **type**: ちょうど1つ必須

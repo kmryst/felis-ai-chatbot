@@ -11,7 +11,7 @@
 | Reviewers | project owner |
 | Approvers | project owner |
 | Approval Date | 未定（Status を Published にする時に記入） |
-| Revisit Date | 未定（Approval Date + 6 か月。暫定） |
+| Revisit Date | 未定（`Published` 時に次の scheduled review date を記入） |
 
 本 project は個人開発であり、Author / Reviewers / Approvers はすべて project owner が兼ねる。
 Workbook が 3 役を分けて記録させる理由は technical accuracy の確認と business decision の責任を分離することにあり、
@@ -20,7 +20,8 @@ Workbook が 3 役を分けて記録させる理由は technical accuracy の確
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/) の
 SLO 文書における author、technical reviewer、approver の記録方法。
 
-Status `Draft` は、数値が空欄で [error-budget-policy.md](./error-budget-policy.md) に定めた対応を開始できない状態を表す。
+Status `Draft` は数値が空欄で、SLO compliance または error budget の計算結果を trigger とする
+[error-budget-policy.md](./error-budget-policy.md) の対応を開始できない状態を表す。実際の incident への対応は停止しない。
 
 ## 位置づけ: 最初の iteration
 
@@ -109,7 +110,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 | 3 少なく単純に、request-driven は availability と latency | availability と latency は両方要る。ただし ADR-0028 決定 11 が両者を 1 つの比率（threshold 超過を policy として error に数える）に畳んでおり、これを 1 本の SLI とする。`done` 到達率は availability の diagnostic として別に持ち、SLO を増やさない | SLI の本数 | — |
 | 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | 2 つの latency threshold の値、SLO target |
 | 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget を Issue に記録して判断すれば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない） |
-| 6 living document、Workbook が示す 4 つの選択肢 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は Approval + 6 か月 | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
+| 6 living document、Workbook が示す 4 つの選択肢 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は次の scheduled review date とする | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
 | dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。各 dependency の障害が独立していると仮定した公称 SLA の積（約 99.74%）は dependency risk を考えるための参考情報であり、current SLO の上限には使わない。dependency 起因の bad event も budget を消費する | dependency risk の参考情報 | dependency 起因の miss の扱い（policy に暫定で記録） |
 
 以下は、この導出結果を Workbook Appendix A の形に流し込んだものである。
@@ -348,7 +349,8 @@ monotonic clock の絶対値は process 間で比較または永続化せず、�
 baseline の測定期間、availability の切り下げ単位、latency の切り上げ単位、author が選んだ値、user experience との相関が未検証なら
 その事実を Rationale に残す。
 
-根拠: [The Site Reliability Workbook Appendix A「Example SLO Document」](https://sre.google/workbook/slo-document/)。
+根拠: [The Site Reliability Workbook Appendix A「Example SLO Document」](https://sre.google/workbook/slo-document/)、
+[Google Cloud Observability「Service monitoring concepts」](https://docs.cloud.google.com/stackdriver/docs/solutions/slo-monitoring)。
 
 記入時には、baseline の期間、availability の切り下げ単位、threshold の切り上げ単位、author が選んだ値、
 user experience との相関の検証状況を Rationale に記録する。intended user は project owner 1 名であり、独立した
@@ -362,7 +364,8 @@ user / business requirement は存在しないことも記録する。
 - compliance period（four-week rolling window）: rolling window は user experience に近く、週の整数倍なら週末の数が一定になる。
   Workbook の汎用的な出発点を採り、逸脱する場合に限り historical replay で理由を示す
 - review cadence（monthly → quarterly）: 立ち上げ期は頻繁に確認し、安定後に頻度を落とす。安定の目安は暫定で「3 回連続で revision 不要」とする
-- Revisit Date（Approval + 6 か月）: Example は約 1 年後だが、本 service は数値が空欄で最初の baseline 後に見直しが確実に要るため短くする
+- Revisit Date: revision を禁止する期限ではなく、次の scheduled review date とする。最初の `Published` 化では Approval Date の 1 か月後、
+  その後は review cadence に従い monthly または quarterly の次回日へ更新する。早期 review の trigger に該当した場合は日付を待たない
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)、
 [The Site Reliability Workbook Appendix A「Example SLO Document」](https://sre.google/workbook/slo-document/)。
@@ -378,10 +381,12 @@ eligible synthetic transaction が N 件、current SLO target が p% の場合�
 
 許容する bad event 数 = eligible event 数 × 許容する bad event の割合
 
-残りの error budget = 許容する bad event 数 − 観測した bad event 数
+remaining error budget = 許容する bad event 数 − 観測した bad event 数
 ```
 
-objective ごとに error budget を分け、current SLO の budget が枯渇した時だけ policy を発動する。
+`remaining error budget >= 0` は SLO compliant、`remaining error budget < 0` は SLO non-compliant とする。
+objective ごとに error budget を分け、観測した bad event 数が許容する bad event 数を上回り、
+`remaining error budget < 0` になった時だけ policy の発動判定へ進む。0 は error budget をすべて消費した境界であり、負ではない。
 
 根拠: [The Site Reliability Workbook Appendix A「Example SLO Document」](https://sre.google/workbook/slo-document/)。
 
@@ -394,24 +399,28 @@ current SLO とその error budget は、次のすべてを満たした `Publish
 - SLI implementation、schema、query または tool の version、SLI implementation validation results への link が記録されている
 
 SLO Version は、承認した SLI specification、current SLO target、compliance period の組合せを識別する。これらを変更する時は
-新しい SLO Version を記録する。SLO は Approval Date から有効とし、過去の event には遡及しない。
+新しい SLO Version を記録する。本 project では Approval Date を effective date とし、承認記録に effective date/time を
+RFC 3339 の UTC timestamp で残す。各 event は `attempt_started_at` の時点で有効な SLO Version に帰属させ、過去の event には遡及しない。
 
 各 compliance period の評価では、[slo-review-runbook.md](./slo-review-runbook.md) の手順で data quality と coverage が
 SLO compliance の評価に十分であることを確認できた measurement data だけを使用する。`Draft`、または measurement validity を
-確認できない期間については、SLO compliance を報告せず、残りの error budget を計算せず、
-[error-budget-policy.md](./error-budget-policy.md) に定めた対応を開始しない。
+確認できない期間については、SLO compliance を報告せず、`remaining error budget` を計算せず、SLO compliance または
+error budget の計算結果を trigger とする [error-budget-policy.md](./error-budget-policy.md) の対応を開始しない。この対応は、
+この文書と同 policy がともに `Published` で、両文書の Approval Date と Revisit Date が記録されている場合にだけ開始する。
 
-current SLO の error budget が枯渇した時に [error-budget-policy.md](./error-budget-policy.md) を発動する。aspirational SLO の
-budget は追跡するが policy を発動しない。
+この制限は、同 policy の §incident への対応、または error budget と独立した postmortem trigger を停止しない。実際の user impact、
+security、data integrity、recoverability への対応を SLO の Status や measurement validity の確認まで待機させない。
 
-low-traffic の注意: 分母が synthetic transaction の件数 N なので、N が小さいと単一の bad event が budget の大きな割合を消費する。
+current SLO の `remaining error budget < 0` を確認した時に [error-budget-policy.md](./error-budget-policy.md) の発動判定へ進む。
+aspirational SLO の budget は追跡するが policy の発動判定には使わない。
 
-low-traffic では単発 failure で burn rate が過大になり得るため、measurement frequency と SLO target を一緒に決め、
+low-traffic の注意: 分母が synthetic transaction の件数 N なので、N が小さいと単一の bad event が error budget の大きな割合を消費し、
+burn rate が過大になり得る。そのため measurement frequency と current SLO target は、event volume、cost、error budget の粒度を使って
+一緒に決める。決定順と承認対象の SLI implementation configuration の再検証は
+[slo-review-runbook.md](./slo-review-runbook.md) の初回確立手順に従う。
 paging ではなく ticket を採用する。
 
 根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
-
-したがって measurement frequency と SLO target は一緒に決める。
 
 ## 補足と留意点（Clarifications and Caveats）
 
@@ -527,8 +536,9 @@ uptime と data integrity は別の user requirement であり、同じ error bu
 
 ## 変更履歴
 
-ヘッダ表の SLO Version、Approval Date、Revisit Date と Status が、SLO の version と有効期間の開始日を表す。最初の採用時に
-SLI implementation version、query または tool version、supporting evidence の link をあわせて記録する。
+ヘッダ表の SLO Version、Approval Date、Revisit Date と Status が、SLO の version と有効期間の開始日を表す。承認記録には
+effective date/time を RFC 3339 の UTC timestamp で残す。最初の採用時に SLI implementation version、query または tool version、
+supporting evidence の link をあわせて記録する。
 
 | 日付 | 変更内容 | 定量的 decision |
 | --- | --- | --- |
@@ -536,7 +546,7 @@ SLI implementation version、query または tool version、supporting evidence 
 | 2026-09-07 | ADR-0028 決定 11 の 2 つの latency 条件を SLI specification として正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
 | 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と、障害の独立性を仮定した公称 SLA の積、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
 | 2026-09-12 | synthetic transaction の 4 つの timestamp、`attempt_started_at` による rolling window への帰属、monotonic clock を使用する latency 計測の開始・終了位置を定義（#253） | なし |
-| 2026-09-13 | SLO 文書の独自ラベルを Google SRE、W3C High Resolution Time、RFC 3339、Azure の用語または対象を直接表す記述へ置換（#253） | なし |
+| 2026-09-13 | SLO 文書の独自ラベルを Google SRE、W3C High Resolution Time、RFC 3339、Azure の用語または対象を直接表す記述へ置換。error budget の境界、両文書の承認条件、configuration の再検証、SLO Version の期間帰属、error-budget-driven action と incident response の境界を明確化（#253） | なし |
 
 ## 参考資料
 

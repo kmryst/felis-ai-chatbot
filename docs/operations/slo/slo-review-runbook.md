@@ -22,8 +22,9 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 - SLI specification は確定済み（ADR-0028 決定 11。PR #241）。SLI implementation の方式は authenticated synthetic transaction に
   決定済み。timestamp fields、event time、monotonic clock は確定済みで、その他の configuration
   （payload / service principal / credential / location / schedule / measurement timeout）は未決定
-- effective な SLO target、2 つの latency threshold の値、error budget はない。Status は `Draft`
-- Status が `Draft` の間、recurring review は「measurement を検証する」までで停止し、compliance と error budget は報告しない
+- effective な SLO target、2 つの latency threshold の値、error budget はない。`slo-document.md` と
+  `error-budget-policy.md` の Status はともに `Draft`
+- いずれかの Status が `Draft` の間、recurring review は「measurement を検証する」までで停止し、compliance と error budget は報告しない
 - `/readyz` の結果を primary `/chat` SLI として使用しない（NO_SLO）
 - current configuration（timeout、replica 数、ingress の制約）を SLO の根拠にしない。historical SLI result は starter SLO の入力として使い、
   その事実を slo-document.md の Rationale に記録する
@@ -35,6 +36,10 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 出力が既に存在し、その evidence が現在も有効な場合を除き、次の手順を順番に実施する。
 停止条件は「evidence が無いこと」ではなく「Workbook が要求する記録が無いこと」に置く。実測が無いこと自体は停止理由にしない。
 
+baseline 収集に使用した configuration と、SLO compliance measurement に使用する承認対象の SLI implementation configuration を区別する。
+baseline 後に決めた threshold、target、frequency または timeout が classification、coverage、right-censoring、または観測分布を変える場合は、
+承認対象の configuration で SLI implementation を再検証し、比較可能な baseline を再収集する。
+
 | 手順 | 入力 | 実施内容 | 出力 | 必要な evidence | 完了条件または停止条件 | 状態 |
 | --- | --- | --- | --- | --- | --- | --- |
 | user を特定する | repository の目的、supported client、deployment scope | service に依存する user を特定し、service user と repository の読者を区別する | 文書化された user population | client と deployment の文書、user または stakeholder の記録 | intended user と supported client を区別できなければ停止する | 完了（slo-document.md「User」） |
@@ -43,15 +48,15 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 | eligible / good / bad event、total events から除外する event、outcome を判定できない measurement result の扱いを定義する | SLI specification と service scope | intended user の識別や application 到達前の failure を含め、再現可能な event classification rule を記述する | event classification rule | request contract、authentication behavior、client behavior、incident の例 | missing telemetry data や対象外 traffic が暗黙に good または total events からの除外になるなら停止する | 完了 |
 | SLI implementation を選ぶ | SLI specification と measurement point の候補 | 候補を quality、coverage、cost で比較し、最初の iteration では安い方を選ぶ。実測が無い場合は先に data source（authenticated synthetic transaction）を設定する | measurement point と方式 | 候補の比較 | event rule を再現できない方式なら停止する | 方式は完了（synthetic transaction）。configuration は未決定 |
 | SLI implementation の timestamp fields、event time、monotonic clock を定義する | critical user journey、measurement point、compliance period | wall clock の timestamp fields、SLI の event time、window boundary、latency 計測用 monotonic clock の取得位置を定義する | version 管理された timestamp fields、event time、monotonic clock の定義 | supported client の request path、clock と window boundary の test case | event の期間帰属または latency を同じ raw record から再現できなければ停止する | 完了（slo-document.md「Timestamp fields」以下 3 小節） |
-| SLI implementation を実装し検証する | 選んだ方式と timestamp fields / event time / monotonic clock の定義 | その定義に従って payload、service principal、credential、location、schedule、measurement timeout を決め、下記「SLI implementation の検証」を通す | schema、tool、version、SLI implementation validation results | prototype record と field 単位の coverage | 必須 case が誤分類されるか、暗黙に失われるなら有効化を停止する | 未着手 |
-| baseline を収集する | 検証済みの implementation | four-week rolling window と同じ長さ以上の期間、raw event、scheduled runs の attempted / completed / missed counts、configuration version と変更時刻を保存する。この期間は compliance period ではない | 再現可能な baseline report | raw record、tool version、timestamp、deployment revision、image digest、configuration version | eligible event または measurement coverage を確認できなければ停止する | 未着手 |
+| baseline 収集用の SLI implementation configuration を実装し検証する | 選んだ方式と timestamp fields / event time / monotonic clock の定義 | payload、service principal、credential、location、schedule、measurement frequency、measurement timeout を記録し、下記「SLI implementation の検証」を通す | version 管理された SLI implementation configuration と validation results | prototype record、configuration、field 単位の coverage | 必須 case が誤分類される、暗黙に失われる、または right-censoring を評価できなければ停止する | 未着手 |
+| baseline を収集する | 検証済みの baseline 収集用 configuration | four-week rolling window と同じ長さ以上の期間、raw event、scheduled runs の attempted / completed / missed counts、configuration version と変更時刻を保存する。この期間は compliance period ではない | 再現可能な baseline report | raw record、tool version、timestamp、deployment revision、image digest、使用した全 configuration | eligible event または measurement coverage を確認できなければ停止する | 未着手 |
 | 2 つの latency threshold を提案する | baseline report（それぞれの分布） | 観測 percentile を単位で丸めて starter 値とし、測定期間・丸め単位・「user experience との相関は未検証」を Rationale に記録する | 根拠を伴う 2 つの latency threshold の案 | 分布と丸め規則 | current timeout や platform 制約（ingress idle timeout 等）だけが根拠なら停止する。baseline の観測 percentile を丸めて starter 値とすること自体は停止理由にしない | 未着手 |
-| SLO target を提案する | baseline report と threshold の案 | baseline を切り下げて starter SLO とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の案 | 切り下げ規則、dependency risk の評価 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
+| current SLO target の候補を作る | baseline report と threshold の案 | baseline を切り下げた値を starter SLO の候補とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の候補 | 切り下げ規則、dependency risk の評価 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
 | compliance period を確認する | 暫定値（four-week rolling window） | rolling か calendar か、週の整数倍かを確認し、逸脱する場合に限り理由と historical replay を記録する | 確定した compliance period | default から逸脱する場合に限り historical replay または baseline analysis | window が週の整数倍でない、または rolling / calendar の選択理由が無い場合に停止する。Workbook の default を採ることは停止理由にしない | 暫定値あり |
-| measurement frequency と measurement timeout を決める | implementation の試行結果、cost | frequency は cost の上限と error budget の粒度の下限の間で選ぶ。measurement timeout は、隣接する content event 間、および最後の content event から `done` までの duration に適用する latency threshold より長くし、measurement timeout による right-censoring の影響を確認する | configuration と根拠 | 試行、gap analysis、right-censoring analysis、cost | 設定によって SLI の意味が変わる、または報告されない right-censoring が生じるなら停止する | 未着手 |
-| error budget と policy の適用方法を確認する | SLO と compliance period の案 | request-based error budget を導出し、policy に定めた対応（critical user journey に影響する変更の change freeze）が実行可能であることを scenario walkthrough で確認する | error budget の計算と適用する policy | event 単位の計算、scenario walkthrough | error budget を downtime に変換している場合、または policy に定めた対応を実行できない場合は停止する | policy は暫定で記録済み |
-| SLO を承認して記録する | 完成した案、SLI implementation validation results、baseline report | ヘッダ表（Status / SLO Version / Author / Date / Reviewers / Approvers / Approval Date / Revisit Date）を記入し、Status を `Published` にする | Approval Date から有効になる SLO | review record、関連する measurement data、data quality / coverage の確認結果 | 定量項目に Rationale がない、data quality / coverage が SLO compliance の評価に不十分、または SLO Version / Approval Date が未記入なら停止する。過去へ遡って適用しない | 未着手 |
-| 測定を開始する | effective な SLO と検証済みの implementation | 承認済みの収集を開始し、raw measurement result の到着を確認して最初の measurement report を作成する | 収集開始を確認した measurement report | 最初の raw measurement result、収集状態、commit SHA、deployment revision、image digest、configuration version | 収集または classification が承認済みの implementation と一致しなければ compliance の報告を停止する | 未着手 |
+| current SLO target と SLO compliance measurement 用 configuration を確定し、再検証する | baseline report、threshold と target の候補、compliance period、cost | target と measurement frequency を一緒に決める。measurement timeout は latency threshold と区別して right-censoring を評価する。payload、service principal、credential、location、schedule を含む承認対象 configuration を version 管理し、「SLI implementation の検証」を再実行する | current SLO target と、承認対象の SLI implementation configuration の案および validation results | 切り下げ規則、event volume、cost、gap analysis、right-censoring analysis、raw test record | validation 対象と承認対象 configuration が異なる場合は停止する。baseline 収集用 configuration との差が classification、coverage、right-censoring、または観測分布を変える場合は baseline を再収集し、threshold と target の候補作成から繰り返す | 未着手 |
+| error budget と policy の適用方法を確認する | SLO と compliance period の案 | request-based error budget を導出する。remaining error budget が正、0、負の場合、external dependency のみ、service 側を含む原因、原因不明、measurement が無効、既存の change freeze の各 scenario で policy の手順を確認する | error budget の計算と適用可能な policy | event 単位の計算、scenario walkthrough | `remaining error budget < 0` 以外を新たな発動条件にする、error budget を downtime に変換する、または一意に対応を決められない場合は停止する | policy は暫定で記録済み |
+| SLO と error budget policy を承認して記録する | 完成した SLO 案、承認対象 configuration の SLI implementation validation results、baseline report、policy の scenario walkthrough | `slo-document.md` の SLO Version と、両文書の Status / Author / Date / Reviewers / Approvers / Approval Date / Revisit Date を記入し、同じ review record から両文書へ link する。effective date/time を RFC 3339 の UTC timestamp で記録し、両方の Status を同じ承認作業で `Published` にする | effective な SLO と適用可能な error budget policy | review record、関連する measurement data、data quality / coverage の確認結果、scenario walkthrough | 定量項目に Rationale がない、data quality / coverage が SLO compliance の評価に不十分、SLO Version / Approval Date / effective date/time が未記入、またはいずれか一方が `Draft` のままなら停止する。過去へ遡って適用しない | 未着手 |
+| 測定を開始する | 両文書が `Published` の SLO と policy、承認済み SLI implementation configuration | 承認済みの収集を開始し、raw measurement result の到着を確認して最初の measurement report を作成する | 収集開始を確認した measurement report | 最初の raw measurement result、収集状態、commit SHA、deployment revision、image digest、configuration version | 収集または classification が承認済みの implementation と一致しなければ compliance の報告を停止する | 未着手 |
 
 ## 定量値の決定手順
 
@@ -73,7 +78,7 @@ SLO の決定項目ではなく、それぞれの正本に記録する（slo-doc
 | Measurement timeout | measurement tool が client-visible result を待つのを終了する時点。right-censoring を決める設定であり latency threshold ではない | 隣接する content event 間、および最後の content event から `done` までの duration に適用する latency threshold、dependency behavior、未完了 request の classification | SLI implementation と `slo-document.md` に記録する |
 | campaign の sample size または request count | 評価に使用する eligible observation の数。普遍的な最小値はない | campaign が支える decision、想定 variance | campaign plan に記録する |
 | Burn rate threshold | Workbook Table 5-8 を starting point とし 28 日 window に再計算。low-traffic のため ticket のみ | baseline への replay（precision、recall、detection time、reset time） | alerting rule と policy に記録する |
-| Review frequency | 立ち上げ期は monthly、安定後は quarterly。Revisit Date は Approval Date + 6 か月（暫定） | review が適時で actionable か | この runbook に記録する |
+| Review frequency | 立ち上げ期は monthly、安定後は quarterly。Revisit Date は次の scheduled review date であり、最初の `Published` 化では Approval Date の 1 か月後とする | review が適時で actionable か | scheduled または triggered review のたびに、次回日を両文書へ記録する |
 
 ## SLI implementation の検証
 
@@ -191,26 +196,30 @@ right-censoring、configuration version と変更時刻、warm-start / cold-star
 measurement result、measurement timeout による right-censoring、configuration version と変更時刻、参照した data への link を含める。
 最初の `Published` SLO には、SLI implementation validation と baseline の両方が事前の基準を満たすことが必要である。
 その後も、data quality または coverage が基準を満たさない compliance period については、SLO compliance と error budget を報告せず、
-error budget policy に定めた対応を開始しない。
+SLO compliance または error budget の計算結果を trigger とする [error-budget-policy.md](./error-budget-policy.md) の対応を開始しない。
+この停止条件は、実際の user impact、security、data integrity、recoverability に対する incident response、または
+error budget と独立した postmortem trigger には適用しない。
 
 ## 測定と評価
 
-1. `slo-document.md` から effective な SLO version、service scope、SLI implementation、2 つの latency threshold、SLO target、
-   compliance period、policy link を確認する
-2. commit SHA、deployment revision、image digest、configuration version、client version、measurement tool version、
+1. `slo-document.md` と `error-budget-policy.md` の Status がともに `Published` で、両文書に Approval Date と Revisit Date があり、
+   同じ承認作業の review record を参照していることを確認する。満たさなければ compliance と error budget を評価しない
+2. `slo-document.md` から `attempt_started_at` の時点で有効な SLO Version、service scope、SLI implementation、
+   2 つの latency threshold、SLO target、compliance period、policy link を確認する
+3. commit SHA、deployment revision、image digest、configuration version、client version、measurement tool version、
    dependency provider / deployment / model を記録する
-3. 承認済みの raw event source が、今回評価する compliance period 全体を coverage していること、および期間内に schema や
+4. 承認済みの raw event source が、今回評価する compliance period 全体を coverage していること、および期間内に schema や
    SLI implementation が変わっていないことを確認する
-4. `slo-document.md` に記録された、承認済みで version 管理された query または tool を実行する。
+5. `slo-document.md` に記録された、承認済みで version 管理された query または tool を実行する。
    現在は synthetic transaction が未実装なのでここで停止する。synthetic transaction SLI の実装がマージされ、
    `slo-document.md` に schema / tool / version が記録された時点で解除する
-5. raw measurement data、または再現可能で変更されない参照を保存する
-6. eligible、good、bad の各 event、total events から除外した event、outcome を判定できない measurement result を数え、除外と判定不能の理由を説明する
-7. event count から good event の割合を計算し、宣言した compliance period の effective な SLO target と比較する
-8. 許容される bad event と残りの error budget を request 単位で計算する
-9. 採用済みの implementation と decision rule が policy に記録されている場合にのみ、burn rate を計算する
-10. SLO compliance を示す前に、data quality と coverage が事前の基準を満たすか確認する
-11. 結果を記録し、measurement が有効な場合にのみ policy に定めた対応と調査へ進む
+6. raw measurement data、または再現可能で変更されない参照を保存する
+7. eligible、good、bad の各 event、total events から除外した event、outcome を判定できない measurement result を数え、除外と判定不能の理由を説明する
+8. event count から good event の割合を計算し、宣言した compliance period の SLO target と比較する
+9. 許容される bad event と `remaining error budget` を request 単位で計算する
+10. 採用済みの implementation と decision rule が policy に記録されている場合にのみ、burn rate を計算する
+11. SLO compliance を示す前に、data quality と coverage が事前の基準を満たすか確認する
+12. 結果を記録する。measurement が有効で `remaining error budget < 0` の場合だけ policy の発動判定へ進む
 
 既存の collector（`scripts/collect-probe-records.sh`）は workflow が収集した過去の `/readyz` probe records を保存できるが、
 supporting evidence のままである。
@@ -218,16 +227,17 @@ supporting evidence のままである。
 
 ## 定期的な review と改善
 
-SLO が effective になった後、次の順序で実施する。Status が `Draft` の間は「measurement を検証する」までで停止する。
+SLO と error budget policy がともに `Published` になった後、次の順序で実施する。いずれかが `Draft` の間は
+「measurement を検証する」までで停止する。
 
 | 手順 | 確認または実行 | 記録 | 停止条件 | 正本の更新先 |
 | --- | --- | --- | --- | --- |
-| current SLO を読む | effective version、scope、SLI implementation、target、compliance period、policy | version と effective date | effective で内部的に一貫した SLO がない | `slo-document.md` |
+| current SLO と policy を読む | `attempt_started_at` の時点で有効な SLO Version、scope、SLI implementation、target、compliance period、両文書の Status と Approval Date | SLO Version、effective date、policy revision | 両文書が `Published` でない、または内部的に一貫した SLO と policy がない | `slo-document.md`、`error-budget-policy.md` |
 | measurement を検証する | schema、source coverage、query または tool、gap、timeout、commit SHA、deployment revision、image digest | validation result と limitation | eligibility、outcome、coverage を確認できない | `slo-document.md` の SLI implementation、`docs/verification/` の raw measurement data |
 | SLI を測定する | 承認済みの raw event source と version 管理された query または tool | count、query / tool version、period、data location | measurement が承認済みの implementation と異なる | measurement report |
-| SLO compliance と error budget を評価する | SLI result、target、compliance period、bad event count | 過去に遡って reclassification していない結果、残りの error budget | data quality または coverage が不足している | SLO compliance report と関連する Issue |
+| SLO compliance と error budget を評価する | SLI result、target、compliance period、bad event count | 過去に遡って reclassification していない結果、`remaining error budget` | data quality または coverage が不足している | SLO compliance report と関連する Issue |
 | 必要な場合に burn rate を評価する | 採用済みの formula、alerting window、threshold、no-data behavior | input、result、alert behavior | burn rate の使用が採用されていない、または data が無効 | policy または alerting rule |
-| engineering の対応を決定する | 有効な measurement、user impact、残りの error budget、提案する作業の risk | policy に定めた対応（change freeze の発動・解除・例外）と根拠 | evidence が矛盾する | 関連する Issue、PR、review record |
+| engineering の対応を決定する | 有効な measurement、user impact、`remaining error budget`、原因、提案する作業の production への潜在的影響 | policy の順序に従った change freeze の発動・非発動・解除・例外と根拠 | evidence が矛盾する、または原因と変更の影響を判定できない | 関連する Issue、PR、review record |
 | 調査する | 下記「調査順序」 | timeline、observation、否定した原因、data への link | user、security、data への即時 risk を先に封じ込める必要がある | incident、postmortem、review record |
 | hypothesis を立て controlled change を行い再測定する | 下記「hypothesis と controlled change」 | hypothesis、commit SHA、deployment revision、image digest、configuration version、before / after の data | 安全性、rollback、attribution が不十分 | code、Terraform、ADR、Issue または PR |
 | SLI、SLO、policy を review する | Table 2-5 の decision matrix と Workbook が示す 4 つの選択肢 | 維持または将来に向けた revision の decision | SLO miss だけが target を緩める根拠になっている | 該当する SLO document、policy、runbook |
@@ -389,10 +399,15 @@ measurement validity の evidence（Table 2-5 の 3 軸を含む）が必要で�
 3. 変更された requirement または assumption を記述し、supporting evidence を参照する
 4. Workbook が示す 4 つの選択肢のどれを選ぶかを、投資対効果で決める
 5. error budget policy、alert、query、historical comparability への影響を review する
-6. old value、new value、根拠、supporting evidence、SLI specification または implementation を変更した日時を記録し、
+6. 変更の種類に応じて version を更新する
+   - SLI specification、current SLO target、compliance period のいずれかを変更する場合は、新しい SLO Version を割り当てる
+   - schema、query、tool、measurement configuration のいずれかを変更する場合は、新しい SLI implementation version を記録する
+   - 両方を変更する場合は両方の version を更新する
+7. old value、new value、理由、supporting evidence、decision date、Approval Date、effective date を記録し、
    ヘッダ表（Date / Approval Date / Revisit Date / Status）を更新する
-7. revision を将来に向けて適用し、以前の SLO history を保持する
-8. revision 後の implementation を検証してから SLO compliance の評価に使用する
+8. error budget policy が新しい SLO Version と整合するか review し、必要な policy revision を将来に向けて有効にする
+9. revision は effective date 以後の event にだけ適用し、`attempt_started_at` で適用する SLO Version を決める。以前の SLO history を保持する
+10. revision 後の SLI implementation を検証してから SLO compliance の評価に使用する
 
 変更が architectural decision であるか、repository の ADR criteria を満たす場合にのみ ADR を使用する。すべての SLO edit に ADR を要求しない。
 historical failure を消すために、過去の target や classification を変更しない。
