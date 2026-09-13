@@ -10,21 +10,21 @@
 | --- | --- |
 | Status | Draft |
 | Author | project owner（kmryst） |
-| Date | 2026-09-07 |
+| Date | 2026-09-13 |
 | Reviewers | project owner |
 | Approvers | project owner |
 | Approval Date | 未定（Status を Published にする時に記入） |
 | Revisit Date | 未定（Approval Date + 6 か月。暫定） |
 
 本 project は個人開発であり、Author / Reviewers / Approvers はすべて project owner が兼ねる（§サービス概要 参照）。
-この policy または [slo-document.md](./slo-document.md) の Status が `Draft` の間、action は発動しない。
-この policy は、`slo-document.md` の「有効化の条件」を満たす `Published` SLO Version と、runbook で `sufficient` と判定された
-compliance period にだけ適用する。
+この policy または [slo-document.md](./slo-document.md) の Status が `Draft` の間、policy に定めた対応は開始しない。
+この policy は、`slo-document.md` の「有効化の条件」を満たす `Published` SLO Version と、runbook により
+SLO compliance を評価できると確認された compliance period にだけ適用する。
 
 ## 位置づけ: 原則からの導出
 
 この policy は [slo-document.md](./slo-document.md) の「原則 5: error budget は objective で reproducible な意思決定のためにある」と
-「原則 6: SLO は living document であり、4 つの出口で iterate する」から導く。
+「原則 6: SLO は living document であり、review 結果に応じて iterate する」から導く。
 
 error budget は、許容する失敗量を明示し、reliability と feature delivery の優先順位を evidence に基づいて判断するための指標である。
 
@@ -34,10 +34,10 @@ error budget は、許容する失敗量を明示し、reliability と feature d
 
 | 事実 | 帰結 |
 | --- | --- |
-| repository の主目的は Backup / Restore / Maintenance の設計・検証で、`POST /chat` と無関係な作業が多い | policy は罰や全面的な変更停止ではない。freeze の対象を critical user journey の code path に限定する |
-| critical dependency（Azure OpenAI ほか）の composite 参考値が約 99.74% | dependency 起因の miss で freeze しても本 service 側に打つ手が無い期間が生じる。freeze せず、hard dependency への対策の検討を must にする |
+| repository の主目的は Backup / Restore / Maintenance の設計・検証で、`POST /chat` と無関係な作業が多い | policy は罰や全面的な変更停止ではない。change freeze の対象を critical user journey に影響する変更に限定する |
+| 各 critical dependency の障害が独立していると仮定した公称 SLA の積が約 99.74% | dependency 起因の miss に change freeze を適用しても本 service 側に打つ手が無い期間が生じる。change freeze は適用せず、hard dependency への対策の検討を必須にする |
 | 実測 0 件、low-traffic | 20% や Table 5-8 は Workbook の starting point として置き、baseline 後に見直す。paging はせず ticket のみ |
-| 最初の iteration | この policy も Draft であり、Revisit Date で 4 つの出口とあわせて見直す |
+| 最初の iteration | この policy も Draft であり、Revisit Date に Workbook が示す 4 つの選択肢とあわせて見直す |
 
 ## サービス概要（Service Overview）
 
@@ -84,7 +84,7 @@ policy は SLO miss に対する罰ではなく、evidence が reliability を�
 
 - この policy は SLO miss に対する罰ではない
 - 単一の bad event やすべての SLO miss を理由に、feature 開発を自動的にすべて停止しない
-- aspirational SLO の miss はこの policy の action を発動しない。aspirational SLO は測定・追跡のみを行う
+- aspirational SLO の miss はこの policy に定めた対応を開始しない。aspirational SLO は測定・追跡のみを行う
 - [slo-document.md](./slo-document.md) の §SLO の範囲外 と §SLO の対象外の設定 に置いたもの（diagnostic metric、
   recovery 要件など）を、同じ error budget として扱わない
 - この policy は security、cost、backup、data integrity の制御手段の代わりにならない
@@ -103,7 +103,7 @@ budget が十分残っている期間には、reliability risk のある変更�
 根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)、
 [The Site Reliability Workbook Ch.18「SRE Engagement Model」](https://sre.google/workbook/engagement-model/)。
 
-### error budget が枯渇した場合: critical path 限定 freeze（暫定）
+### error budget が枯渇した場合: critical user journey に影響する変更の change freeze（暫定）
 
 直近の compliance period（four-week rolling window）で current SLO の error budget を超過した場合、
 **critical user journey の code path に触れる変更**の PR マージと Terraform apply を、SLO 内に戻るまで停止する。
@@ -121,16 +121,16 @@ budget が十分残っている期間には、reliability risk のある変更�
 根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 docs、backup / restore、CI、監視の追加など、critical user journey の code path に触れない変更は継続できる。
-境界上の変更（例: 監視の追加が `backend/app/` に触れる）は freeze 対象として扱い、例外にする場合はその理由を PR に書く。
+影響の有無が明確でない変更（例: 監視の追加が `backend/app/` に触れる場合）は change freeze の対象として扱い、例外にする場合はその理由を PR に書く。
 
 Rationale（暫定である理由を含む）:
 
-- policy には、budget 枯渇時に必要な action と実行者を明記する。裁量的な延期だけでは足りない
+- policy には、budget 枯渇時に必要な対応と実行者を明記する。裁量的な延期だけでは足りない
 - 全面停止ではなく、risk に比例した release 制御を採る
 - 本 repository の主目的（Backup / Restore / Maintenance の設計・検証）は `POST /chat` の reliability と無関係な作業が多く、
-  全面 freeze は policy の目的と衝突する
-- freeze 対象を path で列挙することで、開発者と承認者が同一人物でも機械的に判定できる
-- 全面 freeze（Workbook Example と 1:1）と現行の裁量的な運用を比較し、暫定で限定 freeze を採る。Revisit Date で見直す
+  全面的な change freeze は policy の目的と衝突する
+- change freeze の対象を path で列挙することで、開発者と承認者が同一人物でも機械的に判定できる
+- 全面的な change freeze（Workbook Example と 1:1）と現行の裁量的な運用を比較し、暫定で対象を限定した change freeze を採る。Revisit Date で見直す
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)、
 [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)、
@@ -142,13 +142,13 @@ budget 超過を確認したら、project owner は次を行う。
 
 1. Issue を起票し、compliance の評価結果（eligible / good / bad の count、残りの error budget、measurement の妥当性）と
    影響を受ける critical user journey を記録する
-2. その Issue に label `status:blocked` を付け、freeze 中であることを示す
-3. freeze 中に critical path に触れる PR を出す場合、PR 本文に「policy 適用外の理由」（security fix か、原因に対する bug fix か）を書く
+2. その Issue に label `status:blocked` を付け、change freeze 中であることを示す
+3. change freeze 中に critical user journey に影響する PR を出す場合、PR 本文に「policy 適用外の理由」（security fix か、原因に対する bug fix か）を書く
 
 CI による警告や block は導入しない。個人開発では機械的 block を自分で外せるため、block の強度は記録のみと実質変わらず、CI の複雑さだけ増える。
 label と PR 本文の記録が繰り返し守られない場合は Revisit Date で CI warning への昇格を検討する。
 
-### 原因別の must / may
+### 原因別に必要な reliability work
 
 原因に応じて reliability work を必須または任意とし、scope 外 traffic や user impact のない誤分類は再現性を確認した上で別扱いにする。
 
@@ -156,18 +156,18 @@ label と PR 本文の記録が繰り返し守られない場合は Revisit Date
 
 本 project では次のとおりとする。
 
-| 原因 | freeze | reliability 作業 |
+| 原因 | change freeze | reliability work |
 | --- | --- | --- |
-| 自 code または手順の誤り | する | must |
-| postmortem が hard dependency を緩める機会を示した | する | must |
-| 誤分類で budget が消費されるべきだったのに消費されなかった | 再計算して超過ならする | must（SLI implementation の修正） |
-| Azure 側の dependency（Container Apps / Azure OpenAI / PostgreSQL / Entra ID）の障害 | しない（下記） | hard dependency への対策の検討が must |
-| SLO scope 外の traffic（load test、drill）が budget を消費した | しない | may。exclusion の再現性を確認する |
-| 誤分類で user impact 無しに budget が消費された | しない | may。SLI implementation を修正する |
+| 自 code または手順の誤り | する | 必須 |
+| postmortem が hard dependency を緩める機会を示した | する | 必須 |
+| 誤分類で budget が消費されるべきだったのに消費されなかった | 再計算して超過ならする | 必須（SLI implementation の修正） |
+| Azure 側の dependency（Container Apps / Azure OpenAI / PostgreSQL / Entra ID）の障害 | しない（下記） | hard dependency への対策の検討が必須 |
+| SLO scope 外の traffic（load test、drill）が budget を消費した | しない | 任意。exclusion の再現性を確認する |
+| 誤分類で user impact 無しに budget が消費された | しない | 任意。SLI implementation を修正する |
 
 ### dependency 起因の SLO miss（暫定）
 
-dependency 起因の SLO miss では、原因に関係なく freeze する方式と、freeze せず resilience を高める方式がある。
+dependency 起因の SLO miss では、原因に関係なく change freeze を適用する方式と、適用せず resilience を高める方式がある。
 本 project は service と dependency の性質を踏まえて後者を採り、決定理由を記録する。
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
@@ -175,13 +175,14 @@ dependency 起因の SLO miss では、原因に関係なく freeze する方式
 本 project は暫定で次を採る。
 
 - dependency 起因の bad event も error budget を消費する（SRE Book Ch.3 §Benefits。slo-document.md の §補足と留意点）
-- dependency 起因の SLO miss では freeze しない
-- ただし hard dependency への対策（caching、graceful degradation、代替経路、retry 境界の再検討）の検討を **must** とし、
+- dependency 起因の SLO miss では change freeze を適用しない
+- ただし hard dependency への対策（caching、graceful degradation、代替経路、retry policy の再検討）の検討を必須とし、
   postmortem または Issue に検討結果と採否の理由を記録する
 
-Rationale: Azure 側の障害で freeze しても本 service 側に打つ手が無い期間が生じる。dependency の composite 参考値は
-SLO target の硬い上限ではないが、dependency risk の input である。原因不問の freeze は採らず、hard dependency を
-緩める設計（caching、graceful degradation、代替経路、retry 境界）を検討して記録する。この判断は暫定であり Revisit Date で見直す。
+Rationale: Azure 側の障害に change freeze を適用しても本 service 側に打つ手が無い期間が生じる。各 dependency の障害が独立していると
+仮定した公称 SLA の積は SLO target の上限ではないが、dependency risk を検討する際の参考情報である。原因不問の change freeze は採らず、
+hard dependency を緩める設計（caching、graceful degradation、代替経路、retry policy）を検討して記録する。この判断は暫定であり
+Revisit Date で見直す。
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
 
@@ -202,9 +203,9 @@ evidence の記録、変更の scope、validation、rollback plan を省略し�
 
 裁量的な作業を繰り返し緊急と呼ぶことで、恒常的な例外を作らない。
 
-### freeze の解除条件
+### change freeze の解除条件
 
-次の両方を満たした時に freeze を解除する。
+次の両方を満たした時に change freeze を解除する。
 
 - 直近の compliance period で current SLO 内に戻っている
 - budget 消費の原因に対する action item が Issue として起票されている
@@ -237,18 +238,18 @@ alert が発火しなかった incident は monitoring gap を示すため、pos
 
 根拠: [SRE Book Ch.1「Introduction」](https://sre.google/sre-book/introduction/)。
 
-postmortem は既存の `docs/verification/<campaign>/observations.md` pattern に置き、新しい evidence framework を追加しない。
+postmortem は既存の `docs/verification/<campaign>/observations.md` に記録し、別の記録体系を追加しない。
 
 ## escalation（Escalation Policy）
 
-error budget の計算または policy action に疑義がある場合は、決定責任者へ escalate し、根拠と決定を記録する。
+error budget の計算または policy に定めた対応に疑義がある場合は、決定責任者へ escalate し、根拠と決定を記録する。
 
 根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
-§サービス概要 のとおり、本 project では disagreement の当事者と決定者が同一人物である。計算または action の妥当性に疑義がある場合、
+§サービス概要 のとおり、本 project では disagreement の当事者と決定者が同一人物である。計算または対応の妥当性に疑義がある場合、
 project owner は疑義の内容、evidence、決定を Issue に記録し、その決定を Revisit Date まで維持する。
 第三者の視点が必要な場合は外部レビュー（ADR-0028 で用いた外部 LLM レビューを含む）を任意で用い、その結果も Issue に記録する。
-決定を Issue に記録せずに policy の action を省略しない。
+決定を Issue に記録せずに policy に定めた対応を省略しない。
 
 ## error budget の計算と評価
 
@@ -268,18 +269,18 @@ error budget の運用は、SLO を満たすための engineering decision を�
 compliance period を使用する。error budget の単位は SLI と同じ request-based の単位とし、downtime の分数へ変換しない。
 
 表示する比率を丸める前に、event 数から計算する。各結果には eligible event 数、good event 数、bad event 数、
-query または tool の version、unclassifiable record、欠落した telemetry を残す。
+query または tool の version、outcome を判定できなかった record、欠落した telemetry data を残す。
 
 error budget をこの policy の入力に使えるのは、[slo-document.md](./slo-document.md) の「有効化の条件」を満たし、
-runbook で `sufficient` と記録された compliance period だけである。`Draft` または `insufficient` の期間は、
-error budget を計算、報告、policy action の根拠に使用しない。
+SLI implementation と対象期間の data quality / coverage が検証され、SLO compliance を評価できる compliance period だけである。
+`Draft` または measurement validity を確認できない期間は、error budget を計算、報告、error budget policy に定めた対応の根拠に使用しない。
 
 ### 評価
 
 review のたびに runbook に従い、最初に測定が有効であることを確認する。その後、有効な compliance period について、
 観測した bad event 数と許容する bad event 数を比較する。丸めた割合だけでなく、各 event 数と残りの error budget を報告する。
 
-### burn rate alerting（starting point は Workbook Table 5-8）
+### burn rate alert（starting point は Workbook Table 5-8）
 
 burn rate は次のように計算する。
 
@@ -288,14 +289,15 @@ burn rate = alerting window における観測 bad event の割合を
             SLO が許容する bad event の割合で割った値
 ```
 
-burn rate alerting を採用する場合、Workbook Table 5-8 を starting point とし、four-week（28 日 = 672 時間）window 用に
-再計算した値を alert source に記録する。
+burn rate alert を採用する場合、Workbook Table 5-8 を starting point とし、four-week（28 日 = 672 時間）window 用に
+再計算した値を alerting rule に記録する。
 
 根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
 
 Table 5-8 の parameter は 30 日 window を前提とするため、本 service の採用値ではない。
 本 service の compliance period は four-week（28 日）なので burn rate は window 長に応じた再計算が要る
-（burn rate = 消費割合 × window 時間 ÷ long window 時間）。再計算値は baseline に対して replay してから記入する（未記入）。
+（burn rate = error budget の消費割合 × compliance period の長さ ÷ long-window の長さ）。再計算値は baseline に対して replay してから
+記入する（未記入）。
 
 low-traffic のため paging は行わず、ticket（GitHub Issue の起票）のみとする。
 
@@ -313,26 +315,27 @@ low-traffic での誤発火を防ぐ原型として、比率と絶対数の両�
 
 根拠: [SRE Book Ch.10「Practical Alerting from Time-Series Data」](https://sre.google/sre-book/practical-alerting/)。
 
-採用前に、project の evidence に対して候補の logic を replay し、event volume、event がない interval、telemetry gap、
+採用前に、project の evidence に対して候補の logic を replay し、event volume、event がない interval、missing telemetry data、
 ingestion delay、alert precision、alert recall、detection time、reset time、運用対応能力を検証する。
-それまでは、burn rate を action を開始する条件にしない。
+それまでは、burn rate を対応開始の条件にしない。
 
 ## 測定が無効な場合
 
-collection gap、eligible event の母集団を特定できない状態、query の不具合、timeout による censoring、
-warm と cold の semantics の混在、configuration boundary、必要な field の欠落により信頼できる評価ができない場合は、
-evidence record に「この SLO を信頼できる形で評価するための evidence が不足している」と記録する。
+欠落した scheduled execution または measurement result、eligible event の母集団を特定できない状態、query の不具合、
+measurement timeout による right-censoring、
+cold-start 時と warm instance 利用時の測定結果の混在、異なる configuration version の data の混在、必要な field の欠落により
+信頼できる評価ができない場合は、「この SLO を信頼できる形で評価するための data quality または coverage が不足している」と記録する。
 
-欠落した telemetry を good event に分類しない。未検証の値から error budget の消費や回復を算出しない。
+missing telemetry data を good event に分類しない。未検証の値から error budget の消費や回復を算出しない。
 利用可能な telemetry に合わせて SLO を変更しない。raw evidence の保持、影響期間の特定、測定の復旧、
 修正した SLI implementation の検証を優先する。測定の復旧に必要な変更は、scope と rollback を記録できる場合に実施できる。
 
 測定の復旧後も、独立した data source によって分類を再現できる場合を除き、観測していない user outcome を遡って推定しない。
-gap は evidence record に明示する。
+gap の対象期間、原因、影響範囲を記録する。
 
 ## regression への対応
 
-有効な evidence に基づき、統計的または運用上意味のある regression が疑われる場合は、観測結果と configuration boundary を保持し、
+有効な evidence に基づき、統計的または運用上意味のある regression が疑われる場合は、観測結果、configuration version、変更時刻を保持し、
 原因を service に帰属させる前に測定の妥当性を確認する。現在の user impact と error budget を評価し、
 予定する変更には §SLO miss 時の対応 を適用する。
 
@@ -346,7 +349,8 @@ SLO alert が発火したかどうかにかかわらず、実際に発生して�
 data integrity、recoverability に基づいて incident に対応する。incident 中は、次のように行動する。
 
 - 詳細な SLO review より先に、user impact を復旧または封じ込める
-- timestamp、request ID または correlation ID、deployment と configuration の識別情報、telemetry gap を保持する
+- timestamp、request ID または correlation ID、commit SHA、deployment revision、image digest、configuration version、
+  missing telemetry data を保持する
 - incident 中は SLI specification と有効な SLO target を変更しない
 - 状況が安定した後、evidence が有効であれば、現在の error budget への影響を計算し、§outage 時の対応 の条件に該当するか判断する
 - monitoring と SLO が incident を反映した、または反映しなかった理由を調査する
@@ -377,7 +381,8 @@ error budget は、SLO で定めた許容失敗量を使って、reliability と
 | 日付 | 変更内容 |
 | --- | --- |
 | 2026-08-30 | request-based の計算規則、比例的な engineering decision、測定が無効な場合の扱いを記録 |
-| 2026-09-07 | Workbook Appendix B の節構成（ヘッダ表、Service Overview / Goals / Non-Goals / SLO Miss Policy / Outage Policy / Escalation Policy / Background）へ全面改訂。critical path 限定 freeze、label と PR 本文による強制、dependency 起因の miss の扱い、Outage Policy の 20%、Table 5-8 を starting point とする burn rate alerting を暫定で記録（#242） |
+| 2026-09-07 | Workbook Appendix B の節構成（ヘッダ表、Service Overview / Goals / Non-Goals / SLO Miss Policy / Outage Policy / Escalation Policy / Background）へ全面改訂。critical user journey に影響する変更の change freeze、label と PR 本文による強制、dependency 起因の miss の扱い、Outage Policy の 20%、Table 5-8 を starting point とする burn rate alert を暫定で記録（#242） |
+| 2026-09-13 | `change freeze`、data quality / coverage、alerting rule などの標準用語または対象を直接表す記述へ統一（#253） |
 
 ## 参考資料
 

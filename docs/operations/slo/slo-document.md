@@ -7,7 +7,7 @@
 | Status | Draft |
 | SLO Version | 未定（Status を Published にする時に記入） |
 | Author | project owner（kmryst） |
-| Date | 2026-09-12 |
+| Date | 2026-09-13 |
 | Reviewers | project owner |
 | Approvers | project owner |
 | Approval Date | 未定（Status を Published にする時に記入） |
@@ -20,7 +20,7 @@ Workbook が 3 役を分けて記録させる理由は technical accuracy の確
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/) の
 SLO 文書における author、technical reviewer、approver の記録方法。
 
-Status `Draft` は、数値が空欄で [error-budget-policy.md](./error-budget-policy.md) の action を発動できない状態を表す。
+Status `Draft` は、数値が空欄で [error-budget-policy.md](./error-budget-policy.md) に定めた対応を開始できない状態を表す。
 
 ## 位置づけ: 最初の iteration
 
@@ -33,7 +33,7 @@ SLI 選定と改善の指針。
 したがってこの改訂は、(1) the Google SRE books の大原則を明文化し、(2) そこからこの service に何が導かれるかを導出し、(3) 導出結果を
 Workbook Appendix A「Example SLO Document」の節構成（Service Overview → SLIs and SLOs → Rationale → Error Budget →
 Clarifications and Caveats）に流し込む。見出しは既存の運用文書に合わせて日本語で置き、対応する Workbook の節名を各見出しに併記する。安い implementation（authenticated synthetic transaction）から始め、
-実測後に「原則 6」の 4 つの出口で見直す。原則から導けない項目は無理に埋めず未決定のまま残す。
+実測後に「原則 6」の 4 つの選択肢から対応を選ぶ。原則から導けない項目は無理に埋めず未決定のまま残す。
 
 SLO 採用後の engineering decision は [error-budget-policy.md](./error-budget-policy.md)、
 初回策定、measurement、review、revision の手順は [slo-review-runbook.md](./slo-review-runbook.md) を正本とする。
@@ -42,8 +42,8 @@ SLO 採用後の engineering decision は [error-budget-policy.md](./error-budge
 
 ### 原則 1: 測定は user に近いほど良い。取れないなら proxy でよく、その限界を書く
 
-SLI は server 内部ではなく user が受け取る結果に近い場所で測る。real-user measurement が得られない間は、black-box 的な
-synthetic transaction を proxy にできるが、coverage と測れない user behavior を明記して改善対象として残す。
+SLI は server 内部ではなく user が受け取る結果に近い場所で測る。client-side instrumentation から測定結果が得られない間は、
+black-box monitoring としての synthetic transaction を proxy にできるが、coverage と測れない user behavior を明記して改善対象として残す。
 
 根拠: [SRE Book Appendix B「A Collection of Best Practices for Production Services」](https://sre.google/sre-book/service-best-practices/)、
 [SRE Book Ch.4「Service Level Objectives」](https://sre.google/sre-book/service-level-objectives/)、
@@ -80,15 +80,15 @@ target は project owner が責任を持って承認し、budget は target か�
 根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)、
 [SRE Book Ch.1「Introduction」](https://sre.google/sre-book/introduction/)。
 
-### 原則 6: SLO は living document であり、4 つの出口で iterate する
+### 原則 6: SLO は living document であり、review 結果に応じて iterate する
 
-service の実態または観測の質が変われば、SLO も見直す。review の出口は次の4つである。
+service の実態または観測の質が変われば、SLO も見直す。Workbook が示す選択肢は次の 4 つである。
 
-| 出口 | この文書での意味 |
+| 選択肢 | この文書での意味 |
 | --- | --- |
 | SLO target を変更する | SLI が示す user impact と policy の反応が合わない場合に target を調整する |
 | SLI implementation を変更する | user に近い measurement point へ寄せる、または coverage を増やす |
-| aspirational SLO を置く | current SLO と並行して測るが、policy action の根拠にはしない目標を置く |
+| aspirational SLO を置く | current SLO と並行して測るが、error budget policy に定めた対応の根拠にはしない目標を置く |
 | iterate する | 最初は低コストの方法を採り、evidence が増えた時に最も効果の大きい改善を選ぶ |
 
 立ち上げ期は monthly、安定後は quarterly を暫定の review cadence とする。
@@ -103,14 +103,14 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 
 | 原則 | この service への帰結 | 決まったこと | 未決定のまま残すこと |
 | --- | --- | --- | --- |
-| 1 測定は user に近いほど良い | measurement point は supported client boundary。ingress log と application log は client 側の DNS、TLS、parse、render を観測できないので診断に限る | measurement point | — |
-| 1 取れないなら proxy | 実利用が無いので client-side instrumentation は event を生まない。authenticated synthetic transaction（black-box monitoring の層）を proxy として primary SLI implementation に採る。限界（real user の分布を表さない、撤回の UI 挙動は検証できない）は §補足と留意点に書く | SLI implementation の方式 | payload / identity / location / schedule / measurement timeout の値 |
-| 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ、timestamp field / event time / latency clock | timestamp 以外の schema / tool / version |
+| 1 測定は user に近いほど良い | measurement point は supported client。ingress log と application log は client 側の DNS、TLS、parse、render を観測できないので診断に限る | measurement point | — |
+| 1 取れないなら proxy | 実利用が無いので client-side instrumentation は event を生まない。authenticated synthetic transaction（black-box monitoring の層）を proxy として primary SLI implementation に採る。限界（real user の分布を表さない、撤回の UI 挙動は検証できない）は §補足と留意点に書く | SLI implementation の方式 | payload / service principal / credential / location / schedule / measurement timeout の値 |
+| 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ、timestamp fields / event time / monotonic clock | timestamp 以外の schema / tool / version |
 | 3 少なく単純に、request-driven は availability と latency | availability と latency は両方要る。ただし ADR-0028 決定 11 が両者を 1 つの比率（threshold 超過を policy として error に数える）に畳んでおり、これを 1 本の SLI とする。`done` 到達率は availability の diagnostic として別に持ち、SLO を増やさない | SLI の本数 | — |
-| 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | threshold 1 / threshold 2 の値、SLO target |
+| 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | 2 つの latency threshold の値、SLO target |
 | 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget を Issue に記録して判断すれば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない） |
-| 6 living document、4 つの出口 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は Approval + 6 か月 | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
-| dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。独立性を仮定した積（約 99.74%）は dependency risk を考えるための参考値であり、current SLO の上限には使わない。dependency 起因の bad event も budget を消費する | composite の参考値 | dependency 起因の miss の扱い（policy に暫定で記録） |
+| 6 living document、Workbook が示す 4 つの選択肢 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は Approval + 6 か月 | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
+| dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。各 dependency の障害が独立していると仮定した公称 SLA の積（約 99.74%）は dependency risk を考えるための参考情報であり、current SLO の上限には使わない。dependency 起因の bad event も budget を消費する | dependency risk の参考情報 | dependency 起因の miss の扱い（policy に暫定で記録） |
 
 以下は、この導出結果を Workbook Appendix A の形に流し込んだものである。
 
@@ -178,21 +178,22 @@ SLO は **four-week rolling window** を compliance period とする（暫定。
 
 | Category | SLI | SLO（current） | SLO（aspirational） |
 | --- | --- | --- | --- |
-| `POST /chat`（critical user journey） | eligible event のうち、supported client が最初の content event を threshold 1 以内に受信し、以後の content event の間隔、および最後の content event から有効な終端 event までの間隔が threshold 2 を超えることなく、有効な終端 event `done` を受信して parse / render できたものの割合。authenticated synthetic transaction が supported client boundary で測る | 未記入（baseline 後に starter SLO として記入） | 未記入（任意。client-side instrumentation の実装後に測る、current SLO より厳しい値。policy の action を発動しない） |
+| `POST /chat`（critical user journey） | eligible event のうち、supported client が最初の content event までの latency threshold 以内に最初の content event を受信し、隣接する content event 間、および最後の content event から有効な終端 event までの各 duration が該当する latency threshold を超えることなく、有効な終端 event `done` を受信して parse / render できたものの割合。authenticated synthetic transaction が supported client で測る | 未記入（baseline 後に starter SLO として記入） | 未記入（任意。client-side instrumentation の実装後に測る、current SLO より厳しい値。error budget policy に定めた対応を開始しない） |
 
 ```text
 count of eligible "chat" synthetic transactions which
-  received the first content event within threshold 1
+  received the first content event within its latency threshold
   and every subsequent gap (content -> content, last content -> done)
-      was within threshold 2
+      was within the latency threshold for subsequent gaps
   and terminated with a `done` event
   and were parsed and rendered by the supported client
 divided by
 count of all eligible "chat" synthetic transactions
 ```
 
-この measurement semantics は ADR-0028 決定 11 を正本化したものである（PR #241）。threshold 2 は content event 間だけでなく、
-最後の content event から終端 event までの区間にも適用する。content event が 1 件の stream（guard 経路の `notice` → `done`）で
+この SLI specification は ADR-0028 決定 11 を正本化したものである（PR #241）。隣接する content event 間、および最後の content event から
+終端 event までの duration には、同じ latency threshold を適用する。これにより、content event が 1 件の stream（guard 経路の
+`notice` → `done`）でも
 間隔条件が空適用にならず、journey の完了までを有界に保つためである。
 
 threshold を超えた response を policy 上の bad event に数える。HTTP status が成功でも、response contract 違反や遅延は
@@ -201,7 +202,7 @@ user journey の失敗になり得る。
 根拠: [SRE Book Ch.6「Monitoring Distributed Systems」](https://sre.google/sre-book/monitoring-distributed-systems/)。
 
 TTFT（time to first token）は Azure OpenAI への request から最初の生成 token までを指す diagnostic metric であり、
-threshold 1 が測る「最初の content event まで」とは別の量である。両者を同じ名前で呼ばない（ADR-0028 決定 11）。
+最初の content event までの latency とは別の量である。両者を同じ名前で呼ばない（ADR-0028 決定 11）。
 
 ### Eligible event
 
@@ -217,8 +218,9 @@ threshold 1 が測る「最初の content event まで」とは別の量であ�
 
 eligible event のうち、次の 4 条件をすべて満たすものだけを good event とする。
 
-- 最初の content event を threshold 1 以内に受信した
-- 以後の content event の間隔、および最後の content event から終端 event までの間隔が threshold 2 を超えなかった
+- 最初の content event を、その latency threshold 以内に受信した
+- 以後の content event の間隔、および最後の content event から終端 event までの間隔が、それらの duration に適用する latency threshold を
+  超えなかった
 - 有効な終端 event である `done` で終端した
 - supported client が stream を parse して render できた
 
@@ -233,8 +235,8 @@ normal reply（`message` 列 → `done`）と意図した no-context notice（`n
 - `error` event で終端した stream。class は問わない（`timeout` / `rate_limit` / `server_error` / `bad_request` / `content_filter`）。
   `content_filter` 終端で表示済み partial text の撤回を伴うもの（ADR-0028 決定 6）も bad event である
 - 終端 event（`done` / `error`）なしに終了した stream（ADR-0028 決定 2。Azure Container Apps ingress の idle timeout による切断を含む）
-- threshold 1 または threshold 2 を超えたもの
-- qualifying response を観測する前に発生した measurement timeout
+- いずれかの latency threshold を超えたもの
+- measurement timeout に達した attempt
 - supported client が parse または render できない stream
 
 intended user の request は、application code へ到達する前に失敗したことを理由に ineligible にしない。
@@ -255,14 +257,14 @@ eligible population または outcome を再構築できない場合は、SLO �
 
 ### SLI implementation
 
-primary SLI implementation は **authenticated synthetic transaction** とする（導出の原則 1）。intended user を模擬する
-identity（synthetic 用 service principal。[entra-easy-auth-setup.md](../entra-easy-auth-setup.md)）で supported client と同じ経路
+primary SLI implementation は **authenticated synthetic transaction** とする（導出の原則 1）。intended user を模擬する synthetic 用
+service principal（[entra-easy-auth-setup.md](../entra-easy-auth-setup.md)）で supported client と同じ経路
 （BFF 経由）の `POST /chat` を周期的に実行し、ADR-0028 決定 9 の共有 fixture で検証した verifier が SSE stream を good / bad に分類する。
 
 | Data source | 観測できるもの | この SLI に対する limitation | 状態 |
 | --- | --- | --- | --- |
-| Authenticated synthetic transaction | 模擬した critical user journey。parse / render まで含めて分類できる | real-user traffic の分布を表さない。撤回の UI 挙動は HTTP synthetic では検証できない | **採用**。configuration は未記入 |
-| Supported-client instrumentation | intended request と client-visible outcome | 実利用がなければ event を生まない | 未実装。aspirational SLO 用 |
+| Authenticated synthetic transaction | 模擬した critical user journey。parse / render まで含めて分類できる | real-user traffic の分布を表さない。HTTP request / response のみを検証する synthetic transaction では撤回の UI 挙動を検証できない | **採用**。configuration は未記入 |
+| Client-side instrumentation | intended request と client-visible outcome | 実利用がなければ event を生まない | 未実装。aspirational SLO 用 |
 | `ContainerAppHTTPLogs` | ingress の path、status、`RequestDuration`、revision、replica | client の parse / render を観測しない | diagnostic setting がなく利用不可（2026-08-30 確認） |
 | Application access log | FastAPI に到達した request の path、status、server duration | application 到達前の failure と client-visible completion を観測しない | SLO query 未実装。診断用 |
 | `/readyz` GitHub Actions probe | 外部からの到達性、database reachability | `/chat` も frontend も実行しない | NO_SLO |
@@ -273,33 +275,35 @@ identity（synthetic 用 service principal。[entra-easy-auth-setup.md](../entra
 SLI = count of good eligible events / count of all eligible events
 ```
 
-結果には eligible、good、bad、unclassifiable record、collection gap の各 count を残し、request-based ratio を downtime に変換しない。
-unclassifiable record と telemetry gap は good とせず、暗黙にも除外せず、別に報告する。承認済みの schema、query、tool version、
-validation evidence をこの文書に記録するまで SLO を有効にしない。
+結果には eligible、good、bad の各 event count に加え、outcome を判定できなかった measurement result と、欠落した scheduled execution
+または measurement result の各 count を残し、request-based ratio を downtime に変換しない。outcome を判定できなかった measurement
+result と missing telemetry data は good とせず、暗黙にも除外せず、別に報告する。承認済みの schema、query、tool version、
+validation results をこの文書に記録するまで SLO を有効にしない。
 
 measurement frequency は未記入である。Azure OpenAI の呼び出し cost が上限を、error budget の粒度（下記 Error Budget の
 low-traffic の注意）が下限を決める。他 service の probe 間隔は参考にとどめ、本 service の値は baseline と cost から決める。
 
-measurement timeout は未記入であり、right-censoring を決める値なので threshold 2 より長くなければならない。
+measurement timeout は未記入であり、right-censoring を決める値なので、隣接する content event 間、および最後の content event から
+`done` までの duration に適用する latency threshold より長くなければならない。
 supported client には時間ベースの timeout がなく（#199 で `REQUEST_TIMEOUT_MS` を廃止。打ち切りは `AbortController` の停止ボタンのみ）、
 `/readyz` workflow の `curl --max-time 30` と ingress の idle timeout（既定 240 秒）は別経路と platform の設定であり、threshold の根拠にしない。
 
-#### Timestamp field
+#### Timestamp fields
 
-以下の 3 小節は、authenticated synthetic transaction の時刻 field、取得位置、rolling window への帰属、および latency 計測用
-clock を定める。これは SLI specification（何を測るか）ではなく SLI implementation（それをどう測るか）に属する決定であり、
+以下の 3 小節は、authenticated synthetic transaction の timestamp fields、取得位置、rolling window への帰属、および latency 計測に
+使用する monotonic clock を定める。これは SLI specification（何を測るか）ではなく SLI implementation（それをどう測るか）に属する決定であり、
 ADR-0028 決定 11 で確定済みの SLI specification は変更しない。欠損処理、event classification、
-schedule / frequency / timeout の値、synthetic transaction の実装、threshold 1 / threshold 2、SLO target はここでは決定しない。
+schedule / frequency / timeout の値、synthetic transaction の実装、2 つの latency threshold、SLO target はここでは決定しない。
 
-すべての timestamp は wall clock から取得し、UTC の RFC 3339 形式、millisecond precision、末尾 `Z`
-（例: `2026-09-12T10:15:30.123Z`）で記録する。
+すべての timestamp は wall clock から取得する。本 implementation の serialization requirement として、RFC 3339 の date-time format、
+UTC を表す time-offset `Z`、3 桁の fractional seconds（例: `2026-09-12T10:15:30.123Z`）で記録する。
 
 | Field | 取得位置と意味 | 用途 |
 | --- | --- | --- |
 | `scheduled_for` | scheduler が事前に割り当てた名目上の実行時刻。実行が遅れても書き換えず、実行開始時刻で代用しない | schedule の coverage と遅延の診断に使う。実行済み transaction の期間帰属や latency には使わない |
 | `attempt_started_at` | request body と authentication material の準備後、synthetic client が public frontend の `POST /api/chat` を HTTP stack へ渡す直前。DNS / TLS / ingress / BFF はこの後の経路に含む | SLI の唯一の event time。baseline、compliance period、SLO / configuration version の期間帰属に使う |
-| `completed_at` | client-side verifier が response または failure と parse / render adapter の結果を確定した直後、record の serialize / upload より前 | attempt の lifecycle と collection の診断に使う。期間帰属や latency には使わない |
-| `ingested_at` | durable evidence sink が raw measurement record を受理して永続化した時刻。sink 側で取得し、producer の log 出力時刻で代用しない | ingestion delay と evidence 到着の診断に使う。期間帰属や latency には使わない |
+| `completed_at` | client-side verifier が response または failure と parse / render の検証結果を確定した直後、record の serialize / upload より前 | attempt の lifecycle と collection の診断に使う。期間帰属や latency には使わない |
+| `ingested_at` | persistent data store が raw synthetic monitoring result を受理して永続化した時刻。data store 側で取得し、producer の log 出力時刻で代用しない | ingestion delay と measurement result の到着の診断に使う。期間帰属や latency には使わない |
 
 #### Event time と rolling window への帰属
 
@@ -315,12 +319,12 @@ window_start = window_end - 672 hours
 window 外で完了した attempt は含み、window 外で開始して window 内で完了した attempt は含めない。scheduler の遅延、late ingestion、
 再送または再集計によって、保存済み event の期間帰属を書き換えない。
 
-#### Latency の measurement clock
+#### Monotonic clock による latency 計測
 
-latency は wall clock timestamp の差では測らない。`attempt_started_at` の取得と同じ論理境界で同一 process の monotonic clock を開始し、
+latency は wall clock timestamp の差では測らない。`attempt_started_at` の取得と同じ時点で、同一 process の monotonic clock から開始時刻を取得し、
 public frontend への request 開始までに非同期処理を挟まない。完全な SSE event を framing / UTF-8 / JSON / schema の検証後に consumer が
-受理した時点と、verifier が処理を完了した時点で monotonic elapsed time を取得する。最初の content event まで、隣接する content event 間、
-最後の content event から `done` までの区間は、この未丸めの elapsed time から導出する。表示用に丸めた値で threshold と比較しない。
+受理した時点と、verifier が処理を完了した時点で、monotonic clock で測定した duration を取得する。最初の content event まで、隣接する
+content event 間、最後の content event から `done` までの区間は、この未丸めの duration から導出する。表示用に丸めた値で threshold と比較しない。
 
 monotonic clock の絶対値は process 間で比較または永続化せず、経過時間だけを milliseconds で保存する。event の順序は stream の
 観測順を正本とし、wall clock timestamp で並べ替えない。wall clock の補正や host 間の clock 差が latency を変えないようにし、
@@ -330,12 +334,12 @@ monotonic clock の絶対値は process 間で比較または永続化せず、�
 
 | 項目 | 決まったこと | 空欄 | 記入先 |
 | --- | --- | --- | --- |
-| threshold 1 / threshold 2 | semantics（ADR-0028 決定 11） | 値 | §SLI と SLO |
+| 2 つの latency threshold | 判定対象の区間（ADR-0028 決定 11） | 値 | §SLI と SLO |
 | SLO target（current） | baseline を切り下げた starter SLO | 値 | §SLI と SLO と §根拠 |
-| SLO target（aspirational） | 任意。policy の action を発動しない | 値と採否 | 同上と policy |
-| SLI implementation | authenticated synthetic transaction、timestamp field / event time / latency clock | timestamp 以外の schema / tool / version、payload / identity / location / schedule | SLI implementation |
+| SLO target（aspirational） | 任意。error budget policy に定めた対応を開始しない | 値と採否 | 同上と policy |
+| SLI implementation | authenticated synthetic transaction、timestamp fields / event time / monotonic clock | timestamp 以外の schema / tool / version、payload / service principal / credential / location / schedule | SLI implementation |
 | Measurement frequency / measurement timeout | 上下限の決め方 | 値 | 同上 |
-| Alerting window と burn rate | Workbook Table 5-8 を starting point。ticket のみ | 値 | policy と alert source |
+| Alerting window と burn rate | Workbook Table 5-8 を starting point。ticket のみ | 値 | policy と alerting rule |
 
 ## 根拠（Rationale）
 
@@ -387,14 +391,15 @@ current SLO とその error budget は、次のすべてを満たした `Publish
 
 - ヘッダ表に SLO Version と Approval Date が記入されている
 - current SLO target と compliance period が記入されている
-- SLI implementation、schema、query または tool の version、validation evidence への link が記録されている
+- SLI implementation、schema、query または tool の version、SLI implementation validation results への link が記録されている
 
 SLO Version は、承認した SLI specification、current SLO target、compliance period の組合せを識別する。これらを変更する時は
-新しい SLO Version を記録する。effective boundary は Approval Date から開始し、過去の event には遡及しない。
+新しい SLO Version を記録する。SLO は Approval Date から有効とし、過去の event には遡及しない。
 
-各 compliance period の評価では、[slo-review-runbook.md](./slo-review-runbook.md) の「evidence が十分かを確認する」で
-`sufficient` と記録された evidence だけを使用する。`Draft`、または evidence が `insufficient` の期間については、
-SLO compliance、残りの error budget、[error-budget-policy.md](./error-budget-policy.md) の action を計算または発動しない。
+各 compliance period の評価では、[slo-review-runbook.md](./slo-review-runbook.md) の手順で data quality と coverage が
+SLO compliance の評価に十分であることを確認できた measurement data だけを使用する。`Draft`、または measurement validity を
+確認できない期間については、SLO compliance を報告せず、残りの error budget を計算せず、
+[error-budget-policy.md](./error-budget-policy.md) に定めた対応を開始しない。
 
 current SLO の error budget が枯渇した時に [error-budget-policy.md](./error-budget-policy.md) を発動する。aspirational SLO の
 budget は追跡するが policy を発動しない。
@@ -416,10 +421,10 @@ paging ではなく ticket を採用する。
 - synthesize できない request type。real user だけに影響する問題があると、成功する synthetic request がその signal を隠す
 - 撤回の UI 挙動（ADR-0028 決定 6。`content_filter` 終端で表示済み partial text を画面から撤回する）。verifier は分類のみを行い、
   browser 側は parser テスト（fixture 系列 6）で担保する。実ブラウザでの再現は別途の browser automation の範囲
-- synthetic transaction 自体の失敗（scheduler の欠落、identity の期限切れ、測定側の network）と service の failure の区別。
-  区別できない record は unclassifiable として別に報告する
+- synthetic transaction 自体の失敗（scheduler の欠落、authentication credential の期限切れ、測定側の network）と service の failure の区別。
+  outcome を判定できない measurement result は別に報告する
 
-synthetic transaction は user request の一部しか表せず、artificial traffic に現れない real-user failure を見逃し得る。
+synthetic transaction は user request の一部しか表せず、synthetic traffic に現れない real-user failure を見逃し得る。
 
 根拠: [The Site Reliability Workbook Ch.5「Alerting on SLOs」](https://sre.google/workbook/alerting-on-slos/)。
 
@@ -431,7 +436,7 @@ SSE stream では HTTP status が 200 のまま journey が失敗しうるため
 
 根拠: [The Site Reliability Workbook Appendix A「Example SLO Document」](https://sre.google/workbook/slo-document/)。
 
-### Critical dependency と composite の参考値
+### Critical dependency と障害の独立性を仮定した公称 SLA の積
 
 critical dependency は、その利用不能が critical user journey を利用不能にする dependency と定義する。
 
@@ -444,10 +449,11 @@ critical dependency は、その利用不能が critical user journey を利用�
 | Azure Database for PostgreSQL Flexible Server（HA なし） | pgvector による retrieval | 99.9% |
 | Microsoft Entra ID（Easy Auth） | intended user の認証。落ちれば journey は開始できない | 99.99% |
 
-独立性を仮定した積は、Entra ID を除く 3 者で 99.75%、含めると約 99.74% である。本文書は Entra ID を含める（暫定）。
+各 dependency の障害が独立していると仮定した公称 SLA の積は、Entra ID を除く 3 者で 99.75%、含めると約 99.74% である。
+本文書は Entra ID を含める（暫定）。
 この値は dependency risk を考えるための参考値であり、SLO target の硬い上限には使わない。依存関係の独立性、SLA の適用、
 SLA の測定規則が本 SLI と一致することを確認できないためである。target は user outcome、baseline、risk tolerance を根拠に決め、
-dependency failure には別経路、graceful degradation、retry 境界などを検討する。
+dependency failure には別経路、graceful degradation、retry policy などを検討する。
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)、
 [The Site Reliability Workbook Ch.13「Data Processing Pipelines」](https://sre.google/workbook/data-processing/)。
@@ -459,7 +465,7 @@ SLA と本 SLI の関係について 2 点を明記する。
 - Azure SLA の Downtime 定義は 5xx 系の失敗のみを数え、429 と latency を除外するため、本 SLI（contract 違反・threshold 超過を bad とする）
   と一致しない。dependency の SLA 準拠は本 SLO の達成を保証しない
 
-provider の SLO と user-facing SLI は測定境界と失敗定義が異なり得るため、provider の表示だけで user outcome を判定しない。
+provider の SLA と user-facing SLI は measurement point と失敗定義が異なり得るため、provider の表示だけで user outcome を判定しない。
 
 根拠: [The Site Reliability Workbook Ch.3「SLO Engineering Case Studies」](https://sre.google/workbook/slo-engineering-case-studies/)。
 
@@ -469,17 +475,19 @@ dependency 起因の bad event も error budget を消費する。
 
 dependency 起因の SLO miss への対応は [error-budget-policy.md](./error-budget-policy.md) の §SLO miss 時の対応に記録する。
 
-### Warm / cold の series boundary
+### Cold start を含む測定と `minReplicas = 1` での測定の比較可能性
 
 | 根拠資料 | Configuration と意味 | 比較可能性 |
 | --- | --- | --- |
-| 2026-08-26 に終了した Phase 1 observation | serving の `min_replicas` は `0`。external `/readyz` probe は主に、cold start が curl timeout 前に完了したかを測定していた | historical diagnostic evidence に限る。warm measurement と単一の連続 series として比較できない |
-| ADR-0025 と 2026-08-30 の現在の runtime | serving の `min_replicas` / `max_replicas` と Azure runtime の `minReplicas` / `maxReplicas` は `1`。serving revision は `ca-felisaichatbot-dev--0000003` | 新しい configuration boundary。`min_replicas` は設定上の値であり、常に ready な warm replica を保証しない |
+| 2026-08-26 に終了した Phase 1 observation | serving の `min_replicas` は `0`。external `/readyz` probe は主に、cold start が curl timeout 前に完了したかを測定していた | historical diagnostic evidence に限る。`minReplicas = 1` での measurement と単一の連続 time series として比較できない |
+| ADR-0025 と 2026-08-30 の現在の runtime | serving の `min_replicas` / `max_replicas` と Azure runtime の `minReplicas` / `maxReplicas` は `1`。serving revision は `ca-felisaichatbot-dev--0000003` | この configuration change の前後は別の time series として扱う。`min_replicas` は設定上の値であり、常に ready な warm replica を保証しない |
 
-Phase 1 record には scheduled-run gap と curl timeout による right-censored failure があり、記録された success ratio は
-observed probe outcome だけを表す。historical record を current semantics で書き換えない。merge commit の timestamp は
-runtime で configuration が有効になった時点ではないので、各 measurement record に deployment と configuration の identity を記録する。
-warm 固定は SLO を人工的に良く見せうるので、warm 条件での baseline から target を締めすぎない。
+Phase 1 record には欠落した scheduled execution と、curl timeout により response time が right-censored になった probe failure があり、
+記録された success ratio は
+observed probe outcome だけを表す。historical record を現在の SLI specification と classification rule で書き換えない。merge commit の
+timestamp は runtime で configuration が有効になった時点ではないので、各 measurement record に commit SHA、deployment revision、
+image digest、configuration values とその取得時刻を記録する。
+warm instance を利用する条件は SLO を人工的に良く見せうるので、その条件での baseline だけを根拠に target を締めすぎない。
 
 根拠: [SRE Book Ch.4「Service Level Objectives」](https://sre.google/sre-book/service-level-objectives/)。
 
@@ -489,12 +497,14 @@ warm 固定は SLO を人工的に良く見せうるので、warm 条件での b
   threshold の根拠にしないが、idle が 240 秒に達した切断は「終端 event なし」の bad event になる
 - supported client には `maxLength` がなく、backend は `message` を最大 4,000 文字に制限する（2026-09-07 時点の `frontend/app/chat.tsx` で未解消）。
   effective SLO の前に再現可能な input contract を定義し、長い intended-user input を暗黙に exclusion にしない
-- diagnostic metrics（client / ingress / application / database / LLM の elapsed time、TTFT、`done` 到達率、response status、
-  revision と image の identity、CPU / memory / replica、dependency の error / latency / rate limiting、telemetry coverage）は
+- diagnostic metrics（client / ingress / application / database / LLM の duration、TTFT、`done` 到達率、response status、
+  deployment revision、image digest、CPU / memory / replica、dependency の error / latency / rate limiting、telemetry coverage）は
   SLI の変化を説明するために使い、それ自体から compliance を判定しない。user outcome に基づく別の rationale なしに SLO へ昇格させない
-- measurement record には critical user journey、good-event rule、measurement point、本文書の timestamp field と event time の定義、clock source、schema、query、tool、timeout、
-  authentication、payload、location、warm / cold condition、commit、revision、image、dependency mode の identity を含める。
-  relevant condition が変わった場合は旧 series を閉じ、before / after を直接比較できるかを説明する。新しい target や semantics が
+- measurement record には critical user journey、good event の定義、measurement point、本文書の timestamp fields と event time の定義、
+  clock source、schema、query、tool、timeout、authentication method、payload、location、warm-start / cold-start condition、commit SHA、
+  deployment revision、image digest、dependency provider / deployment / model / configuration を含める。
+  relevant condition が変わった場合は旧 time series を閉じ、before / after を直接比較できるかを説明する。新しい SLO target、SLI specification、
+  classification rule が
   過去にも有効だったかのように historical event を再計算しない
 
 ## SLO の対象外の設定
@@ -503,7 +513,7 @@ SLO の体裁を整えるためだけに決定項目を増やさない（原則 
 
 | 設定 | 正本 | SLO との関係 |
 | --- | --- | --- |
-| client 側の打ち切り（`AbortController`） | `frontend/app/chat.tsx`、実装 PR | threshold 1 / threshold 2 の決定後に組み込む。SLI の threshold ではない |
+| client 側の打ち切り（`AbortController`） | `frontend/app/chat.tsx`、実装 PR | 2 つの latency threshold の決定後に組み込む。SLI の threshold ではない |
 | request timeout（server / ingress / dependency） | backend 設定、Terraform、ADR-0028「影響」 | platform 制約。threshold の根拠にしない |
 | retry count / timing | ADR-0009、ADR-0028 決定 10（retry は最初の content event 前に限る） | bad event の発生率に影響するが SLO の値ではない |
 | concurrency / request interval / campaign の request count | synthetic transaction の campaign plan（`docs/verification/`） | measurement の条件。SLI の意味を変えないことを検証する |
@@ -517,15 +527,16 @@ uptime と data integrity は別の user requirement であり、同じ error bu
 
 ## 変更履歴
 
-ヘッダ表の SLO Version、Approval Date、Revisit Date と Status が SLO の version と effective boundary を表す。最初の採用時に
+ヘッダ表の SLO Version、Approval Date、Revisit Date と Status が、SLO の version と有効期間の開始日を表す。最初の採用時に
 SLI implementation version、query または tool version、supporting evidence の link をあわせて記録する。
 
 | 日付 | 変更内容 | 定量的 decision |
 | --- | --- | --- |
-| 2026-08-30 | user-facing SLI specification、現在の evidence boundary、将来の decision procedure を記録 | なし |
-| 2026-09-07 | ADR-0028 決定 11 の 2 閾値 measurement semantics を正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
-| 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite の参考値、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
-| 2026-09-12 | synthetic transaction の4つの timestamp、`attempt_started_at` による rolling window への帰属、latency 用 monotonic clock の境界を定義（#253） | なし |
+| 2026-08-30 | user-facing SLI specification、利用可能な measurement data とその制約、将来の review と revision の手順を記録 | なし |
+| 2026-09-07 | ADR-0028 決定 11 の 2 つの latency 条件を SLI specification として正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
+| 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と、障害の独立性を仮定した公称 SLA の積、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
+| 2026-09-12 | synthetic transaction の 4 つの timestamp、`attempt_started_at` による rolling window への帰属、monotonic clock を使用する latency 計測の開始・終了位置を定義（#253） | なし |
+| 2026-09-13 | SLO 文書の独自ラベルを Google SRE、W3C High Resolution Time、RFC 3339、Azure の用語または対象を直接表す記述へ置換（#253） | なし |
 
 ## 参考資料
 
@@ -542,6 +553,12 @@ SLI implementation version、query または tool version、supporting evidence 
 - [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/)
 - [Example SLO Document](https://sre.google/workbook/slo-document/)
 - [Example Error Budget Policy](https://sre.google/workbook/error-budget-policy/)
+
+### 時刻と event time の仕様
+
+- [RFC 3339: Date and Time on the Internet: Timestamps](https://www.rfc-editor.org/rfc/rfc3339)
+- [W3C High Resolution Time](https://www.w3.org/TR/hr-time-3/)
+- [Apache Flink: Event Time](https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/)
 
 ### Platform implementation と cross-check
 
