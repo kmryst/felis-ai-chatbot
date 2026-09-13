@@ -300,29 +300,20 @@ schedule / frequency / timeout の値、synthetic transaction の実装、thresh
 
 | Field | 取得位置と意味 | 用途 |
 | --- | --- | --- |
-| `scheduled_at` | scheduler が事前に割り当てた名目上の実行時刻。実行が遅れても書き換えず、実行開始時刻で代用しない | schedule の coverage と遅延の診断に使う。実行済み transaction の期間帰属や latency には使わない |
+| `scheduled_for` | scheduler が事前に割り当てた名目上の実行時刻。実行が遅れても書き換えず、実行開始時刻で代用しない | schedule の coverage と遅延の診断に使う。実行済み transaction の期間帰属や latency には使わない |
 | `attempt_started_at` | request body と authentication material の準備後、synthetic client が public frontend の `POST /api/chat` を HTTP stack へ渡す直前。DNS / TLS / ingress / BFF はこの後の経路に含む | SLI の唯一の event time。baseline、compliance period、SLO / configuration version の期間帰属に使う |
-| `verification_completed_at` | client-side verifier が response または failure と parse / render adapter の結果を確定した直後、record の serialize / upload より前 | attempt の lifecycle と collection の診断に使う。期間帰属や latency には使わない |
+| `completed_at` | client-side verifier が response または failure と parse / render adapter の結果を確定した直後、record の serialize / upload より前 | attempt の lifecycle と collection の診断に使う。期間帰属や latency には使わない |
 | `ingested_at` | durable evidence sink が raw measurement record を受理して永続化した時刻。sink 側で取得し、producer の log 出力時刻で代用しない | ingestion delay と evidence 到着の診断に使う。期間帰属や latency には使わない |
-
-field 名は `<event>_<verb>_at` の形に揃える（[pitr-drill.md](../../verification/restore-drill/pitr-drill.md) の時刻指標の命名）。
-`completed_at` を単独で使わないのも同じ理由で、何の完了かを名前が言わないためである。
 
 #### Event time と rolling window への帰属
 
-`attempt_started_at` を SLI の唯一の event time とし、実行済み transaction を UTC の半開区間 `[window_start, window_end)` へ
-割り当てる。compliance period の four-week（28 日 = 672 時間）rolling window は、この区間として評価する。
+four-week rolling window は UTC の連続 672 時間とし、実行済み transaction は `attempt_started_at` で半開区間
+`[window_start, window_end)` に割り当てる。
 
 ```text
-window_end   = 評価を実行した UTC 時刻を hour 単位で切り下げた値（分・秒・ミリ秒は 0）
-window_start = window_end - four-week（28 日 = 672 時間）
 window_start <= attempt_started_at < window_end
+window_start = window_end - 672 hours
 ```
-
-`window_end` は 1 回の評価につき 1 回だけ決め、その UTC 値を evidence に記録する。記録した `window_end` と保存済みの
-raw observation だけから同じ期間判定を再現できるようにするためである。hour 単位で切り下げるのは、window 長を時間
-（672 時間）で表しており、切り下げても区間長と含まれる週末の数が変わらないこと、および同じ hour 内で評価をやり直しても
-境界が動かないことによる。
 
 したがって `window_start` と同時刻の attempt は含み、`window_end` と同時刻の attempt はその評価 window に含めない。window 内で開始して
 window 外で完了した attempt は含み、window 外で開始して window 内で完了した attempt は含めない。scheduler の遅延、late ingestion、
@@ -330,15 +321,14 @@ window 外で完了した attempt は含み、window 外で開始して window �
 
 #### Latency の measurement clock
 
-latency は wall clock timestamp の差では測らない。`attempt_started_at` の取得と同じ論理境界で同一 process の monotonic clock の
-基準値を取得し、public frontend への request 開始までに非同期処理を挟まない。完全な SSE event を framing / UTF-8 / JSON / schema の
-検証後に consumer が受理した時点と、verifier が処理を完了した時点で monotonic elapsed time を取得する。最初の content event まで、
-隣接する content event 間、最後の content event から `done` までの区間は、この未丸めの elapsed time から導出する。表示用に丸めた値で
-threshold と比較しない。
+latency は wall clock timestamp の差では測らない。`attempt_started_at` の取得と同じ論理境界で同一 process の monotonic clock を開始し、
+public frontend への request 開始までに非同期処理を挟まない。完全な SSE event を framing / UTF-8 / JSON / schema の検証後に consumer が
+受理した時点と、verifier が処理を完了した時点で monotonic elapsed time を取得する。最初の content event まで、隣接する content event 間、
+最後の content event から `done` までの区間は、この未丸めの elapsed time から導出する。表示用に丸めた値で threshold と比較しない。
 
-monotonic clock の絶対値は process 間で比較または永続化せず、経過時間だけを milliseconds（小数部を保持し、丸めない）で保存する。
-event の順序は stream の観測順を正本とし、wall clock timestamp で並べ替えない。wall clock の補正や host 間の clock 差が latency を
-変えないようにし、`verification_completed_at - attempt_started_at` を SLI latency として使用しない。
+monotonic clock の絶対値は process 間で比較または永続化せず、経過時間だけを milliseconds で保存する。event の順序は stream の
+観測順を正本とし、wall clock timestamp で並べ替えない。wall clock の補正や host 間の clock 差が latency を変えないようにし、
+`completed_at - attempt_started_at` を SLI latency として使用しない。
 
 ### 未記入の項目
 
@@ -539,7 +529,7 @@ SLI implementation version、query または tool version、supporting evidence 
 | 2026-08-30 | user-facing SLI specification、現在の evidence boundary、将来の decision procedure を記録 | なし |
 | 2026-09-07 | ADR-0028 決定 11 の 2 閾値 measurement semantics を正本化。response contract を SSE 契約への参照に差し替え、bad event を具体化。`REQUEST_TIMEOUT_MS` の記述を #199 の廃止に合わせて修正（PR #241） | なし |
 | 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と composite の参考値、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
-| 2026-09-12 | synthetic transaction の 4 つの timestamp field、`attempt_started_at` による rolling window への帰属、`window_end` の決め方、latency 用 monotonic clock の境界を定義（#253） | なし |
+| 2026-09-12 | synthetic transaction の4つの timestamp、`attempt_started_at` による rolling window への帰属、latency 用 monotonic clock の境界を定義（#253） | なし |
 
 ## 参考資料
 

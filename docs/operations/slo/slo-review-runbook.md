@@ -82,9 +82,8 @@ SLO の決定項目ではなく、それぞれの正本に記録する（slo-doc
 最初の実装と、これらの定義を変更する時には、`slo-document.md` の定義を複製せず、prototype raw record と制御可能な test clock で
 次を検証する。
 
-- `scheduled_at`、`attempt_started_at`、`verification_completed_at`、`ingested_at` が UTC、RFC 3339、millisecond precision、末尾 `Z` である
-- public frontend の `POST /api/chat` を開始する直前の境界で `attempt_started_at` と monotonic clock の基準値を取得する
-- `window_end` を評価時刻の UTC hour 単位の切り下げで決め、その値を evidence に記録している
+- `scheduled_for`、`attempt_started_at`、`completed_at`、`ingested_at` が UTC、RFC 3339、millisecond precision、末尾 `Z` である
+- public frontend の `POST /api/chat` を開始する直前の境界で `attempt_started_at` と monotonic clock を取得する
 - `window_start` と同時刻の attempt を含み、`window_end` と同時刻の attempt を除外する
 - window をまたいで完了した attempt、遅延実行、late ingestion でも、`attempt_started_at` による期間帰属が変わらない
 - wall clock を前後へ補正しても monotonic elapsed time が負にならず、各 latency 区間を raw elapsed time から再計算できる
@@ -357,10 +356,10 @@ postmortem も同じ pattern に置く。SLO 作業だけのために新しい e
 measurement または review の record には、該当する次の情報を含める。
 
 - 目的、critical user journey、hypothesis、測定可能な success criterion
-- UTC の半開区間 `[window_start, window_end)`、その `window_end` を切り下げた粒度、期間帰属に使用した `attempt_started_at`
+- UTC の半開区間 `[window_start, window_end)` と、期間帰属に使用した `attempt_started_at`
 - SLO version、SLI implementation version、query または tool version
-- timestamp field の定義に従う `scheduled_at`、`attempt_started_at`、`verification_completed_at`、`ingested_at`、clock source、
-  commit SHA、deployment revision、container image または digest、region
+- timestamp field の定義に従う `scheduled_for`、`attempt_started_at`、`completed_at`、`ingested_at`、clock source、commit SHA、
+  deployment revision、container image または digest、region
 - current `min_replicas`、`max_replicas`、CPU、memory、関連する platform configuration（observed configuration であることを明示する）
 - measurement source、location、command または tool、schema、raw evidence の path
 - payload class、authentication method、event count、concurrency、request interval、threshold 1 / threshold 2、measurement timeout
