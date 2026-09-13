@@ -79,7 +79,7 @@ Workbook が求める product / development / production の 3 者合意が 1 �
 根拠: [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)。
 
 したがってこの policy の拘束力は自己拘束に依存する。SLO miss 時に変更を止める権限は project owner 自身にしかない。
-それを補うため、policy の発動・解除・例外の判断はすべて Issue に evidence とともに記録する。
+それを補うため、policy の発動・解除・例外の判断は evidence とともに記録する。記録先は change freeze の実現方式とあわせて決定する。
 
 `Draft` の間は scenario walkthrough で矛盾を修正してから承認する。`Published` 後は、その時点の発動・解除・例外の判断を回避するために
 policy 本文をその場で変更してはならない。本文の revision は、Revisit Date の定期 review、または §policy の見直しに定めた早期 review の
@@ -145,8 +145,12 @@ remaining error budget < 0
 ```
 
 change freeze 発動中は、critical user journey の availability、latency、total events に含める event、good / bad の判定、
-その SLI implementation、または production environment を変え得る変更を、記録された例外なしに merge、deploy、
-または `terraform apply` してはならない。対象かどうかは path 名ではなく production への潜在的影響で判定し、影響を否定できない変更は対象とする。
+その SLI implementation、または production environment を変え得る変更を、記録された例外なしに production へ反映してはならない。
+対象かどうかは path 名ではなく production への潜在的影響で判定し、影響を否定できない変更は対象とする。
+
+repository への merge が production deployment を自動的に開始する構成では、その merge も production への反映に含む。
+現在の repository では merge は production deployment を開始せず、image の build / push と `terraform apply` が別の手順なので、
+merge 自体を change freeze の対象とは決めない。
 
 少なくとも次の path と変更種別は対象候補として必ず review する。この一覧は完全な allowlist または denylist ではない。
 
@@ -176,19 +180,23 @@ Rationale（暫定である理由を含む）:
 [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)、
 [SRE Book Ch.3「Embracing Risk」](https://sre.google/sre-book/embracing-risk/)。
 
-### change freeze の適用と記録
+### change freeze の実現方式（未決定）
 
-`remaining error budget < 0` で change freeze を発動すると判断したら、project owner は次を行う。
+`remaining error budget < 0` で change freeze を発動すると判断した場合、project owner は対象となる production 変更を停止し、
+原因に応じた reliability work を優先する。具体的な停止・例外・解除は、この policy の各節に従う。
 
-1. Issue を起票し、compliance の評価結果（eligible / good / bad の count、remaining error budget、measurement validity）、
-   原因の判定、影響を受ける critical user journey を記録する
-2. その Issue に label `status:blocked` を付け、change freeze 中であることを示す
-3. 各 PR で PR template の Error budget policy 欄を記入する。対象変更は、下記の例外に該当しない限り merge しない
-4. PR を伴わない deploy または `terraform apply` でも、同じ判定と必要事項を change freeze の Issue に記録する
+The Site Reliability Workbook が求めるのは、error budget を使うための written policy に、budget 枯渇時の具体的な action と
+その owner を定めることである。特定の repository、CI または deployment 製品による強制方法までは定めていない。
 
-CI による警告や block は導入しない。個人開発では機械的 block を自分で外せるため、block の強度は記録のみと実質変わらず、
-CI の複雑さだけ増える。Issue と PR 本文の記録が繰り返し守られない場合は §policy の見直しに定めた早期 review を開始し、
-CI warning への昇格を検討する。
+根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
+
+change freeze をどの control point で強制し、どこに判断を記録するかは、この iteration では決定しない。
+PR template、Issue label、CI check、branch protection、deployment protection rule などの特定方式を採用済みとは扱わない。
+
+現在の repository では production deployment pipeline が存在せず、image の build / push と `terraform apply` は手動手順である。
+deployment pipeline を設計する段階で、production へ到達する code、artifact、configuration、infrastructure の経路を列挙し、
+通常変更の停止、§change freeze の例外に該当する変更の通過、解除条件の適用を一貫して実行できる方式を選定する。
+選定した方式と validation results を記録し、[slo-review-runbook.md](./slo-review-runbook.md) の手順を満たすまで、この policy を `Published` にしない。
 
 ### 原因別に必要な reliability work
 
@@ -244,7 +252,7 @@ emergency change にも事前に定めた authorization、可能な validation�
 [The Site Reliability Workbook Ch.9「Incident Response」](https://sre.google/workbook/incident-response/)、
 [Azure Well-Architected Framework「Architecture strategies for safe deployment practices」](https://learn.microsoft.com/en-us/azure/well-architected/operational-excellence/safe-deployments)。
 
-例外を適用する場合は、次の内容を Issue または PR に記録する。
+例外を適用する場合は、change freeze の実現方式で選定した記録先に次の内容を記録する。
 
 - 適用する例外と、延期する方が大きな risk を生む理由
 - 影響を受ける critical user journey、変更の scope、予想する reliability impact、判明している不確実性
@@ -264,7 +272,7 @@ external dependency のみに起因する miss で change freeze を発動しな
 - budget 消費の原因に対する action item が Issue として起票されている
 
 単発の良好な測定結果や measurement validity を確認できなくなったことだけで解除しない。解除前に、直近の user impact を封じ込めたか
-復旧したこと、問題を示した evidence と比較可能な条件で再測定したことを確認し、解除の判断を Issue に記録する。
+復旧したこと、問題を示した evidence と比較可能な条件で再測定したことを確認し、解除の判断を選定した記録先に残す。
 
 根拠: [The Site Reliability Workbook Ch.2「Implementing SLOs」](https://sre.google/workbook/implementing-slos/)。
 
@@ -302,10 +310,10 @@ error budget の計算または policy に定めた対応に疑義がある場�
 根拠: [The Site Reliability Workbook Appendix B「Example Error Budget Policy」](https://sre.google/workbook/error-budget-policy/)。
 
 §サービス概要 のとおり、本 project では disagreement の当事者と決定者が同一人物である。計算または対応の妥当性に疑義がある場合、
-project owner は疑義の内容、evidence、決定を Issue に記録する。その決定は、その Revisit Date の定期 review、または
+project owner は疑義の内容、evidence、決定を選定した記録先に残す。その決定は、その Revisit Date の定期 review、または
 §policy の見直しに従う早期 review で記録した後続 decision の effective date まで維持する。
-第三者の視点が必要な場合は外部レビュー（ADR-0028 で用いた外部 LLM レビューを含む）を任意で用い、その結果も Issue に記録する。
-決定を Issue に記録せずに policy に定めた対応を省略しない。
+第三者の視点が必要な場合は外部レビュー（ADR-0028 で用いた外部 LLM レビューを含む）を任意で用い、その結果も同じ記録先に残す。
+決定を記録せずに policy に定めた対応を省略しない。
 
 ## error budget の計算と評価
 
@@ -445,6 +453,7 @@ error budget は、SLO で定めた許容失敗量を使って、reliability と
 | 2026-08-30 | request-based の計算規則、比例的な engineering decision、測定が無効な場合の扱いを記録 |
 | 2026-09-07 | Workbook Appendix B の節構成（ヘッダ表、Service Overview / Goals / Non-Goals / SLO Miss Policy / Outage Policy / Escalation Policy / Background）へ全面改訂。critical user journey に影響する変更の change freeze、label と PR 本文による適用記録、dependency 起因の miss の扱い、Outage Policy の 20%、Table 5-8 を starting point とする burn rate alert を暫定で記録（#242） |
 | 2026-09-13 | `change freeze`、data quality / coverage、alerting rule などの標準用語または対象を直接表す記述へ統一。両文書の `Published` 化、`remaining error budget < 0`、impact-based scope、例外と解除条件を一意の手順に整理。error-budget-driven action と常時適用する incident response を分離し、定期・早期 review による policy revision を明確化（#253） |
+| 2026-09-13 | PR template、Issue label、CI 非採用を change freeze の実現方式として先行決定した記述を撤回。production deployment pipeline の設計時に方式を選定・検証し、policy の `Published` 前に記録する未決定事項へ戻した（#259） |
 
 ## 参考資料
 

@@ -109,7 +109,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 | 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ、timestamp fields / event time / monotonic clock | timestamp 以外の schema / tool / version |
 | 3 少なく単純に、request-driven は availability と latency | availability と latency は両方要る。ただし ADR-0028 決定 11 が両者を 1 つの比率（threshold 超過を policy として error に数える）に畳んでおり、これを 1 本の SLI とする。`done` 到達率は availability の diagnostic として別に持ち、SLO を増やさない | SLI の本数 | — |
 | 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | 2 つの latency threshold の値、SLO target |
-| 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget を Issue に記録して判断すれば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない） |
+| 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget と判断を、change freeze の実現方式とあわせて選定した記録先に残せば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない）、判断の記録先 |
 | 6 living document、Workbook が示す 4 つの選択肢 | compliance period は Workbook の default（four-week rolling window）を採り、review は monthly から始めて quarterly へ。aspirational SLO の枠を置く。Revisit Date は次の scheduled review date とする | compliance period、review cadence（いずれも暫定） | aspirational SLO の採否 |
 | dependency（Workbook §Modeling Dependencies） | Azure Container Apps / Azure OpenAI / PostgreSQL / Entra ID が critical dependency。各 dependency の障害が独立していると仮定した公称 SLA の積（約 99.74%）は dependency risk を考えるための参考情報であり、current SLO の上限には使わない。dependency 起因の bad event も budget を消費する | dependency risk の参考情報 | dependency 起因の miss の扱い（policy に暫定で記録） |
 
@@ -130,7 +130,9 @@ BFF 経由でのみ到達する。`LLM_PROVIDER` は `azure-openai` で、実際
 backend image は `backend:sha-b6d90f7` で、deployment 済み image と `main` の一致を確認している
 （[frontend-image-sync](../../verification/frontend-image-sync/observations.md)）。
 
-release は PR のマージ（GitHub Actions による image build と deployment）であり、Terraform apply はユーザー承認後に手動で行う。
+現在の repository では、PR の merge は image build または production deployment を開始しない。
+production への反映は、[vnet-integration-cutover.md](../vnet-integration-cutover.md) の手順に従う image の build / push と
+ユーザー承認後の `terraform apply` を別に実行して行う。将来 production deployment pipeline を導入した場合は、この定義を更新する。
 
 ### ユーザー
 
@@ -547,6 +549,7 @@ supporting evidence の link をあわせて記録する。
 | 2026-09-07 | the Google SRE books の大原則とこの service への導出を先頭に置き、Workbook Appendix A の形へ全面改訂。最初の iteration と位置づけ、synthetic transaction を primary SLI implementation として採用。compliance period と review cadence の暫定値、current / aspirational の 2 段、critical dependency と、障害の独立性を仮定した公称 SLA の積、SLO の対象外の設定を記録（#242） | なし。数値は baseline 後に記入 |
 | 2026-09-12 | synthetic transaction の 4 つの timestamp、`attempt_started_at` による rolling window への帰属、monotonic clock を使用する latency 計測の開始・終了位置を定義（#253） | なし |
 | 2026-09-13 | SLO 文書の独自ラベルを Google SRE、W3C High Resolution Time、RFC 3339、Azure の用語または対象を直接表す記述へ置換。error budget の境界、両文書の承認条件、configuration の再検証、SLO Version の期間帰属、error-budget-driven action と incident response の境界を明確化（#253） | なし |
+| 2026-09-13 | PR merge が image build / production deployment を開始するという現行 repository と異なる記述を、手動の image build / push と `terraform apply` に修正。change freeze の実現方式は deployment pipeline 設計時の決定へ戻した（#259） | なし |
 
 ## 参考資料
 
