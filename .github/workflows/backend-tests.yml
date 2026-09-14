@@ -54,7 +54,7 @@ jobs:
 
       # setup-uv は moving major タグ（v10）を提供していないため完全なバージョンタグで固定。
       # 更新は Dependabot（github-actions ecosystem）が追従する
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "backend/uv.lock"
