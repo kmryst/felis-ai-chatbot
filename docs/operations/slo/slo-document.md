@@ -7,7 +7,7 @@
 | Status | Draft |
 | SLO Version | 未定（Status を Published にする時に記入） |
 | Author | project owner（kmryst） |
-| Date | 2026-09-14 |
+| Date | 2026-09-13 |
 | Reviewers | project owner |
 | Approvers | project owner |
 | Approval Date | 未定（Status を Published にする時に記入） |
@@ -106,7 +106,7 @@ SLI specification は ADR-0028 決定 11 で確定済み（PR #241 で正本化�
 | --- | --- | --- | --- |
 | 1 測定は user に近いほど良い | measurement point は supported client。ingress log と application log は client 側の DNS、TLS、parse、render を観測できないので診断に限る | measurement point | — |
 | 1 取れないなら proxy | 実利用が無いので client-side instrumentation は event を生まない。authenticated synthetic transaction（black-box monitoring の層）を proxy として primary SLI implementation に採る。限界（real user の分布を表さない、撤回の UI 挙動は検証できない）は §補足と留意点に書く | SLI implementation の方式 | payload / service principal / credential / location / schedule / measurement timeout の値 |
-| 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ、timestamp fields / event time / monotonic clock、Draft の記録仕様 | schema に従う実装と検証 / tool / 運用に使用する version |
+| 2 specification と implementation を分ける | specification は確定、implementation は 0 件。この文書は implementation を「安い方」から始める最初の iteration である | 文書の位置づけ、timestamp fields / event time / monotonic clock | timestamp 以外の schema / tool / version |
 | 3 少なく単純に、request-driven は availability と latency | availability と latency は両方要る。ただし ADR-0028 決定 11 が両者を 1 つの比率（threshold 超過を policy として error に数える）に畳んでおり、これを 1 本の SLI とする。`done` 到達率は availability の diagnostic として別に持ち、SLO を増やさない | SLI の本数 | — |
 | 4 current performance に縛られない、完璧は待てる | 他に情報が無く（requirement 無し）、iterate する手順（runbook）があるので、baseline を切り下げた starter SLO を採る。観測値をそのまま target にしない。refine の段階で current performance を上限と誤認しない | starter SLO の作り方 | 2 つの latency threshold の値、SLO target |
 | 5 error budget は objective な意思決定のため | 開発者と承認者が同一人物でも、event 数で計算した budget と判断を、change freeze の実現方式とあわせて選定した記録先に残せば reproducible になる。budget は request-based の単位で扱う | error budget の単位、policy の存在 | 値（Status `Draft` の間は計算しない）、判断の記録先 |
@@ -264,10 +264,6 @@ primary SLI implementation は **authenticated synthetic transaction** とする
 service principal（[entra-easy-auth-setup.md](../entra-easy-auth-setup.md)）で supported client と同じ経路
 （BFF 経由）の `POST /chat` を周期的に実行し、ADR-0028 決定 9 の共有 fixture で検証した verifier が SSE stream を good / bad に分類する。
 
-保存項目の名前、型、取得位置、未観測の扱い、状態値、算出方法は
-[SLI 計測の記録項目とデータ形式](./sli-measurement-schema.md) にまとめる。現在は実装・検証前の仕様案（Draft）である。
-timestamp fields、event time、monotonic clock の定義は本節の以下 3 小節を正本として維持し、記録仕様から参照する。
-
 | Data source | 観測できるもの | この SLI に対する limitation | 状態 |
 | --- | --- | --- | --- |
 | Authenticated synthetic transaction | 模擬した critical user journey。parse / render まで含めて分類できる | real-user traffic の分布を表さない。HTTP request / response のみを検証する synthetic transaction では撤回の UI 挙動を検証できない | **採用**。configuration は未記入 |
@@ -284,8 +280,8 @@ SLI = count of good eligible events / count of all eligible events
 
 結果には eligible、good、bad の各 event count に加え、outcome を判定できなかった measurement result と、欠落した scheduled execution
 または measurement result の各 count を残し、request-based ratio を downtime に変換しない。outcome を判定できなかった measurement
-result と missing telemetry data は good とせず、暗黙にも除外せず、別に報告する。承認済みの schema version と記録仕様への参照、query、
-tool version、validation results をこの文書に記録するまで SLO を有効にしない。
+result と missing telemetry data は good とせず、暗黙にも除外せず、別に報告する。承認済みの schema、query、tool version、
+validation results をこの文書に記録するまで SLO を有効にしない。
 
 measurement frequency は未記入である。Azure OpenAI の呼び出し cost が上限を、error budget の粒度（下記 Error Budget の
 low-traffic の注意）が下限を決める。他 service の probe 間隔は参考にとどめ、本 service の値は baseline と cost から決める。
@@ -344,7 +340,7 @@ monotonic clock の絶対値は process 間で比較または永続化せず、�
 | 2 つの latency threshold | 判定対象の区間（ADR-0028 決定 11） | 値 | §SLI と SLO |
 | SLO target（current） | baseline を切り下げた starter SLO | 値 | §SLI と SLO と §根拠 |
 | SLO target（aspirational） | 任意。error budget policy に定めた対応を開始しない | 値と採否 | 同上と policy |
-| SLI implementation | authenticated synthetic transaction、timestamp fields / event time / monotonic clock、[Draft の記録仕様](./sli-measurement-schema.md) | schema に従う実装と検証 / 保存先 / tool / 運用に使用する version、payload / service principal / credential / location / schedule | SLI implementation と記録仕様 |
+| SLI implementation | authenticated synthetic transaction、timestamp fields / event time / monotonic clock | timestamp 以外の schema / tool / version、payload / service principal / credential / location / schedule | SLI implementation |
 | Measurement frequency / measurement timeout | 上下限の決め方 | 値 | 同上 |
 | Alerting window と burn rate | Workbook Table 5-8 を starting point。ticket のみ | 値 | policy と alerting rule |
 
