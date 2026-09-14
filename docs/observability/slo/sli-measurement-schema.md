@@ -10,15 +10,15 @@
 
 ## この文書で定義すること
 
-SRE の指針である [slo/](./slo/slo-document.md) をもとに、felis-ai-chatbot の authenticated synthetic transaction の
+SRE の指針である [operations/slo/](../../operations/slo/slo-document.md) をもとに、felis-ai-chatbot の authenticated synthetic transaction の
 記録項目とデータ形式を定義する。felis 固有の SLI implementation の仕様として、この文書で管理する。
 保存項目名、論理的な型、null 条件、状態値、算出方法はこの文書にまとめ、他の文書や実装から参照する。
 現在は実装・検証前の仕様案（Draft）である。collector の実装・検証と SLO の採用は、別途 runbook の手順で行う。
 
 - SLI specification、eligible / good / bad event、SLO、timestamp fields / event time / clock の定義は
-  [slo-document.md](./slo/slo-document.md) を正本とする。
-- 実装の選定・検証、baseline、SLO の採用・review は [slo-review-runbook.md](./slo/slo-review-runbook.md) を正本とする。
-- SSE event の文法と data schema は [共有 contract](../contracts/chat-sse/README.md) を正本とする。
+  [slo-document.md](../../operations/slo/slo-document.md) を正本とする。
+- 実装の選定・検証、baseline、SLO の採用・review は [slo-review-runbook.md](../../operations/slo/slo-review-runbook.md) を正本とする。
+- SSE event の文法と data schema は [共有 contract](../../contracts/chat-sse/README.md) を正本とする。
 
 本書は保存先や DB の物理 schema を指定しない。JSON Schema、collector、scheduler、credential、保存先、実行頻度、measurement timeout の具体値、
 latency threshold、SLO target は未決定または未実装である。これらは runbook の手順で選定・検証する。
@@ -58,7 +58,7 @@ clock の取得と request 開始の間に永続化待ちを挟まない。
 ## Timestamp fields
 
 取得位置、UTC / RFC 3339 の表現、期間帰属の定義は
-[slo-document.md の Timestamp fields](./slo/slo-document.md#timestamp-fields) を参照する。ここでは項目一覧と欠落時の扱いを示す。
+[slo-document.md の Timestamp fields](../../operations/slo/slo-document.md#timestamp-fields) を参照する。ここでは項目一覧と欠落時の扱いを示す。
 
 | 項目名 | 型 | この schema での null 条件 |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ clock の取得と request 開始の間に永続化待ちを挟まない。
 ## Monotonic clock による経過時間
 
 開始・event 受理・verifier 完了の取得位置は
-[既存の clock 定義](./slo/slo-document.md#monotonic-clock-による-latency-計測)に従う。
+[既存の clock 定義](../../operations/slo/slo-document.md#monotonic-clock-による-latency-計測)に従う。
 同一 process の monotonic clock で取得した未丸めの経過時間を使い、wall-clock timestamp の差から生成しない。
 
 | 項目名 | 型 | 算出方法・null 条件 |
@@ -108,7 +108,7 @@ clock の取得と request 開始の間に永続化待ちを挟まない。
 | `render_status` | string | `passed` / `failed` / `not_observed` |
 | `verification_method` | string または null | `http` / `browser`。実行した検証方法を記録し、不明なら null |
 
-`terminal` は [既存 consumer](../../frontend/lib/chat-sse/consumer.ts) の区別を使う。
+`terminal` は [既存 consumer](../../../frontend/lib/chat-sse/consumer.ts) の区別を使う。
 `failed` は不正な stream / 終端なし等で consumer が失敗を確定した結果であり、SSE の event 名ではない。
 HTTP error や reader の例外などで consumer の結果が得られなければ `terminal = null` とし、`error_type` と観測済みの値を残す。
 
@@ -202,7 +202,7 @@ credential 自体を設定 snapshot に保存せず、認証方式・主体・cr
 ## 分類・集計の出力
 
 これは raw measurement の上書きではなく、固定した入力と query による別の出力である。
-分類の定義は [SLI と SLO](./slo/slo-document.md#sli-と-sloslis-and-slos) と runbook を参照する。
+分類の定義は [SLI と SLO](../../operations/slo/slo-document.md#sli-と-sloslis-and-slos) と runbook を参照する。
 
 | 項目名 | 型 | 意味・値 |
 | --- | --- | --- |
@@ -260,7 +260,7 @@ runbook と共有 fixture に沿って検証する。実装・validation の証�
 | `time_to_first_output_ms` | [AI SDK の型定義](https://github.com/vercel/ai/blob/6c6c2210b9532a4c369615c044a16d595f3db117/packages/ai/src/generate-text/step-result.ts#L115)、[output 判定](https://github.com/vercel/ai/blob/6c6c2210b9532a4c369615c044a16d595f3db117/packages/ai/src/generate-text/stream-language-model-call.ts#L842) | `timeToFirstOutputMs` は最初の生成 output chunk まで。SDK は reasoning / tool 等も含む。felis は有効な message / notice の受理を対象にする |
 | `inter_chunk_latency_ms` | [NVIDIA AIPerf の実装](https://github.com/ai-dynamo/aiperf/blob/7db2ba37a62aa80c882bc90eaf61cc8073e2387b/src/aiperf/metrics/types/inter_chunk_latency_metric.py#L31) | `inter_chunk_latency` は content response の隣接時刻差の配列で、usage-only / DONE を除外。felis は consumer 受理時点の ms を保存する |
 | `response_time_ms` | [AI SDK の finish 処理](https://github.com/vercel/ai/blob/6c6c2210b9532a4c369615c044a16d595f3db117/packages/ai/src/generate-text/stream-language-model-call.ts#L588) | `responseTimeMs` は model call から finish 処理まで。felis は public frontend への request 開始から有効な done 受理まで |
-| `terminal` / `error_class` | [既存 consumer](../../frontend/lib/chat-sse/consumer.ts)、[共有 contract](../contracts/chat-sse/README.md) | consumer の処理結果と wire の class を区別する。保存側の `error_class` は consumer の `errorClass` に対応する |
+| `terminal` / `error_class` | [既存 consumer](../../../frontend/lib/chat-sse/consumer.ts)、[共有 contract](../../contracts/chat-sse/README.md) | consumer の処理結果と wire の class を区別する。保存側の `error_class` は consumer の `errorClass` に対応する |
 | `http_status_code` | [OpenTelemetry HTTP attributes](https://opentelemetry.io/docs/specs/semconv/registry/attributes/http/#http-attributes) | `http.response.status_code` の意味と整数型を参考にする。保存項目名は異なる |
 | `error_type` | [OpenTelemetry Error attributes](https://opentelemetry.io/docs/specs/semconv/registry/attributes/error/#error-attributes) | `error.type` の失敗分類・低 cardinality の考え方を参考にする。felis の値一覧は本書で定義する |
 
