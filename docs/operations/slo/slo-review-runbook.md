@@ -4,6 +4,8 @@
 運用手順を定める。[slo-document.md](./slo-document.md) が service scope、SLI specification、SLI implementation、SLO と
 その Rationale の正本、[error-budget-policy.md](./error-budget-policy.md) が有効な SLO と error budget を
 engineering decision にどう適用するかの正本である。規範的な定義を measurement report や review record へ複製せず、正本を更新する。
+SLI implementation の保存項目と記録規則は [SLI 計測の記録項目とデータ形式](./sli-measurement-schema.md) にまとめる。
+現在は実装・検証前の仕様案（Draft）であり、この runbook に従って実装と検証を進める。
 
 この runbook は新しい定量値を選択しない。定量値を決定し、review する手順だけを定める。
 
@@ -22,6 +24,7 @@ SLI implementation の変更 / aspirational SLO の設定 / 反復改善）へ r
 - SLI specification は確定済み（ADR-0028 決定 11。PR #241）。SLI implementation の方式は authenticated synthetic transaction に
   決定済み。timestamp fields、event time、monotonic clock は確定済みで、その他の configuration
   （payload / service principal / credential / location / schedule / measurement timeout）は未決定
+- 記録仕様は Draft として文書化済み。collector、保存先、集計処理は未実装または未決定で、記録仕様に従う実装の検証は未実施
 - effective な SLO target、2 つの latency threshold の値、error budget はない。`slo-document.md` と
   `error-budget-policy.md` の Status はともに `Draft`
 - いずれかの Status が `Draft` の間、recurring review は「measurement を検証する」までで停止し、compliance と error budget は報告しない
@@ -49,7 +52,7 @@ baseline 後に決めた threshold、target、frequency または timeout が cl
 | eligible / good / bad event、total events から除外する event、outcome を判定できない measurement result の扱いを定義する | SLI specification と service scope | intended user の識別や application 到達前の failure を含め、再現可能な event classification rule を記述する | event classification rule | request contract、authentication behavior、client behavior、incident の例 | missing telemetry data や対象外 traffic が暗黙に good または total events からの除外になるなら停止する | 完了 |
 | SLI implementation を選ぶ | SLI specification と measurement point の候補 | 候補を quality、coverage、cost で比較し、最初の iteration では安い方を選ぶ。実測が無い場合は先に data source（authenticated synthetic transaction）を設定する | measurement point と方式 | 候補の比較 | event rule を再現できない方式なら停止する | 方式は完了（synthetic transaction）。configuration は未決定 |
 | SLI implementation の timestamp fields、event time、monotonic clock を定義する | critical user journey、measurement point、compliance period | wall clock の timestamp fields、SLI の event time、window boundary、latency 計測用 monotonic clock の取得位置を定義する | version 管理された timestamp fields、event time、monotonic clock の定義 | supported client の request path、clock と window boundary の test case | event の期間帰属または latency を同じ raw record から再現できなければ停止する | 完了（slo-document.md「Timestamp fields」以下 3 小節） |
-| baseline 収集用の SLI implementation configuration を実装し検証する | 選んだ方式と timestamp fields / event time / monotonic clock の定義 | payload、service principal、credential、location、schedule、measurement frequency、measurement timeout を記録し、下記「SLI implementation の検証」を通す | version 管理された SLI implementation configuration と validation results | prototype record、configuration、field 単位の coverage | 必須 case が誤分類される、暗黙に失われる、または right-censoring を評価できなければ停止する | 未着手 |
+| baseline 収集用の SLI implementation configuration を実装し検証する | 選んだ方式、timestamp fields / event time / monotonic clock の定義、[Draft の記録仕様](./sli-measurement-schema.md) | 記録仕様に従って collector と保存処理を実装し、payload、service principal、credential、location、schedule、measurement frequency、measurement timeout を記録して、下記「SLI implementation の検証」を通す | version 管理された SLI implementation configuration と validation results | prototype record、configuration、field 単位の coverage | 必須 case が誤分類される、暗黙に失われる、または right-censoring を評価できなければ停止する | 未着手 |
 | baseline を収集する | 検証済みの baseline 収集用 configuration | four-week rolling window と同じ長さ以上の期間、raw event、scheduled runs の attempted / completed / missed counts、configuration version と変更時刻を保存する。この期間は compliance period ではない | 再現可能な baseline report | raw record、tool version、timestamp、deployment revision、image digest、使用した全 configuration | eligible event または measurement coverage を確認できなければ停止する | 未着手 |
 | 2 つの latency threshold を提案する | baseline report（それぞれの分布） | 観測 percentile を単位で丸めて starter 値とし、測定期間・丸め単位・「user experience との相関は未検証」を Rationale に記録する | 根拠を伴う 2 つの latency threshold の案 | 分布と丸め規則 | current timeout や platform 制約（ingress idle timeout 等）だけが根拠なら停止する。baseline の観測 percentile を丸めて starter 値とすること自体は停止理由にしない | 未着手 |
 | current SLO target の候補を作る | baseline report と threshold の案 | baseline を切り下げた値を starter SLO の候補とし、Rationale に「author が選んだ」「user experience との相関は未検証」を記録する。Workbook の 3 者合意（product / development / production）を project owner 1 名が兼ねる旨も記録する | 根拠を伴う current SLO target の候補 | 切り下げ規則、dependency risk の評価 | 次のいずれかなら停止する: (a) 観測値を丸めずそのまま target にしている、(b) Rationale に上記の記載が無い、(c) refine の段階で current performance を上限として扱っている。baseline を starter SLO の入力にすること自体は停止理由にしない | 未着手 |
@@ -83,6 +86,9 @@ SLO の決定項目ではなく、それぞれの正本に記録する（slo-doc
 | Review frequency | 立ち上げ期は monthly、安定後は quarterly。Revisit Date は次の scheduled review date であり、最初の `Published` 化では Approval Date の 1 か月後とする | review が適時で actionable か | scheduled または triggered review のたびに、次回日を両文書へ記録する |
 
 ## SLI implementation の検証
+
+以下の検証で作る prototype record と分類結果は、[記録仕様](./sli-measurement-schema.md) の型、未観測の扱い、状態値、算出方法に
+照合する。schema の version、予定・実行・試行・保存の対応、重複と結果欠落の検出も確認し、検証結果への参照を保存する。
 
 ### Timestamp fields、event time、monotonic clock を検証する
 
@@ -181,7 +187,7 @@ SSE の系列は ADR-0028 決定 9 の共有 contract fixture（[docs/contracts/
 - deployment revision または SLI implementation version の変更前後
 
 各 path について、期待する eligibility と outcome、観測した field、実際の classification、`slo-document.md` の timestamp fields の
-定義に従う時刻、monotonic clock で測定した duration、raw record を保存する。
+定義に従う時刻、monotonic clock で測定した duration、[記録仕様](./sli-measurement-schema.md) に従う raw record を保存する。
 必須 path が失われる、誤分類される、または識別不能な場合は有効化を停止する。
 
 ### Data quality と coverage を確認する
@@ -214,7 +220,8 @@ error budget と独立した postmortem trigger には適用しない。
    SLI implementation が変わっていないことを確認する
 5. `slo-document.md` に記録された、承認済みで version 管理された query または tool を実行する。
    現在は synthetic transaction が未実装なのでここで停止する。synthetic transaction SLI の実装がマージされ、
-   `slo-document.md` に schema / tool / version が記録された時点で解除する
+   検証済みの schema version と記録仕様への参照 / tool / version が `slo-document.md` に記録された時点で解除する。
+   Draft の記録仕様へのリンクを追加しただけでは解除しない
 6. raw measurement data、または再現可能で変更されない参照を保存する
 7. eligible、good、bad の各 event、total events から除外した event、outcome を判定できない measurement result を数え、除外と判定不能の理由を説明する
 8. event count から good event の割合を計算し、宣言した compliance period の SLO target と比較する
@@ -369,6 +376,8 @@ measurement 自体の検証が目的である場合を除き、effective な SLO
 
 既存の `docs/verification/<campaign>/observations.md` の形式と、利用可能な場合は machine-readable な raw record を使用する。
 postmortem も同じ形式で記録する。SLO 作業だけのために別の記録体系を追加しない。
+synthetic transaction の raw record と集計時の判定は [記録仕様](./sli-measurement-schema.md) に従い、使用した version と参照先を残す。
+timestamp fields / event time / clock の定義は `slo-document.md`、保存項目の定義は記録仕様を参照し、evidence へ複製しない。
 
 measurement または review の record には、該当する次の情報を含める。
 
