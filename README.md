@@ -78,6 +78,7 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 
 - [docs/production-readiness.md](./docs/production-readiness.md): 本番運用との差分（理由と追跡先つき）
 - [docs/operations/slo/slo-document.md](./docs/operations/slo/slo-document.md): user-facing SLI / SLO、error budget、および review procedure の入口
+- [docs/observability/slo/](./docs/observability/slo/README.md): felis 固有の SLI / SLO 実装資料。計測の記録項目・データ形式の仕様案
 - [docs/adr/README.md](./docs/adr/README.md): 設計判断（ADR）。撤回した判断も削除せず残しています
 - [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md): フェーズ 1 の実測記録・食い違い・未検証項目
 - [docs/verification/failover-drill/observations.md](./docs/verification/failover-drill/observations.md): HA failover / tier 変更ドリルの実測記録（downtime・zone 遷移・公称との照合・限定）
