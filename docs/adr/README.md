@@ -65,3 +65,4 @@
 | [0026](./0026-readyz-repository-variables-as-source-of-truth.md) | Accepted | `readyz-probe` の実行設定を必須 repository variables に一本化し、未設定・不正値を probe 前に fail-closed にする |
 | [0027](./0027-frontend-azure-deployment-and-public-surface.md) | Accepted | frontend を Azure Container Apps へデプロイし、公開面を Easy Auth + BFF + backend internal ingress で固定する（`NEXT_PUBLIC_CHAT_API_KEY` の廃止・bootstrap 窓は fail-closed の apply 順序で塞ぐ） |
 | [0028](./0028-chat-sse-response-contract.md) | Accepted | `POST /chat` を SSE 化し応答契約を固定する（event 文法・raw stream から wire contract への変換・`content_filter` の fail-closed 撤回契約・retry 境界。SLI threshold の数値は決めない。#183 / #184 の実測を反映して決定 5 の表を追記改訂: error field は単数形・複数形とも明示列挙して検査し、それ以外の未知 field は無視。ingress 240 秒はアイドル timeout と決着） |
+| [0029](./0029-sli-synthetic-execution-authentication-and-storage.md) | Proposed | authenticated synthetic transaction を専用 ACA Job / Playwright / Managed Identity で実行し、独立した Blob Storage に予定・測定結果・receipt を保存する構成案 |
