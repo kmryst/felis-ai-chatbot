@@ -38,7 +38,7 @@ HTTP probe で SSE の `done` event を受理するだけでは測れず、予�
    初期 GET の取得方式・HTTP cache 無効・service worker 無効は測定条件として固定する。
 4. **予定と実行**: 有限の campaign の予定を実行開始前に保存する。初期候補は 35 日、
    毎時 UTC `:07` に通常回答、`:37` に notice の 1 試行ずつとする。
-   ACA cron は runner の起動契機とし、事前予定と実行履歴の対応付けは collector が行う。
+   ACA cron は runner の起動契機とし、事前予定と実行履歴の対応付けは Reconciler が行う。
    lease と実行状態で campaign 全体を直列化し、期限を過ぎた予定の HTTP request を後から補充しない。
    `parallelism = 1` だけで execution 間の同時実行が防げるとは扱わない。
 5. **保存と再計算**: アプリケーション PostgreSQL と分離した Azure Blob Storage に、予定、

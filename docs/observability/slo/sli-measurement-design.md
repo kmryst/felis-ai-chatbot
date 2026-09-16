@@ -292,7 +292,7 @@ coordination の lease / 停止状態は別の可変 container に置き、変�
 | --- | --- | --- |
 | 通常回答 payload | `{"message":"最強の台風は？"}` | 手動で message 系列が確認された質問。実 deployment / corpus でも通常系列を得られるか検証する |
 | notice payload | `{"message":"このサービスの参照資料に載っていない架空の惑星ゼフィラの首都は？"}` | no-context 候補。質問だけでは guard を保証しないため、prototype で notice を確認してから固定する |
-| payload 比率 | 通常 : notice = 1 : 1、別予定として交互 | 両 path の証拠を得るための便宜的な分布。実ユーザーの分布とは扱わず class 別分布も報告する |
+| payload 比率 | 通常 : notice = 1 : 1、別予定として交互 | 両 path の証拠を得るための便宜的な分布。実ユーザーの分布とは扱わず、観測した通常回答 / notice の系列別の分布も報告する |
 | campaign / schedule | 有限の 35 日、UTC 毎時 `:07` / `:37`。cron `7,37 * * * *` | 28 日以上の baseline と前後確認の余裕。30 分間隔で 28 日 1,344 予定、35 日 1,680 予定 |
 | location / browser | Japan East、専用 Workload profiles environment（Consumption workload profile）、headless Chromium、viewport 1280 × 800 | 一つの再現可能な観測点から開始。Playwright / browser / container digest を固定する |
 | runner resource | 1 vCPU / 2 GiB | Chromium の初期候補。OOM・CPU 競合と観測 overhead を測り、足りなければ変更後に再検証する |
@@ -374,7 +374,7 @@ MI role の削除だけでは token cache により直ちに止まらないた�
    coverage / data quality 不足と不明な結果を併記し、SLO compliance / error budget を計算しない。
 8. 同じ snapshot と Evaluator から同じ出力を再生成する。late ingestion / conflict の発見では新しい snapshot と report を追加し、旧記録を残す。
 
-確定 baseline report は class 別の latency 分布、failure、right-censoring、版の変化、予定と実行の gap を含む。
+確定 baseline report は観測した通常回答 / notice の系列別の latency 分布、failure、right-censoring、版の変化、予定と実行の gap を含む。
 継続的な正式 SLO 評価で、動作中の writer と整合した snapshot の完全性をどう保証するかは後続の有効化作業で検証する。
 初回の有限 campaign の drain を、連続運用の snapshot が検証済みである根拠にはしない。
 根拠: [Blob concurrency / consistency](https://learn.microsoft.com/en-us/azure/storage/blobs/concurrency-manage)、
@@ -396,7 +396,7 @@ CI では [ADR-0004](../../adr/0004-stub-llm-and-no-llm-in-ci.md) に従い実 L
 | backend 到達前の failure | DNS / TLS / connection、frontend / BFF の失敗、redirect | 取得可能な error と status、開始証拠、token 非漏出。未観測を成功にしない |
 | application / DB / provider failure | stub / BFF 故障注入、SSE 前の HTTP error | 原因に対応する raw evidence と分類。backend に届かない failure も失わない |
 | SSE error 全 class | timeout / rate_limit / server_error / bad_request / content_filter | `error_class`、最初の失敗、既受理 content を保持。有効 error の parse 成功を request 成功にしない |
-| 切断 / 不正 stream | 終端なし EOF、空 content、content なし done、混在・多重終端、不正 class / UTF-8 / JSON | 規定の parse failure、無効 done の response time は null。すでに受理した event は保持 |
+| 切断 / 不正 stream | 終端なし EOF、空 content、content なし done、混在・多重終端、不正 class / UTF-8 / JSON | 規定の SSE validation failure、無効な `done` の `response_time_ms` は null。すでに受理した event は保持 |
 | byte 分断 / 同一 read | 共有 byte-split-patterns、複数 event 一括 read、終端後に同一 read の不正 bytes | event 順・値を保ち、架空の受理時刻を補間しない |
 | render failure / 撤回 | DOM 更新停止、別 attempt 要素、非表示、partial text 表示後の content_filter | 正常 SSE でも描画失敗を検出。撤回前後の当該 DOM を確認。fixture 合格を runtime 証拠へ代入しない |
 | latency threshold 超過 | 最初 / 隣接 content / 最後→done をそれぞれ遅延 | 候補 threshold による期待分類、未丸め値での再計算 |
