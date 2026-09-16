@@ -60,7 +60,21 @@ component の責任、記録項目の取得元、保存・照合手順、configu
 | HTTP synthetic のみ | SSE の到達・終了は測れるが、当該試行の React 描画を証明しない | 単純で安価。parse / render を含む primary SLI には不採用 |
 | 人間ユーザーの password / 保存 cookie による定期ログイン | interactive sign-in の一部も対象にできるが、MFA・session 更新を別途管理する必要がある | 長期 credential と再認証の運用を増やすため不採用。非管理者ユーザーの手動 sign-in 試験は別に維持する |
 
-## 影響と未検証の前提
+## 採択理由
+
+- SLI は supported client の parse / render を含むため、実際の Chromium で公開 frontend を操作する構成だけが primary SLI の
+  measurement point を満たす。SSE の到達・終了しか測れない HTTP synthetic のみの構成は採らない。
+- 測定専用の Workload profiles environment を serving Environment / VNet から分離し、公開 frontend の安定 FQDN を入口にすることで、
+  既存の ACA 運用と Managed Identity を再利用しつつ、同一 Environment 内の内部経路に留まる観測を避ける。
+- 専用 user-assigned managed identity への app role 割当により、人間ユーザーの password / cookie や backend の `CHAT_API_KEY` を
+  runtime に置かず、ADR-0027 が想定した synthetic 用 service principal の経路に揃える。
+- 実行開始前に保存した予定と append-only receipt により、job execution 未起動・保存障害・再送・payload conflict でも結果不在を検出でき、
+  測定スキーマの状態値と coverage 規則をそのまま実装できる。GitHub Actions schedule の遅延・drop と、外部 runner の常時費用・
+  別 provider の認証運用は、初回 baseline では引き受けない。
+
+## 影響
+
+以下は本決定の影響と、prototype で確認するまで未検証の前提である。設計上の判断と区別して扱う。
 
 - MI は人間ユーザーの interactive sign-in、MFA、session cookie 更新を再現しない。
   認証 material の準備と初期画面読込は `attempt_started_at` より前であり、失敗は予定 coverage に残す。
@@ -75,6 +89,16 @@ component の責任、記録項目の取得元、保存・照合手順、configu
   latency threshold、SLO target、Published 化を決めず、実装・validation・baseline 開始にも代えない。
 - Issue #271 では設計文書のみを作成する。Azure / Entra ID の変更、scheduler / collector の実装、
   deployment、継続収集は後続作業とする。
+
+## 関連
+
+- [Issue #271](https://github.com/kmryst/felis-ai-chatbot/issues/271) — 本決定を記録する設計 Issue
+- [Issue #264](https://github.com/kmryst/felis-ai-chatbot/issues/264) — 測定スキーマの定義
+- [測定設計](../observability/slo/sli-measurement-design.md) — component の責任、記録項目の取得元、保存・照合、configuration、費用、検証計画の正本
+- [測定スキーマ](../observability/slo/sli-measurement-schema.md) — 記録項目・状態値・coverage 規則の正本
+- [ADR-0027](0027-frontend-azure-deployment-and-public-surface.md) — Easy Auth + BFF の公開面と synthetic 用 service principal の想定
+- [ADR-0028](0028-chat-sse-response-contract.md) — SSE 応答契約と共有 fixture
+- [ADR-0004](0004-stub-llm-and-no-llm-in-ci.md) — CI から実 LLM を呼ばない。検証計画の故障注入で維持する
 
 ## 参考
 
