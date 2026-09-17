@@ -30,23 +30,23 @@ latency threshold、SLO target は未決定または未実装である。これ�
 
 | 記録 | 書き手・根拠 | 識別と関連付け |
 | --- | --- | --- |
-| 予定 | scheduler の計画を保存する処理 | 1 回の予定を一意に識別する `schedule_id`、`scheduled_for`、予定作成時に確定した `traffic_class`。job が起動する前から存在し、これらは上書きしない |
-| job 実行 | scheduler / runner の実行証跡を収集する処理 | `run_id`。対応する予定を参照する |
+| 予定 | scheduler の計画を保存する処理 | 1 回の予定を一意に識別する `schedule_id`、`scheduled_for`、予定作成時に確定した `execution_purpose`。job execution が起動する前から存在し、これらは上書きしない |
+| job execution | scheduler / runner の実行証跡を収集する処理 | `run_id`。対応する予定を参照する |
 | 送信試行と測定結果 | synthetic client / verifier | `attempt_id`。`run_id` と予定を参照する |
 | 収集・永続化の確認 | 保存先の受領証跡と実行証跡を照合する処理 | `attempt_id` と append-only の `receipt_id`。結果が欠落していても管理する |
-| 分類・集計結果 | version 管理された query | 試行・入力記録の固定された参照・`query_version`・適用する `slo_version` を関連付ける |
+| 分類・集計結果 | version 管理された Evaluator | 試行・入力記録の固定された参照・`evaluator_version`・適用する `slo_version` を関連付ける |
 
-一つの予定に複数の job、一つの job に複数の試行がある可能性を保持する。request を再送した場合は別の `attempt_id`、
+一つの予定に複数の job execution、一つの job execution に複数の試行がある可能性を保持する。request を再送した場合は別の `attempt_id`、
 同じ結果を再 upload した場合は同じ `attempt_id` を使う。結果の重複受領と、実際に複数回送信した request を混同しない。
 
 予定と実行・収集管理の記録は、欠落し得る測定結果とは独立して保持する。管理記録自身が取得できない場合も確認不能とする。
 `attempt_id` は送信準備中に確保してよいが、ID の存在だけでは送信開始を証明しない。実際の開始を確認できない場合、
-`attempt_started_at` を予定や job 開始時刻で埋めず、開始の不確実性を記録する。
+`attempt_started_at` を予定や job execution の開始時刻で埋めず、開始の不確実性を記録する。
 clock の取得と request 開始の間に永続化待ちを挟まない。
 
-予定の `traffic_class` は job を起動する前に `slo_measurement`、`validation`、`drill` のいずれかで確定する。
+予定の `execution_purpose` は job execution を起動する前に `slo_measurement`、`validation`、`drill` のいずれかで確定する。
 `validation` は事前に宣言した test traffic を表す。予定記録の値を正本とし、run / attempt に保存する値は照合用の複製であって上書きできない。
-各予定の値は不変とし、`traffic_class` を変更する場合は既存記録を上書きせず新しい予定を作成する。
+各予定の値は不変とし、`execution_purpose` を変更する場合は既存記録を上書きせず新しい予定を作成する。
 予定の値が未設定・不正、または存在する run / attempt と configuration snapshot の複製値が不一致の場合は、結果から目的を推定しない。
 
 ## 共通の型と命名
@@ -68,7 +68,7 @@ clock の取得と request 開始の間に永続化待ちを挟まない。
 | 項目名 | 型 | この schema での null 条件 |
 | --- | --- | --- |
 | `scheduled_for` | string | 予定の必須項目。関連する実行・試行にも同じ値を保持する |
-| `attempt_started_at` | string または null | `attempt_start_status` が `not_started`、`started_time_unavailable`、`unknown` の場合。`scheduled_for`、job 開始時刻、`completed_at`、`ingested_at` で補わない |
+| `attempt_started_at` | string または null | `attempt_start_status` が `not_started`、`started_at_unavailable`、`unknown` の場合。`scheduled_for`、job execution の開始時刻、`completed_at`、`ingested_at` で補わない |
 | `completed_at` | string または null | verifier の判定完了を確認できない場合 |
 | `ingested_at` | string または null | 永続化を確認できない管理記録では null。保存済み測定結果では保存先が設定する |
 
@@ -77,7 +77,7 @@ clock の取得と request 開始の間に永続化待ちを挟まない。
 
 ### 開始時刻を復元できない試行
 
-予定記録の `traffic_class = slo_measurement` で `attempt_start_status = started_time_unavailable` の試行は、
+予定記録の `execution_purpose = slo_measurement` で `attempt_start_status = started_at_unavailable` の試行は、
 event time が利用できない試行として raw evidence と対応する予定を保存する。
 `attempt_start_status = unknown` も送信開始不明の coverage gap として別に保存する。
 これらは `attempt_started_at` を持たないため、SLO window、SLO Version、eligible / good / bad / excluded のいずれにも帰属させず、
@@ -122,7 +122,7 @@ SLO window の classification result を作成しない。
 | `http_status_code` | integer または null | 受信した HTTP response の status code。response 未受信・不明なら null |
 | `error_type` | string または null | request 開始後の試行の失敗分類。失敗を観測していない場合は null |
 | `error_class` | string または null | 有効な SSE `error` event から取得した `class`。識別子は共有 contract を参照する。該当 event がなければ null |
-| `parse_status` | string | `passed` / `failed` / `not_observed` |
+| `sse_validation_status` | string | `passed` / `failed` / `not_observed` |
 | `render_status` | string | `passed` / `failed` / `not_observed` |
 | `verification_method` | string または null | `http` / `browser`。実行した検証方法を記録し、不明なら null |
 
@@ -132,16 +132,16 @@ HTTP error や reader の例外などで consumer の結果が得られなけれ
 `terminal = done` は consumer が `done` event を受理した事実だけを表す。有効な `done`、`response_time_ms` の存在、または good event を意味しない。
 
 `error_type` のこの schema における値は `timeout`、`dns_error`、`tls_error`、`connection_error`、`authentication_error`、
-`http_error`、`stream_error`、`unexpected_eof`、`parse_error`、`render_error`、`unknown_error` とする。
+`http_error`、`stream_error`、`unexpected_eof`、`sse_validation_error`、`render_error`、`unknown_error` とする。
 `unknown_error` は失敗を観測したが種類を特定できない場合であり、結果そのものが不明な場合とは異なる。
 `stream_error` は有効な SSE `error` に対応し、詳細は `error_class` に保持する。wire 上の `timeout` と measurement timeout を区別できる。
 HTTP status を観測した場合は、認証失敗等の分類を追加しても status code を消さない。
 失敗が連鎖した場合は最初の確定した原因を `error_type` / `failure_elapsed_ms` に残し、後続の検証結果はそれぞれの status に残す。
 
-`parse_status` は終端までの系列条件を含む共有 contract の検証を完了した時に `passed`、違反を確認した時に `failed`、
+`sse_validation_status` は終端までの系列条件を含む共有 contract の検証を完了した時に `passed`、違反を確認した時に `failed`、
 検証を実施・完了できず結果を確認できない場合は `not_observed` とする。timeout までの部分列が正常というだけで `passed` にしない。
 特に、先行する有効な content event が 0 件の `done` は、event 自体を受理していても共有 contract の正常終端系列ではないため、
-`parse_status = failed`、`error_type = parse_error` とする。
+`sse_validation_status = failed`、`error_type = sse_validation_error` とする。
 有効な `error` の parse 成功は request 成功ではない。
 `render_status` はその試行で観測した supported browser の結果であり、HTTP の検証だけなら `not_observed` とする。
 fixture の合格結果を、当該試行の browser 描画の `passed` に置き換えない。
@@ -161,7 +161,7 @@ fixture の合格結果を、当該試行の browser 描画の `passed` に置�
 
 framing / UTF-8 / JSON / event data schema の検証を経て受理した event を記録する。系列の順序・多重度の違反を後から検出しても、
 既に受理した event とその `elapsed_ms` は消さない。未完成・不正な event、無視した空 content は数えない。
-不正な入力による失敗は `parse_status` / `error_type` に残す。有効な `error` event は `error_class` とともに記録する。
+不正な入力による失敗は `sse_validation_status` / `error_type` に残す。有効な `error` event は `error_class` とともに記録する。
 `elapsed_ms` は非減少とする。同じ read 内で受理した複数 event が同じ値になっても、時刻を補間して作らない。
 この配列は受理時点の記録であり、元の response bytes や browser の描画証跡を代替しない。
 再検証に必要な入力・検証ログは runbook に従って保存し、試行 ID と関連付ける。
@@ -171,16 +171,16 @@ framing / UTF-8 / JSON / event data schema の検証を経て受理した event 
 | 項目名 | 型 | 意味・null 条件 |
 | --- | --- | --- |
 | `schedule_id` | string | 1 回の予定（1 つの `scheduled_for`）を一意に識別する必須 ID。定期実行でも各回に別の ID を割り当て、繰り返し計画の ID を流用しない。同じ ID の履歴は、その 1 回の予定に関する履歴に限る |
-| `traffic_class` | string | 予定作成時に固定する `slo_measurement` / `validation` / `drill`。予定記録を正本とし、run と attempt の複製値は照合にだけ使い、上書きしない |
-| `run_id` | string または null | 実際の job 実行の識別子。未起動・未確認なら null |
+| `execution_purpose` | string | 予定作成時に固定する `slo_measurement` / `validation` / `drill`。予定記録を正本とし、run と attempt の複製値は照合にだけ使い、上書きしない |
+| `run_id` | string または null | 実際の job execution の識別子。未起動・未確認なら null |
 | `attempt_id` | string または null | 1回の送信試行に予約・割当した識別子。attempt record では必須で null 不可。それ以外の管理記録では未割当・復元不能なら null |
-| `attempt_start_status` | string | `not_started` / `started_at_recorded` / `started_time_unavailable` / `unknown`。request を HTTP stack へ渡す開始と event time 記録の状態 |
+| `attempt_start_status` | string | `not_started` / `started_at_recorded` / `started_at_unavailable` / `unknown`。request を HTTP stack へ渡す開始と event time 記録の状態 |
 | `execution_status` | string | `scheduled` / `running` / `completed` / `failed` / `missed` / `unknown` |
-| `execution_error_type` | string または null | job の失敗分類。`credential_error` / `configuration_error` / `runner_error` / `unknown_error`。失敗なし・未確認なら null |
+| `execution_error_type` | string または null | job execution の失敗分類。`credential_error` / `configuration_error` / `runner_error` / `unknown_error`。失敗なし・未確認なら null |
 | `collection_status` | string | `pending` / `stored` / `failed` / `missing` / `unknown` |
 | `collection_error_type` | string または null | 収集・保存の失敗分類。`serialization_error` / `upload_error` / `storage_error` / `validation_error` / `unknown_error`。失敗なし・未確認なら null |
 | `receipt_id` | string または null | 1 回の保存先への受領処理を識別する不変の ID。receipt record では必須 |
-| `payload_fingerprint` | string または null | receipt metadata を除く immutable measurement payload の同一性を照合する値。payload を受領した receipt record では必須 |
+| `payload_digest` | string または null | receipt metadata を除く immutable measurement payload の同一性を照合する値。payload を受領した receipt record では必須 |
 | `payload_integrity_status` | string | `verified` / `conflict` / `unknown`。同じ `attempt_id` に属する receipt 間の payload 同一性の照合結果 |
 
 | 状態 | 判定条件 |
@@ -188,40 +188,40 @@ framing / UTF-8 / JSON / event data schema の検証を経て受理した event 
 | `execution_status = scheduled` | 予定があり、起動または未実行の判定がまだ確定していない |
 | `execution_status = running` | runner の起動・実行を証跡で確認した |
 | `execution_status = completed` | runner が計測・終了処理の完了を報告した。チャットの成功や結果の永続化を意味しない |
-| `execution_status = failed` | job 自体の失敗を確認した。送信後の service failure と同一視しない |
+| `execution_status = failed` | job execution 自体の失敗を確認した。送信後の service failure と同一視しない |
 | `execution_status = missed` | 設定した判定期限を過ぎ、完全な scheduler / runner の証跡から起動がなかったと確認できた |
 | `execution_status = unknown` | 実行の有無・状態を確認する証拠が足りない |
 | `attempt_start_status = not_started` | request を HTTP stack へ渡す前に停止したことを確認した。`attempt_started_at = null`。送信試行結果を作らない管理記録である |
 | `attempt_start_status = started_at_recorded` | request を HTTP stack へ渡す直前の実時刻を記録した。`attempt_started_at` は必須である |
-| `attempt_start_status = started_time_unavailable` | request の開始は証跡で確認したが、その実時刻を復元できない。`attempt_started_at = null` |
+| `attempt_start_status = started_at_unavailable` | request の開始は証跡で確認したが、その実時刻を復元できない。`attempt_started_at = null` |
 | `attempt_start_status = unknown` | request を開始したか確認する証拠が足りない。`attempt_started_at = null` |
 | `collection_status = pending` | 結果の永続化確認を待っている |
 | `collection_status = stored` | 保存先が結果を永続化したことを確認した |
 | `collection_status = failed` | serialize や保存拒否等の収集失敗を確認した |
 | `collection_status = missing` | 試行の開始を確認しているが、設定した判定期限を過ぎても保存先に完全な結果がないことを確認した |
 | `collection_status = unknown` | 保存先に到達できないなど、永続化の有無を確認できない |
-| `payload_integrity_status = verified` | 同じ `attempt_id` の全 receipt が同じ canonical payload bytes と `payload_fingerprint` を持つ |
-| `payload_integrity_status = conflict` | 同じ `attempt_id` に異なる canonical payload bytes または `payload_fingerprint` が 2 件以上ある |
+| `payload_integrity_status = verified` | 同じ `attempt_id` の全 receipt が同じ canonical payload bytes と `payload_digest` を持つ |
+| `payload_integrity_status = conflict` | 同じ `attempt_id` に異なる canonical payload bytes または `payload_digest` が 2 件以上ある |
 | `payload_integrity_status = unknown` | payload の同一性を照合する証拠が足りない |
 
 attempt record の `attempt_id` が欠落・null・不正な型の場合は validation error とし、分類には使用しない。
-不正な record と受領証跡は保持し、関連する予定が `slo_measurement` なら `missing_attempt_id_schedule_count` に残す。
+不正な record と受領証跡は保持し、関連する予定が `slo_measurement` なら `invalid_attempt_id_schedule_count` に残す。
 ID を生成して補ったり、同一 payload だから同じ試行だと推定したりしない。
 `attempt_start_status` がない、不正な値である、または `attempt_start_status` と `attempt_started_at` の組合せが上表に一致しない record も validation error とする。
-`attempt_start_status` は attempt record にのみ保存し、該当 record では `attempt_id` を必須とする。予定または job だけの record に、架空の試行状態を追加しない。
+`attempt_start_status` は attempt record にのみ保存し、該当 record では `attempt_id` を必須とする。予定または job execution だけの record に、架空の試行状態を追加しない。
 `started_at_recorded` は開始時刻の記録状態であり、request または journey の成功を表さない。
 
-job 未実行では試行結果と収集状態を捏造しない。送信前の credential 準備失敗では `execution_status = failed` と理由を残し、
+job execution がない場合は試行結果と収集状態を捏造しない。送信前の credential 準備失敗では `execution_status = failed` と理由を残し、
 予約済みの `attempt_id` があれば `attempt_start_status = not_started` とし、なければ `attempt_started_at` を作らない。
 送信開始後に観測した認証失敗は試行の `error_type` に記録する。
 保存応答の喪失などで受領の有無が不明な場合は `unknown` として照合し、失敗や未保存を断定しない。
 
 判定期限・猶予、照合に必要な証跡の保存方法は configuration の未決定項目である。値が未設定または証跡が不完全な時に、
 経過時間だけで `missed` / `missing` を確定しない。遅延実行・late ingestion は元の予定・試行へ結び付けて履歴を残す。
-SLO の期間帰属を変えず、再集計の入力 snapshot と query version を保存する。
-同じ `attempt_id` の再受領は、canonical payload bytes と `payload_fingerprint` の両方が一致する場合だけ同一結果の再送として冪等に扱う。
+SLO の期間帰属を変えず、再集計の入力 snapshot と evaluator version を保存する。
+同じ `attempt_id` の再受領は、canonical payload bytes と `payload_digest` の両方が一致する場合だけ同一結果の再送として冪等に扱う。
 receipt は追加するが、measurement result は 1 件として扱う。異なる payload が届いた場合は、両方の immutable payload と receipt history を残し、
-上書きも先着・後着の採用もしない。異なる canonical payload bytes または `payload_fingerprint` が 2 件以上ある `attempt_id` を payload conflict とする。
+上書きも先着・後着の採用もしない。異なる canonical payload bytes または `payload_digest` が 2 件以上ある `attempt_id` を payload conflict とする。
 実際に送信した別の試行を、同じ予定から起動したという理由だけで重複として除外しない。
 
 ### 同一 `attempt_id` の receipt history
@@ -233,18 +233,18 @@ receipt は追加するが、measurement result は 1 件として扱う。異�
 | `receipt_id` | string | 1 回の受領処理を識別する不変の ID |
 | `received_at` | string | 保存先が当該 payload を受領した UTC / RFC 3339 timestamp。既存結果の `ingested_at` を再送時刻で上書きしない |
 | `attempt_id` | string | 受領した結果が属する送信試行 |
-| `payload_fingerprint` | string | receipt metadata を除く immutable measurement payload を、`schema_version` で固定した canonicalization と digest algorithm で照合する値 |
-| `payload_ref` | string | 再検証できる immutable payload / evidence への参照。同一 fingerprint の再受領は既存 payload を参照してよい |
+| `payload_digest` | string | receipt metadata を除く immutable measurement payload を、`schema_version` で固定した canonicalization と digest algorithm で照合する値 |
+| `payload_ref` | string | 再検証できる immutable payload / evidence への参照。同一 digest の再受領は既存 payload を参照してよい |
 
-fingerprint の入力には、SLO window 帰属、scope、latency 算出、分類に影響する raw measurement field と `schema_version` を含める。
-`receipt_id`、`received_at`、`ingested_at`、collection lifecycle の状態、query による分類結果など、受領ごとまたは再集計で変化する metadata は含めない。
+digest の入力には、SLO window 帰属、scope、latency 算出、分類に影響する raw measurement field と `schema_version` を含める。
+`receipt_id`、`received_at`、`ingested_at`、collection lifecycle の状態、Evaluator による分類結果など、受領ごとまたは再集計で変化する metadata は含めない。
 
 ## 再現情報
 
 | 項目名 | 型 | 保存する情報 |
 | --- | --- | --- |
 | `schema_version` | string | この記録の作成に使った固定された schema の版。保存する各記録で必須 |
-| `configuration_version` | string | payload、認証方式、location、schedule、頻度、timeout、同時実行数、欠測判定条件、予定作成時の不変な `traffic_class` を含む設定 snapshot への固定参照 |
+| `configuration_version` | string | payload、認証方式、location、schedule、頻度、timeout、同時実行数、欠測判定条件、予定作成時の不変な `execution_purpose` を含む設定 snapshot への固定参照 |
 | `collector_version` | string または null | 実際に使用した計測プログラムの版 / commit SHA。未実行・確認不能なら null |
 | `client_version` | string または null | 検証対象の supported client の版。確認不能なら null |
 | `slo_version` | string または null | 試行開始時に有効な SLO Version。未採用の baseline では null |
@@ -260,7 +260,7 @@ credential 自体を設定 snapshot に保存せず、認証方式・主体・cr
 
 ## 分類・集計の出力
 
-これは raw measurement の上書きではなく、固定した入力と query による別の出力である。
+これは raw measurement の上書きではなく、固定した入力と Evaluator による別の出力である。
 分類の定義は [SLI と SLO](../../operations/slo/slo-document.md#sli-と-sloslis-and-slos) と runbook を参照する。
 
 | 項目名 | 型 | 意味・値 |
@@ -268,13 +268,13 @@ credential 自体を設定 snapshot に保存せず、認証方式・主体・cr
 | `eligibility` | string | `eligible` / `excluded` / `unknown`。scope と request の証拠から判定する |
 | `outcome` | string | `good` / `bad` / `unknown` / `not_evaluated` |
 | `classification_reason` | string | 判定の根拠。除外・判定不能・未評価では理由と不足する証拠を必須とする |
-| `query_version` | string | 判定処理の固定された版。対象 window、入力 snapshot、適用する設定・SLO とともに保存する |
+| `evaluator_version` | string | 判定処理の固定された版。対象 window、入力 snapshot、適用する設定・SLO とともに保存する |
 
 ### 予定 coverage の集計
 
 SLO window の event 集計と予定 coverage の集計を分ける。予定 coverage report は事前に
 `schedule_coverage_start` / `schedule_coverage_end` を固定し、次の半開区間に入る `slo_measurement` の予定と、
-`traffic_class` の証拠が欠ける予定を対象にする。`validation` と `drill` は別に記録し、SLO の予定 coverage には混ぜない。
+`execution_purpose` の証拠が欠ける予定を対象にする。`validation` と `drill` は別に記録し、SLO の予定 coverage には混ぜない。
 
 ```text
 schedule_coverage_start <= scheduled_for < schedule_coverage_end
@@ -287,25 +287,25 @@ schedule_coverage_start <= scheduled_for < schedule_coverage_end
 | 項目名 | 型 | 意味・算出単位 |
 | --- | --- | --- |
 | `schedule_coverage_start` / `schedule_coverage_end` | string | 予定 coverage report の UTC / RFC 3339 の半開区間 |
-| `scheduled_count` | integer | interval 内で予定記録の `traffic_class = slo_measurement` である、重複しない `schedule_id` の件数 |
-| `missing_attempt_evidence_schedule_count` | integer | 予定記録の `traffic_class = slo_measurement` で、予定ごとに固定した attempt evidence の判定期限を過ぎ、完全な照合証跡から関連する attempt record がないことを確認した、重複しない `schedule_id` の件数。`missed`、送信前の `failed`、`unknown` を含む |
-| `pending_attempt_evidence_schedule_count` | integer | 予定記録の `traffic_class = slo_measurement` で、関連する attempt record がなく、判定期限未到来・未設定、または照合証跡不足により欠落を確定できない、重複しない `schedule_id` の件数。期限前の収集失敗・永続化確認不能も含む |
-| `missing_attempt_id_schedule_count` | integer | 予定記録の `traffic_class = slo_measurement` で、`attempt_id` が欠落・null・不正な型の attempt record が関連する、重複しない `schedule_id` の件数。同じ予定に正常な attempt record があっても数える |
-| `attempt_start_validation_error_count` | integer | 予定記録の `traffic_class = slo_measurement` で、`attempt_start_status` の欠落・不正、または `attempt_started_at` との組合せが validation error である、重複しない `attempt_id` の件数 |
-| `not_started_attempt_count` | integer | 予定記録の `traffic_class = slo_measurement` で `attempt_start_status = not_started` の重複しない `attempt_id` の件数 |
-| `started_time_unavailable_attempt_count` | integer | 予定記録の `traffic_class = slo_measurement` で `attempt_start_status = started_time_unavailable` の重複しない `attempt_id` の件数 |
-| `unknown_attempt_start_count` | integer | 予定記録の `traffic_class = slo_measurement` で `attempt_start_status = unknown` の重複しない `attempt_id` の件数 |
-| `traffic_class_evidence_gap_schedule_count` | integer | `traffic_class` が未設定・不正な予定、または存在する run / attempt か configuration snapshot の複製値が欠落・不一致な、重複しない `schedule_id` の件数 |
-| `payload_conflict_attempt_count` | integer | 予定記録の `traffic_class = slo_measurement` で `payload_integrity_status = conflict` の重複しない `attempt_id` の件数 |
-| `payload_integrity_unknown_attempt_count` | integer | 予定記録の `traffic_class = slo_measurement` で `payload_integrity_status = unknown` の重複しない `attempt_id` の件数 |
+| `scheduled_count` | integer | interval 内で予定記録の `execution_purpose = slo_measurement` である、重複しない `schedule_id` の件数 |
+| `missing_attempt_record_schedule_count` | integer | 予定記録の `execution_purpose = slo_measurement` で、予定ごとに固定した attempt record の判定期限を過ぎ、完全な照合証跡から関連する attempt record がないことを確認した、重複しない `schedule_id` の件数。`missed`、送信前の `failed`、`unknown` を含む |
+| `pending_attempt_record_schedule_count` | integer | 予定記録の `execution_purpose = slo_measurement` で、関連する attempt record がなく、判定期限未到来・未設定、または照合証跡不足により欠落を確定できない、重複しない `schedule_id` の件数。期限前の収集失敗・永続化確認不能も含む |
+| `invalid_attempt_id_schedule_count` | integer | 予定記録の `execution_purpose = slo_measurement` で、`attempt_id` が欠落・null・不正な型の attempt record が関連する、重複しない `schedule_id` の件数。同じ予定に正常な attempt record があっても数える |
+| `attempt_start_validation_error_count` | integer | 予定記録の `execution_purpose = slo_measurement` で、`attempt_start_status` の欠落・不正、または `attempt_started_at` との組合せが validation error である、重複しない `attempt_id` の件数 |
+| `not_started_attempt_count` | integer | 予定記録の `execution_purpose = slo_measurement` で `attempt_start_status = not_started` の重複しない `attempt_id` の件数 |
+| `started_at_unavailable_attempt_count` | integer | 予定記録の `execution_purpose = slo_measurement` で `attempt_start_status = started_at_unavailable` の重複しない `attempt_id` の件数 |
+| `unknown_attempt_start_count` | integer | 予定記録の `execution_purpose = slo_measurement` で `attempt_start_status = unknown` の重複しない `attempt_id` の件数 |
+| `execution_purpose_gap_schedule_count` | integer | `execution_purpose` が未設定・不正な予定、または存在する run / attempt か configuration snapshot の複製値が欠落・不一致な、重複しない `schedule_id` の件数 |
+| `payload_conflict_attempt_count` | integer | 予定記録の `execution_purpose = slo_measurement` で `payload_integrity_status = conflict` の重複しない `attempt_id` の件数 |
+| `payload_integrity_unknown_attempt_count` | integer | 予定記録の `execution_purpose = slo_measurement` で `payload_integrity_status = unknown` の重複しない `attempt_id` の件数 |
 | `schedule_coverage_status` | string | `sufficient` / `insufficient`。未確定分を含む上記の gap count のいずれかが 0 より大きければ `insufficient`。照合証跡不足で count 自体を確定できない場合も `insufficient`。事前に宣言した他の coverage 条件も `insufficient` にできる |
 
-予定ごとの attempt evidence の判定期限・猶予は、その予定が参照する configuration snapshot に固定して保存する。
+予定ごとの attempt record の判定期限・猶予は、その予定が参照する configuration snapshot に固定して保存する。
 固定した入力 snapshot と評価時点に対し、`scheduled_count` の対象となる各 `schedule_id` は「関連する attempt record あり」「欠落確定」「未確定」のいずれか一つに必ず対応付ける。
 record の存在と、その record が分類に使用できることは区別する。record があっても ID や開始状態が不正なら、対応する gap count に残す。
-record がない場合は、完全な照合証跡と期限超過を確認できれば `missing_attempt_evidence_schedule_count`、それ以外は
-`pending_attempt_evidence_schedule_count` に `schedule_id` を 1 回だけ数え、両方には数えない。架空の `attempt_start_status` は作らない。
-`attempt_id` が欠落・null・不正な型の record は `*_attempt_count` や event count に含めず、`missing_attempt_id_schedule_count` に関連する予定を 1 回だけ数える。
+record がない場合は、完全な照合証跡と期限超過を確認できれば `missing_attempt_record_schedule_count`、それ以外は
+`pending_attempt_record_schedule_count` に `schedule_id` を 1 回だけ数え、両方には数えない。架空の `attempt_start_status` は作らない。
+`attempt_id` が欠落・null・不正な型の record は `*_attempt_count` や event count に含めず、`invalid_attempt_id_schedule_count` に関連する予定を 1 回だけ数える。
 関連する予定も確認できなければ、未関連付けの evidence として残し、count に現れないことを十分な coverage の根拠にしない。
 各 `*_attempt_count` は `attempt_id` ごとに 1 回だけ数え、同じ attempt の receipt 数・再送回数で増やさない。
 一つの予定から実際に複数回送信した場合は別の `attempt_id` ごとに数える。同じ論理的な attempt が複数の gap を持つ場合は、
@@ -319,18 +319,18 @@ SLO compliance と error budget を報告しない。
 `scheduled_for` が interval 外であることだけを理由に、確認対象から除外しない。判定期限・猶予は欠落判定の条件であり、実行遅延の上限には使わない。
 この追加確認は予定 coverage interval の count や event の期間帰属を変更せず、event time が不明な試行に推定の classification result を作らない。
 
-分類に入る前に attempt record の `attempt_id` を検証する。欠落・null・不正な型なら、traffic class の照合結果などの coverage evidence は残すが、
-SLO window の classification result は作成しない。`traffic_class = slo_measurement` の予定には `missing_attempt_id_schedule_count` を記録する。
-traffic class の証拠不足・不一致は、既存の `traffic_class_evidence_gap_schedule_count` にも残す。
+分類に入る前に attempt record の `attempt_id` を検証する。欠落・null・不正な型なら、execution purpose の照合結果などの coverage evidence は残すが、
+SLO window の classification result は作成しない。`execution_purpose = slo_measurement` の予定には `invalid_attempt_id_schedule_count` を記録する。
+execution purpose の証拠不足・不一致は、既存の `execution_purpose_gap_schedule_count` にも残す。
 
 分類順序は次のとおりとする。
 
-1. 予定記録の不変な `traffic_class` を正本として、存在する run / attempt と configuration snapshot の複製値を分岐前に照合する。予定の値が未設定・不正、または複製値が欠落・不一致なら `traffic_class_evidence_gap_schedule_count` に残す。`attempt_started_at` がある場合は event time の SLO window に `eligibility = unknown`、`outcome = unknown` を作り、good / bad / excluded を確定せず終了する。event time がない場合は SLO window の classification result を作成せず、coverage gap として終了する。response または outcome を理由に `traffic_class` を変更しない。
+1. 予定記録の不変な `execution_purpose` を正本として、存在する run / attempt と configuration snapshot の複製値を分岐前に照合する。予定の値が未設定・不正、または複製値が欠落・不一致なら `execution_purpose_gap_schedule_count` に残す。`attempt_started_at` がある場合は event time の SLO window に `eligibility = unknown`、`outcome = unknown` を作り、good / bad / excluded を確定せず終了する。event time がない場合は SLO window の classification result を作成せず、coverage gap として終了する。response または outcome を理由に `execution_purpose` を変更しない。
 2. 照合済みの予定記録が `validation` または `drill` なら `eligibility = excluded`、`outcome = not_evaluated` として終了する。`slo_measurement` だけを次の判定へ進める。
 3. 予定記録が `slo_measurement` の attempt record で、`attempt_start_status` の欠落・不正、または `attempt_started_at` との組合せが validation error なら、`attempt_start_validation_error_count` に残す。使用できる `attempt_started_at` がある場合は event time の SLO window に `eligibility = unknown`、`outcome = unknown` を作り、そうでなければ SLO window の classification result を作成しない。いずれも good / bad を確定せず終了する。
-4. 予定記録が `slo_measurement` の試行では、`attempt_start_status = not_started` の場合、予定と execution の evidence を残すが SLO window の classification result を作成しない。`started_time_unavailable` または `unknown` の場合も、対応する attempt count と raw evidence を残し、SLO window の classification result を作成しない。未実行の予定を架空の試行として eligible / bad にしない。
+4. 予定記録が `slo_measurement` の試行では、`attempt_start_status = not_started` の場合、予定と execution の evidence を残すが SLO window の classification result を作成しない。`started_at_unavailable` または `unknown` の場合も、対応する attempt count と raw evidence を残し、SLO window の classification result を作成しない。未実行の予定を架空の試行として eligible / bad にしない。
 5. `payload_integrity_status = unknown` の `attempt_id` は、payload の同一性を検証する evidence が足りない。scope の根拠を再構築できなければ `eligibility = unknown`、`outcome = unknown` とする。再構築できる場合は scope から `eligibility` を判定するが、`outcome = unknown` として終了する。good / bad を確定しない。
-6. `payload_integrity_status = conflict` の `attempt_id` は、receipt の到着順、`received_at`、`ingested_at`、再送回数で raw result を選ばない。全 receipt が `attempt_start_status` と `attempt_started_at` に必要な immutable field で一致する場合だけ、その共通の event time の SLO window で分類する。scope または eligibility の根拠が異なるか不足する場合は、`eligibility = unknown`、`outcome = unknown` とする。それ以外は共通の根拠から `eligibility` を判定し、`outcome = unknown` として終了する。event time が異なるか不足する場合は、SLO window の classification result を作成せず、coverage report に payload conflict と不足した証拠を残す。いずれも good / bad を確定せず、classification result を作成する場合は `classification_reason` に `attempt_id`、全 `receipt_id`、全 `payload_fingerprint` を残す。
+6. `payload_integrity_status = conflict` の `attempt_id` は、receipt の到着順、`received_at`、`ingested_at`、再送回数で raw result を選ばない。全 receipt が `attempt_start_status` と `attempt_started_at` に必要な immutable field で一致する場合だけ、その共通の event time の SLO window で分類する。scope または eligibility の根拠が異なるか不足する場合は、`eligibility = unknown`、`outcome = unknown` とする。それ以外は共通の根拠から `eligibility` を判定し、`outcome = unknown` として終了する。event time が異なるか不足する場合は、SLO window の classification result を作成せず、coverage report に payload conflict と不足した証拠を残す。いずれも good / bad を確定せず、classification result を作成する場合は `classification_reason` に `attempt_id`、全 `receipt_id`、全 `payload_digest` を残す。
 7. scope の根拠から `eligibility` を判定する。eligibility を確認できなければ `eligibility = unknown`、`outcome = unknown` として終了する。
 8. 評価対象外なら `outcome = not_evaluated` として終了する。
 9. 適用する threshold 等の判定規則が未指定なら `outcome = not_evaluated` とする。観測済みの失敗は raw の結果・理由として保持する。
@@ -339,7 +339,7 @@ traffic class の証拠不足・不一致は、既存の `traffic_class_evidence
 12. bad も good も確定できない証拠不足は `unknown` とし、成功にも自動除外にもしない。
 
 threshold をまだ指定していない baseline の収集では `not_evaluated` とする。
-SLO 採用前でも、runbook に従って候補の threshold・設定・入力 snapshot・query を固定し、検証・分析用に分類してよい。
+SLO 採用前でも、runbook に従って候補の threshold・設定・入力 snapshot・Evaluator を固定し、検証・分析用に分類してよい。
 その場合は候補への参照と検証・分析目的を分類結果に記録し、未採用の `slo_version` は null のままとする。
 この分類結果を正式な SLO compliance や error budget として報告しない。
 
@@ -362,21 +362,21 @@ eligible / good / bad / excluded / unknown の件数は SLO window の classific
 | content なしで 900 ms に timeout、930 ms に検証完了 | `time_to_first_output_ms` / `last_content_to_done_duration_ms` / `response_time_ms` は null、完全に取得できた `sse_events` は `[]`、`failure_elapsed_ms = 900`、`attempt_duration_ms = 930` |
 | content の後に有効な SSE error | 観測済み `time_to_first_output_ms` / `inter_chunk_latency_ms` を保持。`last_content_to_done_duration_ms` / `response_time_ms` は null。`terminal = error`、`error_type = stream_error` と wire の class を保存 |
 | done を受理したが render に失敗 | `response_time_ms` は保持し、`render_status = failed` と失敗検出時刻を保存。done だけで good にしない |
-| 有効な content event が 0 件で 200 ms に `done` を受理し、220 ms に verifier 完了 | `sse_events` に `done` と `elapsed_ms = 200` を残す。`terminal = done`、`parse_status = failed`、`error_type = parse_error`、`response_time_ms = null`、`failure_elapsed_ms = 200`。適用可能な判定規則がある eligible attempt では bad とする |
+| 有効な content event が 0 件で 200 ms に `done` を受理し、220 ms に verifier 完了 | `sse_events` に `done` と `elapsed_ms = 200` を残す。`terminal = done`、`sse_validation_status = failed`、`error_type = sse_validation_error`、`response_time_ms = null`、`failure_elapsed_ms = 200`。適用可能な判定規則がある eligible attempt では bad とする |
 | 結果の一部を喪失 | 復元不能な event 列・派生値は null。部分的な evidence は保持し、`[]` や 0 に置換しない |
-| job が起動せず、完全な証跡と判定期限がある | 予定を残して `execution_status = missed`。試行の開始時刻・応答結果は作らず、`missing_attempt_evidence_schedule_count` に `schedule_id` を 1 回だけ数える。予定 coverage は insufficient とする |
-| attempt record がなく、判定期限未到来・未設定、または保存先の照合証跡が不完全 | `pending_attempt_evidence_schedule_count` に `schedule_id` を 1 回だけ数え、予定 coverage は insufficient とする。期限前に `collection_status = failed` / `unknown` となっても、欠落確定にはせず未確定として残す |
-| 毎日 1 回の予定を 28 日分作り、うち 5 回は期限後も attempt record がないと完全な照合証跡で確認 | 各回に別の `schedule_id` を割り当て、`scheduled_count = 28`、`missing_attempt_evidence_schedule_count = 5`。同じ定期実行の予定でも 1 件にまとめない |
-| 同じ予定に関連する `attempt_id = null` の payload を 2 回受領 | 不正な record と受領証跡を保持し、`missing_attempt_id_schedule_count` に `schedule_id` を 1 回だけ数える。SLO window の classification result は作成せず、予定 coverage は insufficient とする。同一試行か別試行かは推定しない |
+| job execution が起動せず、完全な証跡と判定期限がある | 予定を残して `execution_status = missed`。試行の開始時刻・応答結果は作らず、`missing_attempt_record_schedule_count` に `schedule_id` を 1 回だけ数える。予定 coverage は insufficient とする |
+| attempt record がなく、判定期限未到来・未設定、または保存先の照合証跡が不完全 | `pending_attempt_record_schedule_count` に `schedule_id` を 1 回だけ数え、予定 coverage は insufficient とする。期限前に `collection_status = failed` / `unknown` となっても、欠落確定にはせず未確定として残す |
+| 毎日 1 回の予定を 28 日分作り、うち 5 回は期限後も attempt record がないと完全な照合証跡で確認 | 各回に別の `schedule_id` を割り当て、`scheduled_count = 28`、`missing_attempt_record_schedule_count = 5`。同じ定期実行の予定でも 1 件にまとめない |
+| 同じ予定に関連する `attempt_id = null` の payload を 2 回受領 | 不正な record と受領証跡を保持し、`invalid_attempt_id_schedule_count` に `schedule_id` を 1 回だけ数える。SLO window の classification result は作成せず、予定 coverage は insufficient とする。同一試行か別試行かは推定しない |
 | `attempt_start_status = not_started` なのに `attempt_started_at` がある | `attempt_start_validation_error_count` に `attempt_id` を 1 回だけ数える。event time が使用できるなら `eligibility = unknown`、`outcome = unknown`、使用できなければ SLO window の classification result を作成しない。いずれも good / bad を確定しない |
-| request 開始は確認できたが開始時刻を復元できない | `attempt_start_status = started_time_unavailable`、`attempt_started_at = null`。raw evidence と予定を残し、重複しない `attempt_id` を `started_time_unavailable_attempt_count` に 1 回だけ数える。SLO window の classification result は作成せず、対応する予定 coverage は insufficient とする |
+| request 開始は確認できたが開始時刻を復元できない | `attempt_start_status = started_at_unavailable`、`attempt_started_at = null`。raw evidence と予定を残し、重複しない `attempt_id` を `started_at_unavailable_attempt_count` に 1 回だけ数える。SLO window の classification result は作成せず、対応する予定 coverage は insufficient とする |
 | `scheduled_for` は window 開始前だが、遅延実行後に開始時刻を喪失し、当該 window への影響を否定できない | 予定が当該 report の coverage interval 外でも gap の影響確認に含め、当該 window の SLO compliance と error budget を報告しない。`scheduled_for` で event time を補わず、SLO window の classification result は作成しない |
-| 事前宣言した timeout validation | 予定作成時に `traffic_class = validation` を固定する。timeout の raw 結果は残すが、`eligibility = excluded`、`outcome = not_evaluated` とし、SLO event count に混入させない |
-| upload 後に応答を喪失し、同じ payload を再送 | 同じ `attempt_id`、canonical payload bytes、`payload_fingerprint` を照合する。receipt history を追加し、保存の確認までは `collection_status = unknown`。同一 payload は 1 measurement result として扱う |
+| 事前宣言した timeout validation | 予定作成時に `execution_purpose = validation` を固定する。timeout の raw 結果は残すが、`eligibility = excluded`、`outcome = not_evaluated` とし、SLO event count に混入させない |
+| upload 後に応答を喪失し、同じ payload を再送 | 同じ `attempt_id`、canonical payload bytes、`payload_digest` を照合する。receipt history を追加し、保存の確認までは `collection_status = unknown`。同一 payload は 1 measurement result として扱う |
 | 同じ `attempt_id` に異なる payload を受領 | `payload_integrity_status = conflict`。両方の immutable payload と receipt history を残し、先着・後着を採用しない。`payload_conflict_attempt_count` に logical attempt を 1 件だけ数える。開始状態と使用可能な event time が全 receipt で共通なら、その window に `outcome = unknown` を作り、scope の根拠が不一致・不足なら `eligibility = unknown` とする。開始状態や event time が異なるか不足する場合は、SLO window の classification result を作成しない |
 | payload の同一性を照合する evidence が欠落 | `payload_integrity_status = unknown`。`payload_integrity_unknown_attempt_count` に logical attempt を 1 件だけ数え、scope を確認できなければ `eligibility = unknown`、いずれも `outcome = unknown` として good / bad を確定しない |
-| 予定は `slo_measurement`、attempt の `traffic_class` が不一致で開始時刻も復元不能 | 予定記録を正本とし、`traffic_class_evidence_gap_schedule_count` と `started_time_unavailable_attempt_count` にそれぞれ数える。SLO window の classification result は作成せず、予定 coverage は insufficient とする |
-| 予定は `validation`、attempt の `traffic_class` が `slo_measurement` で開始時刻を記録 | traffic class の evidence gap として `traffic_class_evidence_gap_schedule_count` に数える。`excluded` にせず、event time の SLO window で `eligibility = unknown`、`outcome = unknown` とする |
+| 予定は `slo_measurement`、attempt の `execution_purpose` が不一致で開始時刻も復元不能 | 予定記録を正本とし、`execution_purpose_gap_schedule_count` と `started_at_unavailable_attempt_count` にそれぞれ数える。SLO window の classification result は作成せず、予定 coverage は insufficient とする |
+| 予定は `validation`、attempt の `execution_purpose` が `slo_measurement` で開始時刻を記録 | execution purpose の evidence gap として `execution_purpose_gap_schedule_count` に数える。`excluded` にせず、event time の SLO window で `eligibility = unknown`、`outcome = unknown` とする |
 
 これらに加え、clock 補正、遅延到着、同一 read 内の複数 event、空 content、byte 分割、collector 再起動、保存障害を
 runbook と共有 fixture に沿って検証する。実装・validation の証跡を残すまでは本書を検証済みとは扱わない。
