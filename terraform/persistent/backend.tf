@@ -4,7 +4,7 @@ terraform {
     # Terraform 管理リソース用 RG（rg-felisaichatbot-dev-tf。ADR-0012）と分けるのは、
     # dev を destroy しても state が残る persistent / ephemeral 分離の一貫。
     resource_group_name  = "rg-felisaichatbot-tfstate"
-    storage_account_name = "felisaichatbottfstate"
+    storage_account_name = "felisaichatbottfstate02"
     container_name       = "tfstate"
     key                  = "persistent/terraform.tfstate"
     # アクセスキーではなく Entra ID（Storage Blob Data Contributor。bootstrap.md §11-3）で
