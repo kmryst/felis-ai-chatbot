@@ -11,12 +11,12 @@ variable "resource_group_name" {
 variable "acr_name" {
   description = "ACR 名（グローバル一意・英数字のみ。ADR-0013 の予約名。bootstrap.md §3 で空き確認済み）"
   type        = string
-  default     = "felisaichatbotacrdev"
+  default     = "felisaichatbotacrdev02"
 }
 
 variable "container_image" {
   description = <<-DESC
-    Container App にデプロイするイメージの完全参照（例: felisaichatbotacrdev.azurecr.io/hello-world:sha-abc1234）。
+    Container App にデプロイするイメージの完全参照（例: felisaichatbotacrdev02.azurecr.io/hello-world:sha-abc1234）。
     タグは git commit SHA 由来の不変タグを使い、latest は使わない（ADR-0015）。
     walking skeleton は hello-world イメージから始め、経路開通後に backend イメージへ差し替える
     （bootstrap.md「Day 3 の方針」方針1）。
@@ -93,7 +93,7 @@ variable "aca_subnet_name" {
 variable "ops_container_image" {
   description = <<-DESC
     運用コンテナ（ops Container App / migration Job）のイメージ完全参照
-    （例: felisaichatbotacrdev.azurecr.io/backend-ops:sha-abc1234。backend/Dockerfile の ops ターゲット）。
+    （例: felisaichatbotacrdev02.azurecr.io/backend-ops:sha-abc1234。backend/Dockerfile の ops ターゲット）。
     空のままなら ops Container App と migration Job は作られない（hello-world 段階や
     ops イメージ未 push の状態でも apply を通すため）。指定する場合は database_url も必須
     （各リソースの precondition が検査する）。
@@ -127,7 +127,7 @@ variable "chat_disabled" {
 variable "frontend_container_image" {
   description = <<-DESC
     frontend Container App のイメージ完全参照
-    （例: felisaichatbotacrdev.azurecr.io/frontend:sha-abc1234。frontend/Dockerfile）。
+    （例: felisaichatbotacrdev02.azurecr.io/frontend:sha-abc1234。frontend/Dockerfile）。
     空のままなら frontend Container App と authConfigs は作られない（ADR-0027 決定 6 の
     fail-closed bootstrap 順序: chat_disabled = true かつ frontend 未作成の第 1 段 apply を
     成立させるため）。指定する場合は easy_auth_client_id / easy_auth_client_secret も必須

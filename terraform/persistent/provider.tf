@@ -21,7 +21,7 @@ provider "azurerm" {
   features {
     cognitive_account {
       # 【現時点では何の効果もない設定】features は Terraform 管理下のリソースにしか効かず、
-      # Azure OpenAI（felisaichatbot-openai-dev）は管理外（ADR-0014・管理外リソース台帳）。
+      # Azure OpenAI（felisaichatbot-openai-dev-02）は管理外（ADR-0014・管理外リソース台帳）。
       # 「管理外リソースがこれで守られている」と誤解しないこと。
       #
       # それでも入れるのは、危険な既定値（true = destroy が論理削除を飛ばして purge まで実行

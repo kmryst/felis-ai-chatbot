@@ -9,7 +9,7 @@ terraform {
     # key で層を分ける。ephemeral 層は destroy / apply を繰り返すが
     # （day3-5-execution-plan.md §3-6 / §5-6）、state 置き場自体は残る。
     resource_group_name  = "rg-felisaichatbot-tfstate"
-    storage_account_name = "felisaichatbottfstate"
+    storage_account_name = "felisaichatbottfstate02"
     container_name       = "tfstate"
     key                  = "ephemeral/terraform.tfstate"
     # アクセスキーではなく Entra ID（Storage Blob Data Contributor。bootstrap.md §11-3）で
