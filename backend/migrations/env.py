@@ -7,10 +7,8 @@
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
@@ -29,6 +27,32 @@ def _database_url() -> str:
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     return url
+
+
+def _connect_args() -> dict[str, str]:
+    """psycopg に追加で渡す接続引数（DB_AUTH_MODE=managed-identity 時の password）。
+
+    backend / Job と同じ環境変数（DB_AUTH_MODE / AZURE_CLIENT_ID）を読み、Entra の
+    アクセストークンを password として渡す（Issue #275。ADR-0031）。password モード
+    （既定）では何も足さず、DATABASE_URL のパスワードで接続する。keyword の password は
+    URL 内の値より優先される（psycopg の conninfo と keyword のマージ規則）。
+    マイグレーション 1 回は数秒〜数分で、取得直後のトークンの有効期限内に収まる。
+    """
+    mode = os.environ.get("DB_AUTH_MODE", "password")
+    if mode == "password":
+        return {}
+    if mode != "managed-identity":
+        raise RuntimeError(
+            "環境変数 DB_AUTH_MODE の値が不正です"
+            "（password か managed-identity を指定してください）"
+        )
+    client_id = os.environ.get("AZURE_CLIENT_ID")
+    if not client_id:
+        raise RuntimeError("必須環境変数が未設定です: AZURE_CLIENT_ID")
+    # prepend_sys_path = .（alembic.ini）により backend/ 直下の app パッケージが import できる
+    from app.entra_auth import DB_TOKEN_SCOPE, ManagedIdentityTokenProvider
+
+    return {"password": ManagedIdentityTokenProvider(client_id).get_token(DB_TOKEN_SCOPE)}
 
 
 # set_main_option の値は ConfigParser を通り、pyformat 補間（%(name)s）が解釈される。
@@ -82,6 +106,7 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=_connect_args(),
     )
 
     with connectable.connect() as connection:

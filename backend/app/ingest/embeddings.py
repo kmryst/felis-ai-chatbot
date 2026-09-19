@@ -11,7 +11,7 @@
 
 import logging
 
-import psycopg
+from app.db import connect as db_connect
 
 from app.llm.client import LLMClient
 from app.rag import format_embedding
@@ -30,9 +30,7 @@ async def backfill_embeddings(
     1 行ずつ UPDATE し、最後にまとめて commit する（途中失敗時は
     未 commit 分が巻き戻り、次回実行で NULL の行だけ再対象になる）。
     """
-    async with await psycopg.AsyncConnection.connect(
-        database_url, connect_timeout=connect_timeout_seconds
-    ) as conn:
+    async with await db_connect(database_url, connect_timeout_seconds) as conn:
         cur = await conn.execute(
             "SELECT id, content FROM documents WHERE embedding IS NULL ORDER BY id"
         )

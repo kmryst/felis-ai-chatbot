@@ -17,7 +17,7 @@
 import logging
 from dataclasses import dataclass
 
-import psycopg
+from app.db import connect as db_connect
 
 logger = logging.getLogger("app.rag")
 
@@ -47,9 +47,7 @@ async def search_similar_documents(
     除外する。結果は類似度の降順。
     """
     literal = format_embedding(query_embedding)
-    async with await psycopg.AsyncConnection.connect(
-        database_url, connect_timeout=connect_timeout_seconds
-    ) as conn:
+    async with await db_connect(database_url, connect_timeout_seconds) as conn:
         cur = await conn.execute(
             """
             SELECT content, 1 - (embedding <=> %(q)s::vector) AS similarity
@@ -76,9 +74,7 @@ async def fetch_property_records(
     値と併せてそのまま載せる。source は JOIN 可能だがコンテキストへは
     含めない（ADR-0008: 回答ごとの出典表示は行わない）。
     """
-    async with await psycopg.AsyncConnection.connect(
-        database_url, connect_timeout=connect_timeout_seconds
-    ) as conn:
+    async with await db_connect(database_url, connect_timeout_seconds) as conn:
         cur = await conn.execute(
             """
             SELECT o.name, p.property_name, p.value_numeric, p.value_text,

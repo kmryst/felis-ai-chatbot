@@ -26,6 +26,7 @@ import httpx
 # エラー分類は errors.py が正本（streaming.py との循環 import 回避）。
 # 既存の import 経路（from app.llm.client import LLMError 等）を維持するため
 # ここで再 export する
+from app.entra_auth import AsyncTokenProvider
 from app.llm.errors import (
     LLMBadRequestError,
     LLMContentFilterError,
@@ -193,16 +194,29 @@ class StubTransport:
 # --- Azure OpenAI transport（ADR-0009） ---------------------------------------
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class AzureOpenAIConfig:
-    """Azure OpenAI transport の接続設定。値は環境変数から渡す（config.py）。"""
+    """Azure OpenAI transport の接続設定。値は環境変数から渡す（config.py）。
+
+    認証は api_key（`api-key` ヘッダ）か bearer_token_provider（Entra のアクセス
+    トークンを `Authorization: Bearer` で送る。Issue #275 / ADR-0031）のどちらか
+    一方を指定する。両方・どちらも無しは組み立て時に弾く。
+    """
 
     endpoint: str
     # API キーは secret のため repr=False（ログ・エラー画面への漏出防止）
-    api_key: str = field(repr=False)
+    api_key: str = field(default="", repr=False)
+    # 呼び出しごとに現在有効な Entra トークンを返す非同期 callable（managed identity）
+    bearer_token_provider: AsyncTokenProvider | None = field(default=None, repr=False)
     api_version: str
     chat_deployment: str
     embedding_deployment: str
+
+    def __post_init__(self) -> None:
+        if bool(self.api_key) == (self.bearer_token_provider is not None):
+            raise ValueError(
+                "api_key と bearer_token_provider はどちらか一方だけを指定してください"
+            )
 
 
 class AzureOpenAITransport:
@@ -232,6 +246,13 @@ class AzureOpenAITransport:
         self._http = http_client or httpx.AsyncClient(
             base_url=config.endpoint.rstrip("/"), timeout=None
         )
+
+    async def _auth_headers(self) -> dict[str, str]:
+        """認証ヘッダ。api-key か Bearer（Entra トークン）のどちらか一方だけを付ける。"""
+        provider = self._config.bearer_token_provider
+        if provider is not None:
+            return {"Authorization": f"Bearer {await provider()}"}
+        return {"api-key": self._config.api_key}
 
     async def chat(self, messages: list[dict[str, str]]) -> str:
         data = await self._post(
@@ -279,7 +300,7 @@ class AzureOpenAITransport:
             "/chat/completions",
             params={"api-version": self._config.api_version},
             json={"messages": messages, "stream": True},
-            headers={"api-key": self._config.api_key},
+            headers=await self._auth_headers(),
         )
         try:
             response = await self._http.send(request, stream=True)
@@ -321,7 +342,7 @@ class AzureOpenAITransport:
                 path,
                 params={"api-version": self._config.api_version},
                 json=payload,
-                headers={"api-key": self._config.api_key},
+                headers=await self._auth_headers(),
             )
         except httpx.TimeoutException as exc:
             raise LLMTimeoutError(f"HTTP timeout: {path}") from exc
