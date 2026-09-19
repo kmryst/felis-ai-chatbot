@@ -63,3 +63,33 @@ variable "alert_email_address" {
     error_message = "alert_email_address はメールアドレス形式で指定してください。"
   }
 }
+
+variable "entra_administrator_object_id" {
+  description = <<-DESC
+    PostgreSQL Flexible Server の Microsoft Entra 管理者にするアカウントの object ID
+    （プロジェクト所有者のアカウント。Issue #275 / ADR-0031）。
+    `az ad signed-in-user show --query id -o tsv` で取得できる。個人のアカウントに紐づく値のため
+    コード・tfvars のコミット対象には書かず、terraform.tfvars（gitignore 済み）で渡す。
+  DESC
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.entra_administrator_object_id))
+    error_message = "entra_administrator_object_id は GUID 形式で指定してください。"
+  }
+}
+
+variable "entra_administrator_principal_name" {
+  description = <<-DESC
+    上記管理者の principal name（ユーザーの場合は user principal name）。
+    `az ad signed-in-user show --query userPrincipalName -o tsv` で取得できる。
+    個人のアカウント名のためコード・tfvars のコミット対象には書かず、terraform.tfvars（gitignore 済み）で渡す。
+    PostgreSQL 側ではこの名前が管理者ロール名になる。
+  DESC
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.entra_administrator_principal_name)) > 0
+    error_message = "entra_administrator_principal_name は空にできません。"
+  }
+}
