@@ -47,9 +47,9 @@ Container App Job 2 本（`caj-felisaichatbot-dev-seed` / `caj-felisaichatbot-de
 ```bash
 # 0) 変数の読み込み（vnet-integration-cutover.md §0-2 の作法）
 set -a; source .env; set +a
-export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-${DEPLOY_SHA:?}"
-export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
-export TF_VAR_frontend_container_image="felisaichatbotacrdev.azurecr.io/frontend:sha-${DEPLOY_SHA:?}"
+export TF_VAR_container_image="felisaichatbotacrdev02.azurecr.io/backend:sha-${DEPLOY_SHA:?}"
+export TF_VAR_ops_container_image="felisaichatbotacrdev02.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
+export TF_VAR_frontend_container_image="felisaichatbotacrdev02.azurecr.io/frontend:sha-${DEPLOY_SHA:?}"
 
 # 1) plan（期待 diff: Job 2 本の add のみ）→ apply
 terraform -chdir=terraform/ephemeral plan

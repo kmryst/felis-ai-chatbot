@@ -6,8 +6,8 @@ Contributor）の権限外のため、**tenant 管理権限を持つユーザー
 （ADR-0012 の権限境界）。作成したオブジェクトは
 [azure-resource-inventory.md](./azure-resource-inventory.md) §B に台帳として記録する。
 
-> secret（client secret・テストユーザーのパスワード）は画面に echo せず、`.env`
-> （コミット禁止）にのみ保存する。
+> client secret は画面に echo せず、`terraform/ephemeral/terraform.tfvars`（gitignore 済み・コミット禁止）
+> にのみ保存する。テストユーザーのパスワードは保存しない（§4）。
 
 ## 1. app registration（application object）
 
@@ -34,13 +34,13 @@ app_id=$(az ad app create \
   }]' \
   --query appId -o tsv)
 
-# client secret（値は表示せず .env の TF_VAR_easy_auth_client_secret へ保存する）
+# client secret（値は表示せず terraform/ephemeral/terraform.tfvars の easy_auth_client_secret へ保存する）
 az ad app credential reset --id "$app_id" --append --display-name easyauth --years 1 \
-  --query password -o tsv > /dev/null   # 実際は値を安全に .env へ書き込むこと
+  --query password -o tsv > /dev/null   # 実際は値を安全に terraform.tfvars へ書き込むこと（画面に出さない）
 ```
 
-- `TF_VAR_easy_auth_client_id`（= `$app_id`）と `TF_VAR_easy_auth_client_secret` を `.env` に
-  保存し、`set -a; source .env; set +a` で export する
+- `easy_auth_client_id`（= `$app_id`）と `easy_auth_client_secret` を `terraform/ephemeral/terraform.tfvars` に
+  書く（ADR-0030 決定 3: 秘密値は層ごとの tfvars で渡し、`TF_VAR_*` の export と混在させない）
 
 ## 2. enterprise application（service principal）側
 
@@ -93,7 +93,8 @@ az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/${sp_obj}/appR
 domain=$(az rest --url "https://graph.microsoft.com/v1.0/domains" \
   --query "value[?isDefault].id" -o tsv)
 
-# パスワードは生成して .env に保存し、画面に出さない
+# パスワードは生成して画面に出さない。保存もしない（実測者が入力できる経路 = mode 600 の一時ファイル等で渡し、
+# 実測後に消す）。テストユーザーはチャット実測の完了後にユーザーごと削除する（下記）
 az ad user create --display-name "felis test user (assigned)" \
   --user-principal-name "felis-test@${domain}" \
   --password "<generated>" --force-change-password-next-sign-in false
@@ -104,8 +105,17 @@ az ad user create --display-name "felis test user (unassigned)" \
 
 - 割当ありユーザーの object id を §3 の `assign` に渡す。割当なしユーザーには何もしない
 - どちらにも管理者ロールを付与しない（作成直後の既定のまま）
-- ブラウザ実測にパスワードを入力した場合は、実測完了後に
-  `az ad user update --id <upn> --password <新値>` でローテーションする
+- **削除のタイミング**: 未割当ユーザーの `AADSTS50105` と、割当ありユーザーの **`chat_disabled = false` 後のチャット疎通**
+  （vnet-integration-cutover.md §7-4 / §7-5）まで両方の証跡を取ってから 2 名とも削除する（§5 のコマンド）。
+  `AADSTS50105` の証跡を取った直後に削除するとチャット実測のために作り直しになる（2026-09-19 に実際に起きた =
+  [subscription-migration/observations.md §6-3](../verification/subscription-migration/observations.md)）。
+  削除すればパスワードのローテーションは不要
+- **初回サインインで MFA 登録が必須**: Entra ID のセキュリティの既定値により、新規ユーザーは初回サインインで
+  Microsoft Authenticator（または TOTP アプリ）の登録を求められる。実測者は認証アプリを用意しておく。
+  未割当ユーザーは password 通過直後に認可で拒否されるため MFA 登録には進まない（2026-09-19 実測）
+- **ブラウザの注意**: Chrome のシークレットウィンドウは**ウィンドウ間でセッションを共有する**。2 人目の実測前に
+  シークレットウィンドウを**すべて閉じて**からやり直す（閉じないと 1 人目のセッションが流用され、
+  どのアカウントの結果か確定できなくなる）
 
 ## 5. 後片付け（プロジェクト終了時）
 

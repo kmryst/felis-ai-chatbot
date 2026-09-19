@@ -19,7 +19,7 @@ apply の包括許可を得ている場合でも、次が見えたら**実行を
 
 ## 1. 前提
 
-- Azure OpenAI `felisaichatbot-openai-dev`（RG `rg-felisaichatbot-dev`）に deployment
+- Azure OpenAI `felisaichatbot-openai-dev-02`（RG `rg-felisaichatbot-dev`。移行後の名前 = ADR-0030）に deployment
   `chat` / `embedding` が存在する（管理外リソース台帳
   [azure-resource-inventory.md](./azure-resource-inventory.md) §B-1）
 - `.env`（gitignore 済み。コミット禁止）に `AZURE_OPENAI_*` の実値がある

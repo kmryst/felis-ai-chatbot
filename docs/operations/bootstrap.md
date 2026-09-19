@@ -150,7 +150,8 @@ tfstate Storage はどのリージョンでもよく、アプリとの latency �
 
 **Azure OpenAI 採用で確定。** リージョンは上表 1 行目（`japaneast` で取れた）に該当し、アプリ + PostgreSQL / LLM / tfstate Storage すべて `japaneast`（ステップ12以降のリージョン表記も `japaneast` のままで確定）。
 
-- リソース: `felisaichatbot-openai-dev`（リソースグループ `rg-felisaichatbot-dev` / japaneast）
+- リソース: `felisaichatbot-openai-dev`（リソースグループ `rg-felisaichatbot-dev` / japaneast）。
+  2026-09-18 の移行後は `felisaichatbot-openai-dev-02`（[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）
 - デプロイ `chat`: gpt-4.1-mini 2025-04-14 / GlobalStandard / capacity 10
 - デプロイ `embedding`: text-embedding-3-small v1 / Standard / capacity 10
 - chat / embedding とも疎通実測済み（api-version `2024-10-21`。embedding は 1536 次元を実測）
@@ -168,6 +169,12 @@ ACR / Key Vault / PostgreSQL Flexible Server / Storage Account は DNS 名にな
 | Key Vault | `kv-felisaichatbot-dev` | 21/24 文字 |
 | PostgreSQL Flexible Server | `pgsql-felisaichatbot-dev` | 小文字英数字とハイフン |
 | tfstate Storage Account | `felisaichatbottfstate` | 21/24 文字・小文字英数字のみ |
+
+> 上表は Day 0 時点の予定名（履歴として残す）。2026-09-18 に新しいサブスクリプションへ移行した際、
+> グローバル一意名の 4 件（ACR / PostgreSQL Flexible Server / tfstate Storage Account / Azure OpenAI）は
+> 末尾 `02` の新名（`felisaichatbotacrdev02` / `pgsql-felisaichatbot-dev-02` / `felisaichatbottfstate02` /
+> `felisaichatbot-openai-dev-02`）に変更した。現在の正本は
+> [ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)。Key Vault は未作成のまま。
 
 ```bash
 # ACR（専用コマンドあり）

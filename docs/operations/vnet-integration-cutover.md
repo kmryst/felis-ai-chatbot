@@ -15,7 +15,7 @@
 az resource list -g rg-felisaichatbot-dev-tf -o table
 
 # 捨ててよい状態の確認: テーブル 0 件・バックアップ履歴（earliestRestoreDate）を記録
-az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev \
+az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-02 \
   --query "{state: state, earliestRestoreDate: backup.earliestRestoreDate}" -o json
 ```
 
@@ -81,9 +81,9 @@ scripts/deploy/check-image-drift.sh
 # 3) serving / ops / frontend の 3 イメージ参照（DEPLOY_SHA 未設定なら :? で即失敗する。
 #    初回で §2 の push がまだなら、この 3 行を飛ばして §2 へ進む。
 #    3 本は単一の DEPLOY_SHA を共有する = ADR-0027 決定 7）
-export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-${DEPLOY_SHA:?DEPLOY_SHA が .env に無い（§2 の push 後に書き戻す）}"
-export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
-export TF_VAR_frontend_container_image="felisaichatbotacrdev.azurecr.io/frontend:sha-${DEPLOY_SHA:?}"
+export TF_VAR_container_image="felisaichatbotacrdev02.azurecr.io/backend:sha-${DEPLOY_SHA:?DEPLOY_SHA が .env に無い（§2 の push 後に書き戻す）}"
+export TF_VAR_ops_container_image="felisaichatbotacrdev02.azurecr.io/backend-ops:sha-${DEPLOY_SHA:?}"
+export TF_VAR_frontend_container_image="felisaichatbotacrdev02.azurecr.io/frontend:sha-${DEPLOY_SHA:?}"
 
 # 4) 設定の有無だけ確認する（値は表示しない）
 env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
@@ -166,8 +166,8 @@ terraform -chdir=terraform/persistent output server_fqdn
 # 第 1 段: ACR だけ先に作る（-target でも container_image は必須変数のため、
 # TF_VAR_container_image が無いと入力プロンプトで停止する。初回で §0-2 の 3) を飛ばした
 # 場合は、実在しない暫定値で export してよい — この段は ACR しか作らず、イメージは参照されない）
-# export TF_VAR_container_image="felisaichatbotacrdev.azurecr.io/backend:sha-bootstrap"   # 初回のみ
-# export TF_VAR_ops_container_image="felisaichatbotacrdev.azurecr.io/backend-ops:sha-bootstrap"
+# export TF_VAR_container_image="felisaichatbotacrdev02.azurecr.io/backend:sha-bootstrap"   # 初回のみ
+# export TF_VAR_ops_container_image="felisaichatbotacrdev02.azurecr.io/backend-ops:sha-bootstrap"
 terraform -chdir=terraform/ephemeral apply -target=azurerm_container_registry.main
 
 # イメージ投入（serving と ops の 2 本）。push するタグはここで確定する。
@@ -175,13 +175,13 @@ terraform -chdir=terraform/ephemeral apply -target=azurerm_container_registry.ma
 # 同定しない）ため、先に作業ツリーが clean であることを確認する
 git status --short          # 出力が空（clean）であることを確認してから進む
 NEW_SHA=$(git rev-parse --short HEAD)
-az acr login --name felisaichatbotacrdev
-docker build -t felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA backend/
-docker build --target ops -t felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA backend/
-docker build -t felisaichatbotacrdev.azurecr.io/frontend:sha-$NEW_SHA frontend/
-docker push felisaichatbotacrdev.azurecr.io/backend:sha-$NEW_SHA
-docker push felisaichatbotacrdev.azurecr.io/backend-ops:sha-$NEW_SHA
-docker push felisaichatbotacrdev.azurecr.io/frontend:sha-$NEW_SHA
+az acr login --name felisaichatbotacrdev02
+docker build -t felisaichatbotacrdev02.azurecr.io/backend:sha-$NEW_SHA backend/
+docker build --target ops -t felisaichatbotacrdev02.azurecr.io/backend-ops:sha-$NEW_SHA backend/
+docker build -t felisaichatbotacrdev02.azurecr.io/frontend:sha-$NEW_SHA frontend/
+docker push felisaichatbotacrdev02.azurecr.io/backend:sha-$NEW_SHA
+docker push felisaichatbotacrdev02.azurecr.io/backend-ops:sha-$NEW_SHA
+docker push felisaichatbotacrdev02.azurecr.io/frontend:sha-$NEW_SHA
 
 # 前提（#110 / Issue #114 の 5）: 観測採取（obs collect Job）は ops イメージ内の
 # /app/observability/collect.sql を実行する。この COPY は PR #110 以降の Dockerfile にしか
@@ -464,7 +464,7 @@ terraform -chdir=terraform/ephemeral plan -detailed-exitcode; echo "exit=$?"   #
 ```bash
 # 終業時は destroy せず、状態確認とコスト見張り（計画書 §8）のみ行う
 az resource list -g rg-felisaichatbot-dev-tf -o table
-az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev --query state -o tsv
+az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-02 --query state -o tsv
 ```
 
 - 残すことによる追加コストは ACR 0.1666 USD/日 + custom VNet の CAE managed resources を含めて
@@ -564,10 +564,16 @@ frontend 作成〜`authConfigs` 適用の間には匿名到達可能な窓が構
 # §0-2 の 3) を再実行して TF_VAR_frontend_container_image を戻してから
 terraform -chdir=terraform/ephemeral apply
 
-# 確認 1: 匿名 POST /api/chat が拒否されること（Easy Auth により 302 リダイレクト。200 でないこと）
+# 確認 0: apply 直後 1〜2 分は環境 proxy が 503（delayed connect error）を返す（Easy Auth sidecar 入り
+#         replica の起動待ち）。`az containerapp replica list` で front / http-auth の両コンテナが ready に
+#         なってから以下を実測する（2026-09-01 / 2026-09-19 実測）
+# 確認 1: 匿名 POST /api/chat が拒否されること（Accept が HTML でない API 呼び出しには Easy Auth が 401 を返す。
+#         302 リダイレクトはブラウザ相当の GET（Accept: text/html + Mozilla UA）のみ。いずれも 200 でないこと）
 front_fqdn=$(terraform -chdir=terraform/ephemeral output -raw frontend_app_fqdn)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${front_fqdn}/api/chat" \
-  -H "content-type: application/json" -d '{"message":"ping"}'   # → 302（Location は login.microsoftonline.com）
+  -H "content-type: application/json" -d '{"message":"ping"}'   # → 401
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -A "Mozilla/5.0" -H "accept: text/html" \
+  "https://${front_fqdn}/"   # → 302（Location は login.microsoftonline.com/<tenant>/oauth2/v2.0/authorize）
 
 # 確認 2: /readyz（除外パス）は未認証で 200 を返すこと（この時点では backend external FQDN への proxy）
 curl -s -o /dev/null -w '%{http_code}\n' "https://${front_fqdn}/readyz"   # → 200
@@ -658,7 +664,10 @@ gh run list -w readyz-probe.yml -L 3
   いるのに、apply 中に internal FQDN へ変わるため。2026-09-01 実走で発生 =
   [実測記録 §6](../verification/frontend-easy-auth-cutover/observations.md)）。backend の
   internal 化自体は成功しているので、**同じ変数のまま再 apply すれば 1 件の in-place 更新で
-  収束する**（`plan -detailed-exitcode` の exit 0 まで確認する）
+  収束する**（`plan -detailed-exitcode` の exit 0 まで確認する）。
+  Claude Code の `!` 経由で apply を実行している場合は対話の `yes` を入力できないため、再 apply の前に
+  `terraform plan` で差分が `front[0]` の `BACKEND_ORIGIN` 1 件（destroy 0）であることを確認したうえで
+  `terraform -chdir=terraform/ephemeral apply -auto-approve` とする（2026-09-19 実測）
 - revision 切替中（実測 20.31〜35.02 秒 =
   [observations.md](../verification/easy-auth-container-app/observations.md) §4）は frontend が
   旧 FQDN を参照し 502/503 になり得る。probe 間隔（5 分）より短いため通常は SLI に現れないが、
@@ -714,7 +723,7 @@ done
 az postgres flexible-server restore \
   -g rg-felisaichatbot-dev-tf \
   --name pgsql-felisaichatbot-dev-restored \
-  --source-server pgsql-felisaichatbot-dev \
+  --source-server pgsql-felisaichatbot-dev-02 \
   --restore-time "<復元指定時刻 (ISO8601 UTC)>" \
   --no-wait \
   --vnet vnet-felisaichatbot-dev \
