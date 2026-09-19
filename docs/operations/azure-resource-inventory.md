@@ -24,7 +24,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 
 | リソース | 管理区分 | 日々の運用 | プロジェクト終了時 | 残した場合の課金 |
 | --- | --- | --- | --- | --- |
-| RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9） | 管理外 | 触らない | 残す | $0 |
+| RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9。**#6 / #7 は移行先では未作成** = ADR-0030 決定 4） | 管理外 | 触らない | 残す | $0 |
 | Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
 | tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
@@ -32,6 +32,9 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / **frontend Container App `ca-felisaichatbot-dev-front`（Easy Auth 付き公開面。Issue #194 / ADR-0027）** / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **2026-08-27 分から `microsoft.app` のメーターが `usageDetails` に現れるようになり、リソース単位の按分ができる**（2026-08-30 取得。**8/26 以前は 1 件も無い**という当時の実測 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md) は誤りではなく、前提のほうが変わった）。8 月合計 **1.145 USD**（`Standard vCPU Active` 0.692 / `Standard vCPU Idle` 0.089 / `Standard Memory Idle` 0.185 / `Standard Memory Active` 0.180）。リソース別の累計は `ca-felisaichatbot-dev` 0.455 / `ca-felisaichatbot-dev-ops` 0.279 / `caj-felisaichatbot-dev-obs` 0.412。**8/27 に出始めた理由は未検証**（`- Free` 対のメーターが 1 件も無く、無料付与枠の消費過程を `usageDetails` から観測できない。月次付与枠の使い切りは**推測**であって確認していない）。**平常運転の日額は確定していない**: 8/28 は HA ドリル日かつ測定用 Monitor の停止忘れ（約 14h）で汚染、8/29 はその残り（推定 ~0.5h・終了時刻未確認）を含む。追跡は Issue #115（同 Issue のコールドスタートコスト実測は、外形監視 probe が設計頻度で動いていないため未達） |
 | Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
+
+上表のほかに、VNet の作成に伴い Azure が自動作成する `NetworkWatcher_japaneast`（RG `NetworkWatcherRG`）が
+サブスクリプションに存在する（2026-09-19 読み取り実測）。Terraform 管理外で本台帳の管理対象にも含めない（触らない）。
 
 ### 「管理外＝残す、Terraform 管理下＝消す」の一致は偶然ではない
 
@@ -52,7 +55,12 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
   Terraform の自動登録に任せると「ローカルでは通るが CI では落ちる」構成になる（Issue #82 で踏む）
 - 登録手順と確認コマンドは [vnet-integration-cutover.md](./vnet-integration-cutover.md) §0-1
 
-| Namespace | 状態（2026-08-22 読み取り実測） | 経緯 / 必要とする理由 |
+移行先のサブスクリプション（2026-09-18〜。[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）では、
+apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み取り実測で **11 件すべて Registered** を確認した
+（[subscription-migration/observations.md](../verification/subscription-migration/observations.md) §1）。
+「経緯」列は移行元で登録した時点の記録。
+
+| Namespace | 状態（移行先 2026-09-19 読み取り実測） | 経緯 / 必要とする理由 |
 | --- | --- | --- |
 | `Microsoft.DBforPostgreSQL` | Registered | bootstrap 時点で登録済み（observations.md）。PostgreSQL Flexible Server |
 | `Microsoft.Storage` | Registered | bootstrap（tfstate Storage Account）時点で登録済み |
@@ -62,6 +70,9 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 | `Microsoft.OperationalInsights` | Registered | Day 3（2026-08-21）に 409 を踏んで手動登録。Log Analytics |
 | `Microsoft.Network` | Registered | VNet 統合カットオーバー（ADR-0018）の前提として §0-1 の手順で手動登録。ステップ A/B の apply 前に Registered であることを読み取り実測（2026-08-22 12:02Z）。VNet / サブネット / private DNS zone |
 | `Microsoft.ContainerService` | Registered | 同上（2026-08-22 12:02Z 読み取り実測で Registered）。CAE の custom VNet 構成の前提（出典: <https://learn.microsoft.com/en-us/azure/container-apps/vnet-custom> に "Register the `Microsoft.ContainerService` provider" と明記） |
+| `Microsoft.CognitiveServices` | Registered | Azure OpenAI（§B #1）。移行先では手動作成の前に登録 |
+| `Microsoft.Insights` | Registered | Action Group / メトリクスアラート（§B #10 / #11。persistent 層が作る）。移行先で NotRegistered だったため登録 |
+| `Microsoft.AlertsManagement` | Registered | メトリクスアラートに付随。移行先で登録 |
 
 ## 12か月無料枠（PostgreSQL Flexible Server）
 
@@ -130,6 +141,10 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
   - **公式は一貫して "12 months" と書いており、この 1 か月の差を説明する一次情報は見つかっていない = 未解明**。実測値のほうを運用の目安に使い、**どちらが正しいかは断定しない**（本節の判断期限 2026-09-18 は $200 クレジットの失効日であって無料枠の話ではないため、この差は当面の判断に影響しない）
 
 ## 課金アカウントとサブスクリプションの構造（2026-08-30 実測）
+
+> 本節の実測値は**移行元**のサブスクリプションのもの。2026-09-18 に新しいサブスクリプションへ移行した
+> （[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）後は再実測していない。
+> 移行先で確認する場合は同じ `az rest` の読み取りを行い、本節を更新する。
 
 `az rest --method get` で課金スコープとサブスクリプションを読み取った結果（2026-08-30 取得）。
 **課金アカウントの契約タイプとサブスクリプションのオファーは別の階層であり、混同すると
@@ -258,8 +273,10 @@ plan 差分にも出ないため、本台帳の「管理外リソースの読み
 #    Azure Monitor の 6 件（§B #10 / #11）は 2026-08-27 に Terraform 管理下（persistent 層）へ
 #    移行済み（Issue #151 / ADR-0022）のため、手動削除は不要。persistent 層の destroy が
 #    依存関係の逆順（アラート → Action Group → サーバー）で消す
+#    移行先（ADR-0030）ではこのロックを作っていない（`az lock list -g rg-felisaichatbot-dev-tf` が空）。
+#    存在しなければこの手順は飛ばす
 az lock delete --name lock-pgsql-source-cannotdelete \
-  --resource pgsql-felisaichatbot-dev \
+  --resource pgsql-felisaichatbot-dev-02 \
   --resource-group rg-felisaichatbot-dev-tf \
   --resource-type Microsoft.DBforPostgreSQL/flexibleServers
 
@@ -298,13 +315,13 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 | # | リソース | 種類 | 場所 | 管理外の理由区分 |
 | --- | --- | --- | --- | --- |
-| 1 | `felisaichatbot-openai-dev` + デプロイ `chat` / `embedding` | Azure OpenAI（kind=OpenAI, sku=S0） | RG `rg-felisaichatbot-dev` / japaneast | 据え置き判断（ADR-0014） |
+| 1 | `felisaichatbot-openai-dev-02` + デプロイ `chat` / `embedding` | Azure OpenAI（kind=OpenAI, sku=S0） | RG `rg-felisaichatbot-dev` / japaneast | 据え置き判断（ADR-0014） |
 | 2 | `rg-felisaichatbot-dev` | Resource group | japaneast | 据え置き判断（管理外の Azure OpenAI が同居） |
 | 3 | `rg-felisaichatbot-dev-tf` | Resource group | japaneast | 権限の器（SP の Contributor スコープそのもの） |
 | 4 | `rg-felisaichatbot-tfstate` | Resource group | japaneast | 鶏と卵（tfstate の置き場） |
-| 5 | `felisaichatbottfstate` + container `tfstate` | Storage Account（tfstate backend） | RG `rg-felisaichatbot-tfstate` / japaneast | 鶏と卵（tfstate の置き場） |
-| 6 | `felis-ai-chatbot-github-actions` + federated credential 1 本 | Entra ID アプリ登録 + service principal | Entra ID（リージョン概念なし） | 鶏と卵（Terraform 実行主体の認証基盤） |
-| 7 | ロール割当 2 件（Contributor / Storage Blob Data Contributor） | Role assignment | #3 / #5 のスコープ | destroy すると CI の権限が壊れる |
+| 5 | `felisaichatbottfstate02` + container `tfstate` | Storage Account（tfstate backend） | RG `rg-felisaichatbot-tfstate` / japaneast | 鶏と卵（tfstate の置き場） |
+| 6 | `felis-ai-chatbot-github-actions` + federated credential 1 本（**移行先では未作成**。ADR-0030 決定 4） | Entra ID アプリ登録 + service principal | Entra ID（リージョン概念なし） | 鶏と卵（Terraform 実行主体の認証基盤） |
+| 7 | ロール割当 2 件（Contributor / Storage Blob Data Contributor。**移行先では未作成**。#6 と同時に作る） | Role assignment | #3 / #5 のスコープ | destroy すると CI の権限が壊れる |
 | 8 | `id-felisaichatbot-dev` | User-assigned managed identity | RG `rg-felisaichatbot-dev-tf` / japaneast | 据え置き判断（ADR-0015。寿命の分離 + 職務分掌） |
 | 9 | AcrPull ロール割当（#8 → RG `rg-felisaichatbot-dev-tf`） | Role assignment | #3 のスコープ | SP がロール割当を作れない（ADR-0012）+ destroy すると pull が壊れる |
 | 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
@@ -319,12 +336,15 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 ---
 
-## 1. Azure OpenAI `felisaichatbot-openai-dev` + デプロイ `chat` / `embedding`
+## 1. Azure OpenAI `felisaichatbot-openai-dev-02` + デプロイ `chat` / `embedding`
+
+移行先では `02` サフィックスの新名で 2026-09-18 に作成した（[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md) 決定 1。移行元の `felisaichatbot-openai-dev` は移行元に残る）。
+下表は 2026-09-19 の読み取り実測と一致。
 
 | 項目 | あるべき値 |
 | --- | --- |
-| 名前 / 種類 | `felisaichatbot-openai-dev` / Microsoft.CognitiveServices/accounts（kind `OpenAI`, sku `S0`） |
-| custom subdomain | `felisaichatbot-openai-dev`（アカウント名と同名） |
+| 名前 / 種類 | `felisaichatbot-openai-dev-02` / Microsoft.CognitiveServices/accounts（kind `OpenAI`, sku `S0`） |
+| custom subdomain | `felisaichatbot-openai-dev-02`（アカウント名と同名。endpoint は `https://felisaichatbot-openai-dev-02.openai.azure.com/`） |
 | 場所 | RG `rg-felisaichatbot-dev` / japaneast |
 | デプロイ `chat` | gpt-4.1-mini `2025-04-14` / GlobalStandard / capacity 10 |
 | デプロイ `embedding` | text-embedding-3-small `1` / Standard / capacity 10 |
@@ -334,19 +354,19 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 - **確認コマンド**:
 
   ```bash
-  az cognitiveservices account show -n felisaichatbot-openai-dev -g rg-felisaichatbot-dev \
+  az cognitiveservices account show -n felisaichatbot-openai-dev-02 -g rg-felisaichatbot-dev \
     --query '{name:name, kind:kind, sku:sku.name, location:location, customDomain:properties.customSubDomainName, state:properties.provisioningState}' -o json
-  az cognitiveservices account deployment list -n felisaichatbot-openai-dev -g rg-felisaichatbot-dev \
+  az cognitiveservices account deployment list -n felisaichatbot-openai-dev-02 -g rg-felisaichatbot-dev \
     --query "[].{name:name, model:properties.model.name, version:properties.model.version, sku:sku.name, capacity:sku.capacity}" -o table
   ```
 
 - **固有のリスク・注意**:
   - **削除すると同名リソースは 48 時間作れない**（論理削除による名前予約）。「Once you delete a resource, you can't create another one with the same name for 48 hours. To create a resource with the same name, you need to purge the deleted resource.」48 時間以内・未 purge なら recover 可能。purge にはサブスクリプションの Contributor 以上が必要（実行者は Owner なので実行可能）。出典: <https://learn.microsoft.com/en-us/azure/ai-services/recover-purge-resources>
   - **デプロイを残したままアカウントを削除すると、クォータ割当は purge されるまで最大 48 時間解放されない**。出典（Resource deletion 節）: <https://learn.microsoft.com/en-us/azure/foundry-classic/openai/how-to/quota>
-  - **このサブスクリプションで Azure OpenAI アカウントは 1 つしか作れない**: `OpenAI.S0.AccountCount` = limit 1 / current 1（2026-08-20 実測）。検証用の複製アカウントは作れない。**未確定**: 論理削除中のアカウントがこの AccountCount を消費し続けるかは公式に明文がない。TPM クォータが purge まで 48 時間拘束される明記があるため、**同様に拘束されると想定して運用する**（＝削除したら即 purge しない限り 48 時間は再作成不能と見なす）
+  - **このサブスクリプションで Azure OpenAI アカウントは 1 つしか作れない**: `OpenAI.S0.AccountCount` = limit 1 / current 1（移行元 2026-08-20 実測。移行先も limit 1 = 2026-09-18 読み取り）。検証用の複製アカウントは作れない。**未確定**: 論理削除中のアカウントがこの AccountCount を消費し続けるかは公式に明文がない。TPM クォータが purge まで 48 時間拘束される明記があるため、**同様に拘束されると想定して運用する**（＝削除したら即 purge しない限り 48 時間は再作成不能と見なす）
   - **モデルデプロイのクォータ（TPM）はリソースではなくサブスクリプションに帰属する**: 「Quota is assigned to your subscription on a per-region, per-model, per-deployment-type basis in units of Tokens-per-Minute (TPM)」（出典: <https://learn.microsoft.com/en-us/azure/foundry-classic/openai/how-to/quota>）。本サブスクリプションの quota tier は Free Tier で（quotaTiers API 実測）、実測クォータ（gpt-4.1-mini GlobalStandard 200 / gpt-5-mini 500 / text-embedding-3-small GlobalStandard 1000）は公式 Tier 0 表と一致する。**リソースを消してもクォータ自体は失われない**。出典: <https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits>
   - **モデルには寿命がある**: japaneast の gpt-4.1-mini `2025-04-14` は lifecycleStatus **Legacy** で推論の廃止は **2027-04-14**、text-embedding-3-small `1` は GA で廃止は **2028-02-09**。Deprecated 段階でも「そのモデルをデプロイしたことのあるサブスクリプション」は新規デプロイ可。出典: <https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements>
-  - Day 2 で結線済みの RAG（chat / embedding）がこのエンドポイント名に依存する。アカウント名は改名不可（[ADR-0013](../adr/0013-azure-resource-naming-convention.md) の例外記録）
+  - Day 2 で結線済みの RAG（chat / embedding）がこのエンドポイント名に依存する。アカウント名は改名不可（[ADR-0013](../adr/0013-azure-resource-naming-convention.md) の例外記録。移行時の `02` 命名は [ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）
   - API キーは本台帳・リポジトリには書かない（`.env` のみ。コミット禁止）
 
 ## 2. Resource group `rg-felisaichatbot-dev`
@@ -357,7 +377,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
   ```bash
   az group show -n rg-felisaichatbot-dev --query '{name:name, location:location, state:properties.provisioningState}' -o json
-  az resource list -g rg-felisaichatbot-dev --query "[].{name:name, type:type}" -o table   # felisaichatbot-openai-dev の 1 件のみのはず
+  az resource list -g rg-felisaichatbot-dev --query "[].{name:name, type:type}" -o table   # felisaichatbot-openai-dev-02 の 1 件のみのはず
   ```
 
 - **固有のリスク・注意**: `az group delete` は中の Azure OpenAI ごと消す（#1 の 48 時間予約・AccountCount リスクがそのまま発動する）。全消し手順（[day3-5-execution-plan.md §8](./day3-5-execution-plan.md#8-コスト見張り)）で「面談デモ用に残すなら保留する行」と明記されているのはこのため
@@ -387,11 +407,14 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 - **固有のリスク・注意**: 消すと tfstate（#5）ごと消える。apply 後にこれをやると、全 Terraform 管理リソースが「実物はあるのに state がない」孤児になる
 
-## 5. Storage Account `felisaichatbottfstate` + container `tfstate`
+## 5. Storage Account `felisaichatbottfstate02` + container `tfstate`
+
+移行先では `02` サフィックスの新名で 2026-09-18 に作成した（[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md) 決定 1）。
+移行元の `felisaichatbottfstate` とその中の state は移行元に残す（同 決定 2）。下表は 2026-09-19 の読み取り実測と一致。
 
 | 項目 | あるべき値 |
 | --- | --- |
-| 名前 / 種類 | `felisaichatbottfstate` / Microsoft.Storage/storageAccounts（Standard_LRS） |
+| 名前 / 種類 | `felisaichatbottfstate02` / Microsoft.Storage/storageAccounts（Standard_LRS） |
 | 場所 | RG `rg-felisaichatbot-tfstate` / japaneast |
 | 設定 | `minimumTlsVersion: TLS1_2` / `allowBlobPublicAccess: false` / blob versioning 有効 |
 | container | `tfstate`（key `persistent/terraform.tfstate` 等で層を区別） |
@@ -401,16 +424,21 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 - **確認コマンド**:
 
   ```bash
-  az storage account show -n felisaichatbottfstate -g rg-felisaichatbot-tfstate \
+  az storage account show -n felisaichatbottfstate02 -g rg-felisaichatbot-tfstate \
     --query '{name:name, sku:sku.name, minTls:minimumTlsVersion, publicBlobAccess:allowBlobPublicAccess}' -o json
-  az storage account blob-service-properties show --account-name felisaichatbottfstate \
+  az storage account blob-service-properties show --account-name felisaichatbottfstate02 \
     --resource-group rg-felisaichatbot-tfstate --query isVersioningEnabled   # true のはず
-  az storage container list --account-name felisaichatbottfstate --auth-mode login --query "[].name" -o tsv   # tfstate のはず
+  az storage container list --account-name felisaichatbottfstate02 --auth-mode login --query "[].name" -o tsv   # tfstate のはず
   ```
 
-- **固有のリスク・注意**: apply 後の tfstate には sensitive 値（PostgreSQL 管理者パスワード等）が平文で入る（出典: <https://developer.hashicorp.com/terraform/language/manage-sensitive-data>）。アクセスできる主体は実行者本人と CI 用 service principal（#7）に限定してある。state の誤削除・破損への備えは blob versioning（S3 の versioning 相当）。接続文字列・アクセスキーは使わない（`use_azuread_auth = true`）し、本台帳にも書かない
+- **固有のリスク・注意**: apply 後の tfstate には sensitive 値（PostgreSQL 管理者パスワード等）が平文で入る（出典: <https://developer.hashicorp.com/terraform/language/manage-sensitive-data>）。アクセスできる主体は実行者本人に限定してある（CI 用 service principal（#7）は移行先では未作成。作成時に `Storage Blob Data Contributor` を付与する）。state の誤削除・破損への備えは blob versioning（S3 の versioning 相当）。接続文字列・アクセスキーは使わない（`use_azuread_auth = true`）し、本台帳にも書かない
 
 ## 6. Entra ID アプリ登録 `felis-ai-chatbot-github-actions` + federated credential
+
+> **移行先では未作成**（2026-09-19 読み取り実測: `az ad app list --display-name felis-ai-chatbot-github-actions` → 0 件）。
+> Azure 資格情報を使う workflow が存在しないため作らない（[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md) 決定 4）。
+> deploy workflow（Issue #82）に着手する時点で [bootstrap.md §11](./bootstrap.md#11-entra-id-アプリ登録--federated-credential--ロール割当1h) を移行先で実施し、
+> 下表の appId / SP object id を新しい値に更新する。下表は移行元で作成した時点の記録。
 
 | 項目 | あるべき値 |
 | --- | --- |
@@ -433,10 +461,13 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 ## 7. ロール割当 2 件（CI 用 service principal 向け）
 
+> **移行先では未作成**（#6 と同時に作る。ADR-0030 決定 4）。移行先の Storage Account（#5）に現在ある割当は実行者本人への
+> `Storage Blob Data Contributor` 1 件のみ（2026-09-19 読み取り実測）。
+
 | ロール | スコープ |
 | --- | --- |
 | `Contributor` | `rg-felisaichatbot-dev-tf`（#3） |
-| `Storage Blob Data Contributor` | Storage Account `felisaichatbottfstate`（#5） |
+| `Storage Blob Data Contributor` | Storage Account `felisaichatbottfstate02`（#5） |
 
 - **なぜ管理外か**: 権限が壊れる。CI の Terraform がこの 2 件を前提に動くため、Terraform 管理にすると destroy が「state を読む権限」「リソースを作る権限」を自分で消す。また管理するには service principal に `Role Based Access Control Administrator` 相当が必要になり、[ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) で却下した権限昇格経路を開くことになる
 - **作り直す手順**: [bootstrap.md §11-3](./bootstrap.md#11-3-ロール割当least-privilege) の `az role assignment create` ×2
@@ -455,9 +486,9 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | --- | --- |
 | 名前 / 種類 | `id-felisaichatbot-dev` / Microsoft.ManagedIdentity/userAssignedIdentities |
 | 場所 | RG `rg-felisaichatbot-dev-tf` / japaneast |
-| 用途 | Container App `ca-felisaichatbot-dev` が ACR `felisaichatbotacrdev` から pull する際の認証主体（#9 の AcrPull を保持） |
-| `principalId` | `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`（2026-08-21 作成時に実測。識別子であり秘密ではない） |
-| `clientId` | `6d8d587a-4dcd-4cec-8121-1928ad2a440d`（同上） |
+| 用途 | Container App `ca-felisaichatbot-dev` が ACR `felisaichatbotacrdev02` から pull する際の認証主体（#9 の AcrPull を保持） |
+| `principalId` | `c9a61822-fbf5-4841-b456-d0b15e2011be`（移行先で 2026-09-18 に作成。2026-09-19 読み取り実測。識別子であり秘密ではない。移行元の値は `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`） |
+| `clientId` | `cc40b716-64bd-45e0-a917-08a1c284d721`（同上。移行元の値は `6d8d587a-4dcd-4cec-8121-1928ad2a440d`） |
 
 - **なぜ管理外か**: 据え置き判断（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6-(b)）。理由は 2 つ。(1) **寿命の分離**: ACR / Container Apps は毎日 destroy / apply される ephemeral 層だが、この ID と #9 の権限は 1 回作れば据え置く。寿命の違うものを同じ層に置くと毎朝の権限再払い出しが発生する。(2) **職務分掌**: アイデンティティと権限の払い出しは人が承認を経て行い、CI の自動実行主体（SP）には権限を配る力を持たせない（ADR-0012 と一貫）。なお Terraform 管理にしても、対になる #9 のロール割当は SP の権限では作れないため片手落ちになる
 - **置き場が `rg-felisaichatbot-dev-tf` である理由**: CI 用 SP はこの RG への Contributor しか持たない（ADR-0012）。Terraform（ephemeral 層）が `data "azurerm_user_assigned_identity"` で ID を読み、Container App へ紐付ける（`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` が必要）には、ID が SP の権限スコープ内にあることが必須。別 RG に置くと CI の plan / apply が失敗する（ADR-0015 選択肢 6 の「付随する 2 つの設計値」）
@@ -488,13 +519,14 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 項目 | あるべき値 |
 | --- | --- |
 | ロール | `AcrPull`（actions は `Microsoft.ContainerRegistry/registries/pull/read` の 1 件のみ。`az role definition list --name AcrPull` 実測 2026-08-21） |
-| assignee | #8 の `principalId` = `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`（principal type: ServicePrincipal） |
+| assignee | #8 の `principalId` = `c9a61822-fbf5-4841-b456-d0b15e2011be`（principal type: ServicePrincipal） |
 | スコープ | RG `rg-felisaichatbot-dev-tf`（#3。**ACR 個体ではない**） |
 
-2026-08-21 作成。作成直後に確認コマンドを実測し、**この ID への割当が AcrPull（RG スコープ）の 1 件のみ**であることを確認済み。
+移行元では 2026-08-21 作成。移行先では 2026-09-18 に **ACR 作成前**に付与した（スコープが RG のため可能）。
+作成直後と 2026-09-19 に確認コマンドを実測し、**この ID への割当が AcrPull（RG スコープ）の 1 件のみ**であることを確認済み。
 
 - **なぜ管理外か**: CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（[ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) で RBAC Administrator を意図的に不付与）。Terraform に書くと CI からの apply が必ず権限エラーで失敗する。SP に権限を足す案（ADR-0015 選択肢 6-(c)）は権限昇格経路の新設として却下した。#7 と同じ「権限が壊れる」区分でもある: この割当が消えると Container App のイメージ pull が全部止まる
-- **スコープが RG である理由**: ACR `felisaichatbotacrdev` は ephemeral 層で destroy / 再作成を繰り返す（当初は毎日、現在は最終 teardown まで常時稼働 = ADR-0020。いずれにせよマネージド ID より寿命が短い）。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
+- **スコープが RG である理由**: ACR `felisaichatbotacrdev02` は ephemeral 層で destroy / 再作成を繰り返す（当初は毎日、現在は最終 teardown まで常時稼働 = ADR-0020。いずれにせよマネージド ID より寿命が短い）。ACR 個体スコープの割当はリソース削除と同時に消え、毎朝の手動再作成が必要になる。**RG スコープなら ACR を作り直しても割当が生き残る**。AcrPull は pull 専用ロールのため、RG に広げても届く先は RG 内の ACR（現状 1 個）からの pull だけ（[ADR-0015](../adr/0015-ephemeral-layer-acr-container-apps-design.md) 選択肢 6）
 - **作り直す手順**（#8 が存在する前提。`--assignee-object-id` + `--assignee-principal-type` は Microsoft Graph への問い合わせと伝搬遅延起因のエラーを避けるため）:
 
   ```bash
@@ -556,7 +588,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 ## 11. メトリクスアラート 5 件（PostgreSQL 向け）
 
-すべて scope は PostgreSQL `pgsql-felisaichatbot-dev`、action は #10、`autoMitigate: true`（条件が解消したら自動でクローズ）。
+すべて scope は PostgreSQL `pgsql-felisaichatbot-dev-02`（移行元では `pgsql-felisaichatbot-dev`）、action は #10、`autoMitigate: true`（条件が解消したら自動でクローズ）。
 
 | 名前 | resource ID（RG `rg-felisaichatbot-dev-tf` / `providers/Microsoft.Insights/metricAlerts/` 配下） | メトリクス | 条件 | 集計 | window / freq | severity |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -774,12 +806,19 @@ Entra オブジェクトの作成権限がなく（ADR-0012 の権限境界）�
 作成・割当・後片付けの手順の正本は
 [entra-easy-auth-setup.md](./entra-easy-auth-setup.md)。
 
-- アプリ登録 `felis-ai-chatbot-dev-easyauth`（app role `Chat.Use` =
-  `allowedMemberTypes: ["User", "Application"]`）+ client secret（`.env` 管理・コミット禁止）
-- enterprise application（service principal）: `appRoleAssignmentRequired = true`。
-  割当は owner / 非管理者テストユーザー（synthetic 用 SP は synthetic transaction SLI の
-  作業単位で追加）
-- 非管理者テストユーザー 2 名（割当あり / 割当なし。`AADSTS50105` の対の証跡用）
+移行先には移行元の Entra ID オブジェクトが存在しないため、2026-09-19 に作り直した（ADR-0030）。
+下表は 2026-09-19 の読み取り実測と一致。
+
+| 項目 | あるべき値 |
+| --- | --- |
+| アプリ登録 | `felis-ai-chatbot-dev-easyauth`。appId `ccc413c3-3867-45df-9013-ce2abf96fde2`（移行元の値は `98267536-618f-49a6-a7e4-79fdf81c22a8`） |
+| app role | `Chat.Use`（`allowedMemberTypes: ["User", "Application"]`） |
+| redirect URI | `https://ca-felisaichatbot-dev-front.<CAE 既定ドメイン>/.auth/login/aad/callback`（CAE 既定ドメインは `az containerapp env show --query properties.defaultDomain` で確認） |
+| client secret | 有効期間 1 年。`terraform/ephemeral/terraform.tfvars`（gitignore 済み）で Terraform に渡す。本台帳・リポジトリには書かない |
+| service principal | object id `67a52164-8215-47e5-aa61-ca7b6bcb7455`（移行元の値は `0544d912-7bd3-467f-b1f1-62ecec24d351`）。`appRoleAssignmentRequired = true` |
+| 管理者同意 | `oauth2PermissionGrants`（`openid profile email User.Read`、AllPrincipals） |
+| 割当 | owner の 1 者（2026-09-19 実測。synthetic 用 SP は synthetic transaction SLI の作業単位で追加） |
+| テストユーザー | **常設しない**。検証時に `felis-test@…`（割当あり）/ `felis-test-unassigned@…`（割当なし。`AADSTS50105` の対の証跡用）を作り、チャット実測の完了後に削除する（entra-easy-auth-setup.md §4） |
 
 確認コマンド（読み取りのみ）:
 
@@ -803,3 +842,4 @@ az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/<sp object id>
 - [day3-5-execution-plan.md](./day3-5-execution-plan.md) §8 — コスト見張り（クレジット残の確認手段の実測）。全消し手順は本書「プロジェクト終了時の後片付け」節へ移した（`az group delete` ×3 は廃止）
 - [ADR-0016](../adr/0016-log-analytics-workspace-in-persistent-layer.md) — Log Analytics を persistent 層に置く判断
 - [ADR-0017](../adr/0017-no-nightly-stop-for-postgresql.md) — PostgreSQL を夜間 stop しない判断（無料枠の判明）
+- [ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md) — 新しいサブスクリプションへの移行と `02` サフィックス命名（#1 / #5 / #8 / #9 / #12 の現在値、#6 / #7 を作らない判断）
