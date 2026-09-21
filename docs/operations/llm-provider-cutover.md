@@ -7,6 +7,13 @@ rollback 手順の正本。Azure OpenAI リソース本体は Terraform 管理�
 
 > 実行前提: apply は CLAUDE.md の禁止事項に従い**ユーザーの明示承認を得てから**実行する。
 > 本書は手順の正本であって実行許可ではない。
+>
+> **2026-09-19 以降の注意（[ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md)）**:
+> Azure OpenAI の認証は managed identity（`AZURE_OPENAI_AUTH_MODE=managed-identity`）に移行し、
+> キー認証は無効化済み（`disableLocalAuth = true`）。本書の `TF_VAR_azure_openai_api_key` /
+> `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_CONFIG_CHECKSUM` に関する記述は履歴であり、変数と secret は
+> 削除された。現行の切替は `llm_provider` と `azure_openai_endpoint` の 2 変数のみで行い、認可は
+> ロール割当（[entra-auth-cutover.md](./entra-auth-cutover.md) §4）が担う。
 
 ## 0. 停止条件（apply 包括許可時も有効）
 

@@ -327,6 +327,8 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 10 | `ag-felisaichatbot-dev-email` | Action Group（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
 | 11 | メトリクスアラート 5 件（`alert-pgsql-storage-free-low` / `alert-pgsql-storage-free-critical` / `alert-pgsql-storage-percent-80` / `alert-pgsql-is-db-alive` / `alert-pgsql-cpu-credits-remaining-low`） | Metric alert（Azure Monitor） | RG `rg-felisaichatbot-dev-tf` / Global（scope は PostgreSQL） | **管理外ではなくなった**: 2026-08-27 に persistent 層へ import（Issue #151 / ADR-0022）。詳細節は設計値の正本として §B に残す |
 | 12 | Easy Auth 用アプリ登録 `felis-ai-chatbot-dev-easyauth` + service principal + テストユーザー 2 名 | Entra ID アプリ登録 / service principal / ユーザー | Entra ID（リージョン概念なし） | SP が Entra オブジェクトを作れない（ADR-0012 の権限境界。ADR-0027） |
+| 13 | `Cognitive Services OpenAI User` ロール割当（#8 → #1）+ #1 の `disableLocalAuth = true` | Role assignment / Azure OpenAI の設定 | #1 のスコープ | #1 が管理外（ADR-0014）のため、その設定と割当も管理外（ADR-0031） |
+| 14 | PostgreSQL 内の DB ロール `id-felisaichatbot-dev`（Entra principal。`felisadmin` を継承） | PostgreSQL ロール（SQL で作成） | `pgsql-felisaichatbot-dev-02` の `postgres` DB | Terraform / ARM の対象外（DB 内オブジェクト。ADR-0031） |
 
 理由区分の意味:
 
@@ -348,6 +350,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 場所 | RG `rg-felisaichatbot-dev` / japaneast |
 | デプロイ `chat` | gpt-4.1-mini `2025-04-14` / GlobalStandard / capacity 10 |
 | デプロイ `embedding` | text-embedding-3-small `1` / Standard / capacity 10 |
+| 認証 | **キー認証は無効**（`properties.disableLocalAuth = true`。2026-09-19 設定。ADR-0031）。呼び出しは managed identity（#8）の Entra トークンのみ。ロール割当は #13 |
 
 - **なぜ管理外か**: 据え置き判断。Day 0 フェーズBの可否判定（[bootstrap.md §2](./bootstrap.md#2-azure-openai-可否判定タイムボックス-2h最優先)）で az CLI により手動作成した（[ADR-0009](../adr/0009-azure-openai-as-llm-provider.md)）。import は技術的に可能だが据え置く。判断の全文は [ADR-0014](../adr/0014-keep-azure-openai-out-of-terraform.md)
 - **作り直す手順**: [bootstrap.md §2](./bootstrap.md#2-azure-openai-可否判定タイムボックス-2h最優先) の判定手順と同じ（`az cognitiveservices account create` → `az cognitiveservices account deployment create` ×2）。設計値（モデル・SKU・capacity）は上表と ADR-0009 が正本。**ただし下記リスクのとおり、同名での作り直しは論理削除の purge が先に必要**
@@ -367,7 +370,9 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
   - **モデルデプロイのクォータ（TPM）はリソースではなくサブスクリプションに帰属する**: 「Quota is assigned to your subscription on a per-region, per-model, per-deployment-type basis in units of Tokens-per-Minute (TPM)」（出典: <https://learn.microsoft.com/en-us/azure/foundry-classic/openai/how-to/quota>）。本サブスクリプションの quota tier は Free Tier で（quotaTiers API 実測）、実測クォータ（gpt-4.1-mini GlobalStandard 200 / gpt-5-mini 500 / text-embedding-3-small GlobalStandard 1000）は公式 Tier 0 表と一致する。**リソースを消してもクォータ自体は失われない**。出典: <https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits>
   - **モデルには寿命がある**: japaneast の gpt-4.1-mini `2025-04-14` は lifecycleStatus **Legacy** で推論の廃止は **2027-04-14**、text-embedding-3-small `1` は GA で廃止は **2028-02-09**。Deprecated 段階でも「そのモデルをデプロイしたことのあるサブスクリプション」は新規デプロイ可。出典: <https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirements>
   - Day 2 で結線済みの RAG（chat / embedding）がこのエンドポイント名に依存する。アカウント名は改名不可（[ADR-0013](../adr/0013-azure-resource-naming-convention.md) の例外記録。移行時の `02` 命名は [ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）
-  - API キーは本台帳・リポジトリには書かない（`.env` のみ。コミット禁止）
+  - API キーは使わない（`disableLocalAuth = true`。旧キーでの呼び出しは `403 AuthenticationTypeDisabled`）。
+    `az cognitiveservices account keys list` で取得できる値は残るが、どこにも書かず、ローカルの環境変数
+    ファイルからも削除済み（ADR-0031）。キー認証を戻すのは `az resource update --ids <id> --set properties.disableLocalAuth=false`
 
 ## 2. Resource group `rg-felisaichatbot-dev`
 
@@ -431,7 +436,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
   az storage container list --account-name felisaichatbottfstate02 --auth-mode login --query "[].name" -o tsv   # tfstate のはず
   ```
 
-- **固有のリスク・注意**: apply 後の tfstate には sensitive 値（PostgreSQL 管理者パスワード等）が平文で入る（出典: <https://developer.hashicorp.com/terraform/language/manage-sensitive-data>）。アクセスできる主体は実行者本人に限定してある（CI 用 service principal（#7）は移行先では未作成。作成時に `Storage Blob Data Contributor` を付与する）。state の誤削除・破損への備えは blob versioning（S3 の versioning 相当）。接続文字列・アクセスキーは使わない（`use_azuread_auth = true`）し、本台帳にも書かない
+- **固有のリスク・注意**: apply 後の tfstate には sensitive 値が平文で入る（2026-09-20 以降は Easy Auth のクライアントシークレットと Terraform 生成の chat API キーのみ。PostgreSQL 管理者パスワードと Azure OpenAI API キーは ADR-0031 で state から消えた）（出典: <https://developer.hashicorp.com/terraform/language/manage-sensitive-data>）。アクセスできる主体は実行者本人に限定してある（CI 用 service principal（#7）は移行先では未作成。作成時に `Storage Blob Data Contributor` を付与する）。state の誤削除・破損への備えは blob versioning（S3 の versioning 相当）。接続文字列・アクセスキーは使わない（`use_azuread_auth = true`）し、本台帳にも書かない
 
 ## 6. Entra ID アプリ登録 `felis-ai-chatbot-github-actions` + federated credential
 
@@ -486,7 +491,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | --- | --- |
 | 名前 / 種類 | `id-felisaichatbot-dev` / Microsoft.ManagedIdentity/userAssignedIdentities |
 | 場所 | RG `rg-felisaichatbot-dev-tf` / japaneast |
-| 用途 | Container App `ca-felisaichatbot-dev` が ACR `felisaichatbotacrdev02` から pull する際の認証主体（#9 の AcrPull を保持） |
+| 用途 | (1) Container App / Job が ACR `felisaichatbotacrdev02` から pull する際の認証主体（#9 の AcrPull）。(2) **PostgreSQL への接続主体**（DB ロール #14。パスワード認証は無効。ADR-0031）。(3) **Azure OpenAI の呼び出し主体**（#13 のロール割当。キー認証は無効）。用途ごとの identity 分割は Issue #280 |
 | `principalId` | `c9a61822-fbf5-4841-b456-d0b15e2011be`（移行先で 2026-09-18 に作成。2026-09-19 読み取り実測。識別子であり秘密ではない。移行元の値は `6cbb5f58-c59c-42fa-ab51-997b57f56c5a`） |
 | `clientId` | `cc40b716-64bd-45e0-a917-08a1c284d721`（同上。移行元の値は `6d8d587a-4dcd-4cec-8121-1928ad2a440d`） |
 
@@ -550,7 +555,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
   ```
 
 - **固有のリスク・注意**:
-  - 確認結果が 1 件より**多い**のは「誰かがこの ID に権限を足した」兆候（この ID の職務は ACR pull だけ）。**少ない（0 件）** なら Container App の pull が壊れる予兆。どちらも即調査する
+  - 確認結果は **2 件**（AcrPull = RG スコープ、Cognitive Services OpenAI User = #1 スコープ。2026-09-19 以降。#13）。これより**多い**のは「誰かがこの ID に権限を足した」兆候。**少ない**なら pull か Azure OpenAI 呼び出しが壊れる予兆。どちらも即調査する
   - #8 を再作成した場合、この割当は旧 principalId 宛てのまま残り**効かない**（assignee が Unknown と表示される）。#8 の手順どおり割当も作り直し、孤児の割当は削除する
 
 ---
@@ -831,8 +836,47 @@ az rest --url "https://graph.microsoft.com/v1.0/servicePrincipals/<sp object id>
 
 ---
 
+## 13. `Cognitive Services OpenAI User` ロール割当（#8 → #1）と #1 のキー認証無効化
+
+2026-09-19 に作成・設定（[ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md)。
+手順は [entra-auth-cutover.md](./entra-auth-cutover.md) §4）。
+
+| 項目 | あるべき値 |
+| --- | --- |
+| ロール | `Cognitive Services OpenAI User`（データプレーンの推論呼び出し。キー参照権限は含まない） |
+| assignee | #8 の `principalId`（principal type: ServicePrincipal） |
+| スコープ | Azure OpenAI アカウント #1（リソース個体。RG ではない） |
+| #1 の `properties.disableLocalAuth` | `true`（旧 API キーは `403 AuthenticationTypeDisabled`。設定から約 1 分で反映 = 実測） |
+
+- **なぜ管理外か**: #1 が Terraform 管理外（ADR-0014）で、その設定と割当も同じ扱い。CI 用 SP はロール割当を作れない（ADR-0012）
+- **作り直す手順**: entra-auth-cutover.md §4 の 2 コマンド（`az role assignment create` → `az resource update`）
+- **確認コマンド**: entra-auth-cutover.md §7
+- **固有のリスク・注意**: ロール割当が消えると backend の `/chat` と embed Job が `401` で落ちる（`/readyz` は影響なし）。
+  `disableLocalAuth` を `false` に戻すとキー認証が復活する（キーは失効していない）
+
+## 14. PostgreSQL の DB ロール `id-felisaichatbot-dev`（Entra principal）
+
+2026-09-19 に Entra 管理者のトークンで SQL 作成（ADR-0031。手順は entra-auth-cutover.md §3）。
+PostgreSQL 側の Entra 管理者（`principal_type = "User"`。所有者のアカウント）と `authentication` ブロックは
+**persistent 層で Terraform 管理**（`azurerm_postgresql_flexible_server_active_directory_administrator.owner`）。
+
+| 項目 | あるべき値 |
+| --- | --- |
+| ロール名 | `id-felisaichatbot-dev`（managed identity の表示名と一致。照合は object ID） |
+| 作成 | `pgaadauth_create_principal('id-felisaichatbot-dev', false, false)`（非管理者・MFA なし） |
+| 権限 | `GRANT felisadmin TO "id-felisaichatbot-dev"`（管理者ロールを継承。最小権限化は #86 / #280） |
+| `authConfig` | `activeDirectoryAuth: Enabled` / `passwordAuth: Disabled`（2026-09-20 以降） |
+
+- **なぜ管理外か**: DB 内のオブジェクトで Terraform / ARM の対象外
+- **確認コマンド**（ops コンテナ内。managed identity で接続）: `PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c "select rolname, principaltype, isadmin from pgaadauth_list_principals(false);"`
+- **固有のリスク・注意**: identity #8 を作り直すと object ID が変わり、このロールでは認証できなくなる（`DROP ROLE` して作り直す）。
+  Entra 管理者（所有者のアカウント）は managed identity と独立に接続でき、復旧経路になる
+
+---
+
 ## 関連
 
+- [ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md) — Entra 認証への切替（#13 / #14 の正本）
 - [ADR-0009](../adr/0009-azure-openai-as-llm-provider.md) — Azure OpenAI 採用と手動作成の経緯
 - [ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — SP 最小権限・RG 分離（#3 / #6 / #7 の設計判断）
 - [ADR-0013](../adr/0013-azure-resource-naming-convention.md) — 命名規則と Azure OpenAI の改名しない例外

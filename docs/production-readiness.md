@@ -50,11 +50,11 @@
 
 | 項目 | 現状 | なぜ現状こうなのか | 本番なら | 追跡先 |
 | --- | --- | --- | --- | --- |
-| DB 認証 | パスワード認証のまま（接続文字列は Container Apps の secret） | ネットワーク方式と違い後から追加できるため、PITR / Maintenance の実測が終わるまで触らない | Microsoft Entra 認証 + マネージド ID（鍵を隠すより無くす） | **Issue #86** |
-| アプリ用 DB ユーザー | 専用の最小権限ロールがなく、管理者ユーザーの DSN を共用 | walking skeleton の最短経路を優先し、ロール設計は主成果物の外に置いた | アプリ専用の最小権限ロールと管理者の分離 | **追跡先なし**（#86 のマネージド ID 化と同時に設計するのが自然） |
-| Azure OpenAI の認証 | API キーのまま。キーは Container Apps の secret として backend serving に注入し（Issue #195。rotation の revision 反映は `AZURE_OPENAI_CONFIG_CHECKSUM` で担保）、実値は `.env` の `TF_VAR_*` のみが持つ（コミット禁止） | Day 0 の可否判定で疎通を最優先し、マネージド ID 化は「Day 3 で検討」のまま未実施 | マネージド ID によるキーレス認証 | [ADR-0009](./adr/0009-azure-openai-as-llm-provider.md)（検討予告のみ。**Issue なし**） / [llm-provider-cutover.md](./operations/llm-provider-cutover.md) |
+| DB 認証 | **解消（2026-09-20）**: managed identity の Microsoft Entra 認証へ移行し、パスワード認証を無効化した（[ADR-0031](./adr/0031-entra-managed-identity-auth-and-remaining-secrets.md)）。DSN にパスワードは無い | — | — | Issue #86 / [entra-auth-cutover.md](./operations/entra-auth-cutover.md) |
+| アプリ用 DB ユーザー | managed identity のロールが `GRANT felisadmin` で管理者権限を継承（従来の「管理者 DSN 共用」と権限の広さは同じ） | Entra 認証への移行（#86）では秘密値の削減を優先し、ロールの分離は identity の用途別分割と同じ作業単位に寄せた（ADR-0031） | アプリ専用の最小権限ロールと migrate 用ロールの分離 | Issue #86 の残課題 / **Issue #280**（identity 分割） |
+| Azure OpenAI の認証 | **解消（2026-09-19）**: managed identity（`Cognitive Services OpenAI User`）の Bearer トークンへ移行し、キー認証を `disableLocalAuth` で無効化した（[ADR-0031](./adr/0031-entra-managed-identity-auth-and-remaining-secrets.md)） | — | — | Issue #86 / [entra-auth-cutover.md](./operations/entra-auth-cutover.md) §4 |
 | Key Vault | 未使用（secret は Container Apps secret + `TF_VAR_*` 環境変数） | Day 3〜5 のスコープに Key Vault を要する要件がなかった | Key Vault への集約とローテーション運用 | [bootstrap.md §5-4 補足](./operations/bootstrap.md)（判断の記録のみ。**Issue なし**） |
-| tfstate 内の平文 secret | DB 管理者パスワード等が state に平文で入る（Terraform の仕様） | 到達できる主体を実行者本人と CI 用 SP の 2 者に限定して受容した | 到達面の最小化（#87）に加え、そもそも secret が state に入らない認証方式（#86）へ | [台帳 §B-5](./operations/azure-resource-inventory.md) / Issue #86 / #87 |
+| tfstate 内の平文 secret | Easy Auth のクライアントシークレットと Terraform 生成の chat API キーの 2 つが state に平文で入る（DB 管理者パスワードと Azure OpenAI API キーは ADR-0031 で消えた。Container Apps の `secret` に write-only 版が無い） | 到達できる主体を実行者本人に限定して受容した | 到達面の最小化（#87）。Easy Auth の federated identity credential 化と chat API キーの Entra サービス間認証化は将来の候補（ADR-0031「影響」） | [台帳 §B-5](./operations/azure-resource-inventory.md) / Issue #87 |
 
 ### 3. 可用性・冗長・DR
 

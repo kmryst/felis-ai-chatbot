@@ -56,8 +56,11 @@ terraform -chdir=terraform/ephemeral plan
 terraform -chdir=terraform/ephemeral apply
 
 # 2) before 実測（ops コンテナ経由。documents 行数と embedding IS NULL 行数）
-az containerapp exec -n ca-felisaichatbot-dev-ops -g rg-felisaichatbot-dev-tf \
-  --command 'psql "$DATABASE_URL" -c "SELECT count(*) AS documents, count(*) FILTER (WHERE embedding IS NULL) AS embedding_null FROM documents"'
+#    DSN にパスワードは無く、managed identity のトークンを PGPASSWORD で渡す（ADR-0031。
+#    exec の --command は環境変数を展開しないため bash を張って対話で打つ = vnet-integration-cutover.md §3-2）
+az containerapp exec -n ca-felisaichatbot-dev-ops -g rg-felisaichatbot-dev-tf --container ops --command bash
+#   コンテナ内で:
+#   PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c "SELECT count(*) AS documents, count(*) FILTER (WHERE embedding IS NULL) AS embedding_null FROM documents"
 
 # 3) seed Job 実行 → execution の Succeeded を確認
 az containerapp job start -n caj-felisaichatbot-dev-seed -g rg-felisaichatbot-dev-tf
