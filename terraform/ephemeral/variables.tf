@@ -203,7 +203,10 @@ variable "easy_auth_client_secret" {
   description = <<-DESC
     Easy Auth 用 app registration の client secret。frontend Container App の secret
     （microsoft-provider-authentication-secret）として保持し、authConfigs が参照する。
-    実値はコミットせず TF_VAR_easy_auth_client_secret 環境変数（.env 管理）で渡す。
+    実値はコミットせず terraform/ephemeral/terraform.tfvars（gitignore 済み）で渡す
+    （ADR-0030 決定 3: 秘密値は層ごとの tfvars で渡し、TF_VAR_* の export と混在させない）。
+    値を失ったときの復旧と 1 年ごとのローテーション（ADR-0031）は
+    docs/operations/entra-easy-auth-setup.md §6 / §7。
   DESC
   type        = string
   sensitive   = true

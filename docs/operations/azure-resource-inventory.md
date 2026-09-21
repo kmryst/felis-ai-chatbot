@@ -820,7 +820,7 @@ Entra オブジェクトの作成権限がなく（ADR-0012 の権限境界）�
 | アプリ登録 | `felis-ai-chatbot-dev-easyauth`。appId `ccc413c3-3867-45df-9013-ce2abf96fde2`（移行元の値は `98267536-618f-49a6-a7e4-79fdf81c22a8`） |
 | app role | `Chat.Use`（`allowedMemberTypes: ["User", "Application"]`） |
 | redirect URI | `https://ca-felisaichatbot-dev-front.<CAE 既定ドメイン>/.auth/login/aad/callback`（CAE 既定ドメインは `az containerapp env show --query properties.defaultDomain` で確認） |
-| client secret | 有効期間 1 年。`terraform/ephemeral/terraform.tfvars`（gitignore 済み）で Terraform に渡す。本台帳・リポジトリには書かない |
+| client secret | 有効期間 1 年。`terraform/ephemeral/terraform.tfvars`（gitignore 済み）で Terraform に渡す（ADR-0030 決定 3）。本台帳・リポジトリには書かない。**現行は `easyauth` 1 本・2026-09-19 発行 / 2027-09-19 失効**（2026-09-21 に `az ad app credential list` で確認）。ephemeral 層の state にも平文で入るため、tfvars を失った場合はそこから取り出せる（2026-09-21 に取り出し可能なことを確認）。復旧は [entra-easy-auth-setup.md](./entra-easy-auth-setup.md) §6、1 年ごとのローテーション（ADR-0031）は同 §7 |
 | service principal | object id `67a52164-8215-47e5-aa61-ca7b6bcb7455`（移行元の値は `0544d912-7bd3-467f-b1f1-62ecec24d351`）。`appRoleAssignmentRequired = true` |
 | 管理者同意 | `oauth2PermissionGrants`（`openid profile email User.Read`、AllPrincipals） |
 | 割当 | owner の 1 者（2026-09-19 実測。synthetic 用 SP は synthetic transaction SLI の作業単位で追加） |
