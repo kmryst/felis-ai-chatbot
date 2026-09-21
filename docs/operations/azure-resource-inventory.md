@@ -300,7 +300,8 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 | # | 手順 | 所要時間 |
 | --- | --- | --- |
-| 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
+| 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics。Entra 認証のみで作成され `felisadmin` は存在しない = ADR-0031） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
+| 1' | Entra 管理者のトークンで ops から `pgaadauth_create_principal('id-felisaichatbot-dev', true, false)`（managed identity のロールを管理者として作る。[entra-auth-cutover.md §3「新規作成時」](./entra-auth-cutover.md)） | 未実測（数分見込み） |
 | 2 | ephemeral apply（2 段階: ACR を `-target` で先行 → serving / ops イメージ push → 全体 apply。`terraform/ephemeral/main.tf` 冒頭コメントと [vnet-integration-cutover.md](./vnet-integration-cutover.md) §2） | 旧構成実測 約 4〜5 分（2026-08-21。[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）。VNet 統合 CAE の作成時間は未実測（ADR-0018 後に更新） |
 | 3 | Alembic マイグレーション適用（`az containerapp job start` で `caj-felisaichatbot-dev-migrate` を起動。[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3） | 未実測（数分見込み） |
 | 4 | seed（気象庁データ）投入 | 未実測（数分見込み） |

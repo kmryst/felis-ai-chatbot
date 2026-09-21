@@ -119,7 +119,67 @@ secret 名は不変（serving: `chat-api-key` / `database-url`。frontend: `chat
   （Azure OpenAI リソース）の 2 件
 - 保存した `terraform plan` のファイルは変数値（旧パスワード・旧 API キー・DSN）を埋め込むため、apply 後に削除した
 
-## 9. ユニットテストで確認できず実測で確認した範囲
+## 9-1. レビュー対応（2026-09-21）: 新規作成と rollback の provider 検査
+
+PR レビューの指摘 2 件を azurerm 5.1.0 のソースで確認した。
+
+- Create: `password_auth_enabled = false` のとき `administrator_login` / `administrator_password` /
+  `administrator_password_wo` の指定をエラーにする → `administrator_login` の既定を null にした。既存サーバーは
+  Optional + Computed のため plan は **No changes**（state の `felisadmin` が保たれる）
+- Update: `password_auth_enabled = true` にする apply で `administrator_login` とパスワード引数の両方を要求する →
+  Terraform で rollback する設計をやめ、az CLI（手順書 §6）に切り替えた
+
+### 9-2. rollback の実地検証（2026-09-21。手順書 §6 の往復をそのまま実施）
+
+外形監視は 07:52〜08:04 の間だけ計画停止。一時パスワードはスクリプト内で生成し、検証後に認証ごと無効化した。
+
+| 段階 | 実測 |
+| --- | --- |
+| 有効化: `az postgres flexible-server update --password-auth Enabled --admin-password …` | コマンド 07:55:27 → 07:57:42（**2 分 15 秒**）。サーバー `state`: Ready → **Updating 07:55:38** → **Ready 07:56:48**（約 70 秒） |
+| 有効化後の接続 | `felisadmin` + 一時パスワード: **accepted**。managed identity: **`current_user = id-felisaichatbot-dev`（継続。壊れない）** |
+| 収束: 通常の `terraform plan` / `apply`（構成は `password_auth_enabled = false` のまま） | plan は `0 to add, 1 to change, 0 to destroy`、差分は `password_auth_enabled = true -> false` のみ（replacement なし）。apply 07:59:53 → 08:02:11（**2 分 13 秒**）。`state`: **Updating 08:00:05** → **Ready 08:01:15**（約 70 秒） |
+| 収束後の接続 | `felisadmin`: **rejected**（`FATAL: pg_hba.conf rejects connection`）。managed identity: 継続。最終 plan **No changes** |
+| `/readyz`（frontend。10 秒間隔） | 07:52:51〜08:03:36 の全サンプル 200（低下なし） |
+| obs Job | 07:50〜08:03 の全 execution が Succeeded（2 回の更新中を含む。heartbeat の空白なし） |
+
+確認できたこと:
+
+- **「構成が正であり、次の通常 apply が自動的に収束させる」設計**が実証された（CLI で変えた状態を Terraform が
+  差分として検出し、apply で戻し、plan が No changes に戻る）
+- **パスワード認証を有効化しても managed identity 経路は壊れない**（両方式が併存する。緊急時にアプリを止めずに
+  復旧作業ができる）
+- 手順書 §6 の記述と実際の挙動に差は無かった。所要時間の見込み「約 70 秒」はサーバーの `Updating` 区間で、
+  コマンド完了（ARM の完了待ちを含む）は約 2 分 15 秒 — 手順書はコマンド完了時間で書き直した
+- 更新の所要は段階 2（Entra 有効化 66 秒）・6b-1（71 秒）・今回 2 回（各約 70 秒）で一貫しており、
+  `authConfig` の変更は方向によらず約 70 秒の再起動相当の更新を伴う
+
+## 10. Terraform の write-only 引数と「空の in-place update」の切り分け（2026-09-21）
+
+当初「write-only の `administrator_password_wo` / `_version` を常設すると（値が null でも）plan に属性差分なしの
+in-place update が出続ける」と報告したが、最小再現で切り分けた結果、**原因は write-only ではなく、値に付いた
+sensitive / ephemeral のマーク**だった。persistent 層で `main.tf` の 2 行だけを差し替え、plan の JSON
+（`before` / `after` / `after_sensitive`）を比較した（apply はしていない。Terraform 1.14.8 + azurerm 5.1.0）。
+
+| `administrator_password_wo` | `administrator_password_wo_version` | plan |
+| --- | --- | --- |
+| リテラル `null` | リテラル `null` | No changes |
+| 通常変数（未設定 = null。sensitive でも ephemeral でもない） | 通常変数（null） | No changes |
+| **sensitive** 変数（未設定 = null） | 通常変数（null） | 空 update（`after_sensitive` に wo が載る。属性差分なし） |
+| **ephemeral** 変数（未設定 = null） | 通常変数（null） | 空 update（同上） |
+| `ver > 0 ? var.ephemeral_pw : null`（= null） | `ver > 0 ? var.ver : null`（= null） | 空 update（同上。条件式でもマークが残る） |
+| ephemeral 変数に値あり | `0` | 空 update（値を毎回 provider へ渡す） |
+| 片方だけ指定（`0` / null との組み合わせ） | — | provider の `RequiredWith` エラー（両方同時指定が必須。ephemeral の null も「指定あり」扱い） |
+
+整理:
+
+- 公式（SDKv2 の write-only arguments）の「Write-only argument values cannot produce a Terraform plan difference」は
+  **属性値の差分**についての記述で、実測とも一致する（差分は無い）。マーク付きの値が update を計画させるのは別の問題
+- 一致する公開 Issue・修正予定は確認できなかった
+- 帰結: パスワードを sensitive / ephemeral 変数で渡す限り write-only 引数は常設できない（非 sensitive の通常変数なら
+  常設できるが、パスワードを非 sensitive にする案は採らない）。よって rollback は Terraform の構成外（az CLI）で行い、
+  長期維持が要る場合だけ override file で一時的に構成へ足す（手順書 §6 / 付録 A）
+
+## 11. ユニットテストで確認できず実測で確認した範囲
 
 実トークン取得（Container Apps の identity endpoint）、DB への Entra ログイン、`pgaadauth_create_principal`
 後の権限継承、ロール割当の伝播、`disableLocalAuth` の反映、パスワード認証無効化の再起動挙動。

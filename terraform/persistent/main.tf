@@ -146,9 +146,22 @@ resource "azurerm_postgresql_flexible_server" "main" {
   sku_name   = "B_Standard_B1ms"
   storage_mb = 32768
 
-  # administrator_login は作成時に必要だった値（ForceNew）。パスワード認証は無効化済みで
-  # administrator_password は持たない（Issue #275。ADR-0031。旧 felisadmin ロールは DB 内に残り、
-  # managed identity のロールがその権限を継承している）
+  # パスワード認証の管理者（ADR-0031）。通常運用では 3 つとも既定（null / null / 0）で、
+  # 何も送らない。
+  # - 既存サーバー: administrator_login は Optional + Computed のため null でも state の値
+  #   （felisadmin。ForceNew）が保たれ差分は出ない。旧 felisadmin ロールは DB 内に残り、managed identity の
+  #   ロールがその権限を継承している
+  # - 新規作成（Entra 認証のみ）: azurerm 5.1.0 の Create は password_auth_enabled = false のとき
+  #   administrator_login / administrator_password / administrator_password_wo の指定をエラーにするため、
+  #   null のままにする。新規 DB には felisadmin が存在しないので、DB ロールの初期化は
+  #   docs/operations/entra-auth-cutover.md §3「新規作成時」の手順（identity のロールを管理者として作る）
+  # - rollback（パスワード認証の一時的な再有効化）は Terraform ではなく az CLI で行う
+  #   （`az postgres flexible-server update --password-auth Enabled --admin-password …`。ARM 1 回で
+  #   認証の有効化と新パスワードの設定を同時に行う）。azurerm 5.1.0 の Update はパスワード認証を
+  #   有効にする apply で login と password 引数の両方を要求し、write-only の password 引数を
+  #   sensitive / ephemeral 変数で常設すると plan に空の in-place update が出続けるため（実測。
+  #   docs/verification/entra-auth/observations.md §10）、構成にはパスワード関連の引数を置かない。
+  #   手順と収束（修復後の apply が Disabled へ戻す）は entra-auth-cutover.md §6
   administrator_login = var.administrator_login
 
   # 認証方式（Issue #275。ADR-0031）。Microsoft Entra 認証を有効化し、アプリ・Job・ops は
@@ -158,8 +171,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
   #   所要時間の実測は docs/verification/entra-auth/observations.md
   # - password_auth_enabled = false: managed identity 経路（backend / Job / ops）の疎通を実測で
   #   確認した後に閉じた（併存期間の手順と実測は docs/verification/entra-auth/observations.md）。
-  #   戻し方: true に戻して apply し、`az postgres flexible-server update --admin-password` で
-  #   管理者パスワードを再設定する（旧パスワードは再利用しない）
+  #   緊急時の戻し方は az CLI（上の administrator_login のコメントと entra-auth-cutover.md §6）。
+  #   この構成が正であり、修復後の通常 apply が Disabled へ戻す（収束）。修復まで apply しないこと
   # - azurerm 5.1.0 でこのブロックは ForceNew ではない（ForceNew は administrator_login のみ。
   #   `terraform providers schema -json` で確認。2026-09-19）。plan に replacement が出たら apply しない
   authentication {

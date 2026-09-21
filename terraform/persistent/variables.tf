@@ -16,9 +16,15 @@ variable "server_name" {
 }
 
 variable "administrator_login" {
-  description = "PostgreSQL 管理者ユーザー名"
+  description = <<-DESC
+    PostgreSQL 管理者（パスワード認証）のユーザー名。既定 null = 指定しない（ADR-0031）。
+    Entra 認証のみで新規作成するときは指定してはいけない（azurerm 5.1.0 の Create が
+    password_auth_enabled = false との併用をエラーにする）。既存サーバーでは Optional + Computed のため
+    null でも state の値（felisadmin）が保たれ、差分は出ない。ForceNew 属性なので、指定するなら
+    state と同じ値にすること。
+  DESC
   type        = string
-  default     = "felisadmin"
+  default     = null
 }
 
 

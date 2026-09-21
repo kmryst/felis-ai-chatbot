@@ -38,7 +38,7 @@ user-assigned managed identity（`id-felisaichatbot-dev`）の Microsoft Entra �
 | 4. ephemeral | パスワード無し DSN + `DB_AUTH_MODE=managed-identity` + `AZURE_CLIENT_ID` を全 DB 利用コンテナへ。obs Job の psql は `PGPASSWORD="$(python -m app.entra_auth db)"` | `/readyz` 200、migrate Job Succeeded、ops から `select current_user` が `id-felisaichatbot-dev`、obs Job Succeeded | `-var db_auth_mode=password` と旧 DSN で apply（PostgreSQL のパスワード認証が有効な間のみ） |
 | 5. Azure OpenAI | ロール割当 + `AZURE_OPENAI_AUTH_MODE=managed-identity`、API キーの変数 / secret / precondition を削除 | ops から Bearer で embeddings が 200、`/chat` が 200 | ロール割当を削除し、段階 4 のコードで apply |
 | 6a. 旧経路を閉じる（Azure OpenAI） | `disableLocalAuth = true` | 旧キーが **403 `AuthenticationTypeDisabled`**（実測は約 1 分で反映） | `disableLocalAuth = false` |
-| 6b. 旧経路を閉じる（PostgreSQL） | 6b-1: `password_auth_enabled = false`。6b-2: `administrator_password` 変数を削除 | 6b-1: **再起動相当の更新が起きる**（実測 71 秒）。パスワード接続が `pg_hba.conf rejects connection`。6b-2: state の `administrator_password` が空文字列（長さ判定） | `true` に戻して apply し、`az postgres flexible-server update --admin-password` で再設定 |
+| 6b. 旧経路を閉じる（PostgreSQL） | 6b-1: `password_auth_enabled = false`。6b-2: `administrator_password` 変数を削除 | 6b-1: **再起動相当の更新が起きる**（実測 71 秒）。パスワード接続が `pg_hba.conf rejects connection`。6b-2: state の `administrator_password` が空文字列（長さ判定） | §6: az CLI で `--password-auth Enabled --admin-password <新>` を 1 回（Terraform の構成は変えない。修復後の通常 apply が Disabled へ戻す） |
 | 7. chat API キー | `random_password.chat_api_key`（`keepers.rotation = var.chat_api_key_rotation`） | `/chat` 200。secret は `database-url` / `chat-api-key` のみ | 変数を戻す |
 
 再起動を伴う段階（2 / 6b-1）の前に `gh variable set PROBE_ENABLED --body false` で外形監視を止め、
@@ -72,6 +72,21 @@ unset PGPASSWORD
 - `pgaadauth_list_principals` の列名は `rolname`（`rolename` ではない）
 - `GRANT felisadmin` は Entra 管理者で実行できる（実測）。既存オブジェクトはすべて `felisadmin` 所有のため、
   継承で alembic の `ALTER TABLE` も通る。最小権限化は #86 / #280
+
+### 新規作成時（destroy 後の再構築。台帳の revive runbook）
+
+Entra 認証のみで新規作成したサーバーには `felisadmin` が**存在しない**（azurerm 5.1.0 の Create は
+`password_auth_enabled = false` のとき `administrator_login` の指定をエラーにするため、persistent 層は
+login を送らない）。この場合 `GRANT felisadmin` は使えないので、identity のロールを**管理者として**作る:
+
+```sql
+select * from pgaadauth_create_principal('id-felisaichatbot-dev', true, false);   -- isAdmin = true
+```
+
+`isAdmin = true` は `azure_pg_admin` のメンバー + `CREATEROLE` / `CREATEDB`（公式）。migrate Job（alembic）が
+`CREATE EXTENSION vector` と全オブジェクトを identity のロールで作るため、以後の所有者は identity になる。
+既存環境（felisadmin 継承）と権限の広さは同等で、最小権限化の扱いも同じ（#86 / #280）。
+revive runbook の順序: persistent apply → 本節（Entra 管理者で実行）→ ephemeral apply → migrate Job。
 
 ## 4. Azure OpenAI のロール割当とキー認証の無効化（段階 5 / 6a）
 
@@ -117,10 +132,44 @@ PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c 'select curr
 
 ## 6. rollback と復旧
 
-- **Terraform の `authentication` 変更は ARM の管理 API だけで完結し、DB 接続を要しない。** managed identity
-  の経路が壊れても `password_auth_enabled = true` へ戻す apply は実行できる。戻した後は
-  `az postgres flexible-server update -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-02 --admin-password '<新しいパスワード>'`
-  で管理者パスワードを再設定する（旧パスワードは使い回さない）
+- **パスワード認証の一時的な再有効化（緊急復旧）は az CLI で行い、Terraform の構成は変えない。**
+  managed identity の経路が壊れ、Entra 管理者の経路（§5）でも直せない場合の最後の手段。
+  ARM の管理 API だけで完結し、DB 接続を要しない。
+
+  ```bash
+  # 認証の有効化と新しいパスワードの設定を 1 回で行う（8〜128 文字・4 カテゴリ中 3 種以上。値を履歴に残さない）
+  read -s NEW_PW
+  az postgres flexible-server update -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-02 \
+    --password-auth Enabled --admin-password "$NEW_PW"
+  unset NEW_PW
+  az postgres flexible-server show -g rg-felisaichatbot-dev-tf -n pgsql-felisaichatbot-dev-02 --query authConfig -o json
+  ```
+
+  - 更新中は 6b-1 と同程度の再起動相当の更新が起きる（**2026-09-21 実測**: CLI の完了まで 2 分 15 秒、サーバー
+    `state` が `Updating` の区間は約 70 秒。`/readyz` の低下なし、obs Job の失敗なし。実施時は `PROBE_ENABLED` を
+    止め、ポーラーで記録する。詳細は [実測記録 §9-1](../verification/entra-auth/observations.md)）
+  - パスワード認証を有効にしても managed identity 経路は影響を受けない（実測: 有効化中も `current_user =
+    id-felisaichatbot-dev` で接続できた）
+  - **この間は `terraform -chdir=terraform/persistent apply` を実行しない。** 構成（`password_auth_enabled = false`）が
+    正であり、apply すると Disabled へ戻る（= 修復後の収束操作）。plan は `password_auth_enabled true -> false` の
+    差分を示す（意図どおり）
+  - managed identity を修復（ロール / 割当 / DSN を確認）→ managed identity 接続を実測（§5）→ 通常の apply で
+    Disabled へ戻す → plan が No changes になることを確認。一時パスワードは以後使えない
+    （**2026-09-21 実測**: plan は `password_auth_enabled = true -> false` の 1 行のみ・replacement なし、apply 2 分 13 秒
+    （`Updating` 区間は約 70 秒）、直後に `felisadmin` の接続が `pg_hba.conf rejects connection`、plan は No changes。
+    「構成が正で、次の通常 apply が収束させる」設計はこの往復で実証済み）
+  - 手順書の記述と実際の挙動の差: この節の手順どおりに往復できた。見込みと違ったのは所要時間の書き方だけで、
+    「約 70 秒」はサーバーの `Updating` 区間であり、コマンドの完了（ARM の操作完了待ちを含む）は 2 分 15 秒かかる。
+    本節はコマンド完了時間で書き直した
+  - azurerm 5.1.0 の Update は `password_auth_enabled = true` を apply するときに `administrator_login` と
+    `administrator_password` / `administrator_password_wo` のいずれかを**同時に**要求する。フラグだけ true にした
+    Terraform 構成は provider が拒否するため、Terraform で戻す設計は採らなかった（ADR-0031「影響」）
+- **新規作成（Entra 認証のみ）のサーバーにはパスワード認証の管理者ログインが存在せず、パスワードによる復旧は
+  構造的に不可能**（作成後に管理者ログインを追加する API は無い）。復旧経路は Entra 管理者アカウント（§5）のみ。
+  destroy 後に再構築したサーバーはこの状態になる
+- **パスワード認証を長期間維持せざるを得ない場合**（Terraform で構成として持つ必要が出た場合）は override file を使う
+  （付録 A）。常設しないのは、write-only の password 引数を sensitive / ephemeral 変数で書くと plan に空の in-place
+  update が出続けるため（[実測記録 §10](../verification/entra-auth/observations.md)）
 - Azure OpenAI: `disableLocalAuth=false` に戻せばキー認証が復活する（キー自体は失効していない）
 - chat API キー: `chat_api_key_rotation` を変えて apply すれば再生成される。値が要るときは
   `terraform -chdir=terraform/ephemeral output -raw chat_api_key`（ファイルや履歴に残さない）
@@ -138,6 +187,42 @@ az role assignment list --assignee "$(az identity show -g rg-felisaichatbot-dev-
 az containerapp show -n ca-felisaichatbot-dev -g rg-felisaichatbot-dev-tf --query "properties.configuration.secrets[].name" -o tsv
 #   → chat-api-key / database-url のみ
 ```
+
+## 付録 A. パスワード認証を Terraform の構成として一時的に持つ（override file）
+
+§6 の CLI 復旧後、Disabled へ戻せない期間が長引く場合だけ使う。Terraform の
+[override file](https://developer.hashicorp.com/terraform/language/files/override)（`*_override.tf`）は同じ
+resource ブロックへ属性を合成する公式機能で、手編集なしに置く・撤去するで切り替えられる（特殊用途向けと案内されている）。
+
+```hcl
+# terraform/persistent/rollback_override.tf（gitignore 対象にはなっていないので、コミットしないこと。撤去で元に戻る）
+variable "rollback_administrator_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
+variable "rollback_administrator_password_version" {
+  type = number
+}
+
+resource "azurerm_postgresql_flexible_server" "main" {
+  administrator_login               = "felisadmin"
+  administrator_password_wo         = var.rollback_administrator_password
+  administrator_password_wo_version = var.rollback_administrator_password_version
+  authentication {
+    active_directory_auth_enabled = true
+    password_auth_enabled         = true
+    tenant_id                     = data.azurerm_client_config.current.tenant_id
+  }
+}
+```
+
+- `TF_VAR_rollback_administrator_password` で渡し、version は前回より大きい値にする。`administrator_login` は ForceNew
+  属性なので state と同じ `felisadmin`（新規作成したサーバーには存在しないため、この付録は移行元のサーバーにしか使えない）
+- この構成が置かれている間は plan に空の in-place update が出続ける（sensitive / ephemeral マークによる。実測記録 §10）。
+  「暫定構成を維持中」の印として扱い、撤去して通常の apply で Disabled へ戻せば消える
+- **未検証**（plan のみで形を確認。apply はしていない）
 
 ## 関連
 

@@ -12,4 +12,7 @@ entra_administrator_object_id      = "<object id (GUID)>"
 entra_administrator_principal_name = "<userPrincipalName。#EXT# を含む場合はそのまま>"
 alert_email_address                = "<notification email>"
 
-# resource_group_name / server_name / administrator_login / log_analytics_daily_quota_gb は default あり。
+# resource_group_name / server_name / log_analytics_daily_quota_gb は default あり。
+# administrator_login は既定 null（Entra 認証のみの新規作成では指定しない。既存サーバーの値は state が保持する）。
+# パスワード認証の一時的な再有効化（rollback）は Terraform ではなく az CLI で行う
+# （docs/operations/entra-auth-cutover.md §6）。tfvars にパスワード関連の項目は無い。

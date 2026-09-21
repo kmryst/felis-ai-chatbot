@@ -57,9 +57,10 @@ Accepted
 
 ### 認証方式
 
-- **A. managed identity + Entra 認証（採択）**: 秘密値そのものを無くす。identity は既存を流用
-- B. Key Vault に秘密値を集約して参照する: 秘密値は残り、Key Vault 分のリソースと権限管理が増える。
-  「鍵を隠す」であって「無くす」ではない
+- **A. managed identity + Entra 認証（採択）**: 秘密値を生成せず、接続ごとに有効期限つきの
+  アクセストークンを取得する。identity は既存を流用
+- B. Key Vault に秘密値を集約して参照する: 秘密値は存在し続け、保管場所とアクセス制御が変わるだけで、
+  Key Vault 分のリソースと権限管理が増える
 - C. Terraform の write-only argument で state から外す: state には入らないが tfvars と Azure 側の
   secret には残る。Container Apps の `secret` ブロックに write-only 版が無く、Easy Auth と chat API
   キーには適用できない。Entra 認証に移せなかった場合の次善策として保持する
@@ -80,9 +81,13 @@ Accepted
 
 - **A. 残して Terraform 生成に移す（採択）**: backend は internal ingress
   （[ADR-0027](0027-frontend-azure-deployment-and-public-surface.md) 決定 1）だが、誤って external
-  に戻した場合に `/chat` が無認証で公開されないための砦として機能する（ADR-0027 決定 6 の
-  fail-closed と整合）。`random_password` で生成すれば人が値を扱わず、state にだけ存在する
-- B. 廃止する: 上記の砦を失う
+  に戻した場合でも、`X-API-Key` ヘッダによる API キー認証が `/chat` へのアクセスを制御する
+  （`backend/app/main.py` の `_enforce_chat_gate`。キー未設定・空白のみ・最小長 32 文字未満は 404、
+  不一致・未提示は 401 を返す fail-closed）。network 到達制御（internal ingress）とは別の層で効くため、
+  ADR-0027 決定 6 / 決定 10 と同じ多層防御（defense in depth）の一層として残す。
+  `random_password` で生成すれば人が値を扱わず、state にだけ存在する
+- B. 廃止する: `/chat` の認証が無くなり、上記の多層防御が internal ingress による network 到達制御の
+  一層だけになる。ingress の設定ミスがそのまま無認証の LLM 課金経路の公開になる
 - C. Entra のサービス間認証（frontend の managed identity が backend を audience とするトークンを
   取り、backend が検証する）に置き換える: 本 ADR の範囲外。別 Issue で扱う
 
@@ -116,9 +121,10 @@ Accepted
 
 ## 採択理由
 
-- 秘密値を「隠す」のではなく「無くす」ことができる唯一の選択肢が Entra 認証で、identity と
-  ロール割当の仕組みは既に運用中だった（ACR pull）。
-- Easy Auth と chat API キーは、無くすとセキュリティ水準が下がる（implicit flow / 無認証公開の砦の喪失）。
+- 秘密値の保管場所を変えるのではなく、秘密値の生成そのものを不要にできる唯一の選択肢が
+  Entra 認証で、identity とロール割当の仕組みは既に運用中だった（ACR pull）。
+- Easy Auth と chat API キーは、廃止するとセキュリティ水準が下がる
+  （implicit flow への後退 / `/chat` の API キー認証というアクセス制御の層の喪失）。
   残す代わりに「人が扱う秘密値」から外せるものは外した（chat API キーは Terraform 生成）。
 - 段階的な切替により、各段階の実測（再起動時間、`/readyz` の低下、observability データの空白、
   旧経路の拒否応答）を記録でき、公式ドキュメントに無い情報を手順書に残せた。
@@ -148,7 +154,19 @@ Accepted
   要り、本 ADR では扱わない（必要になった時点で Issue 化）
 - **運用**: managed identity の経路が壊れても、Entra 管理者（所有者のアカウント）は managed identity と
   独立にトークンで接続でき、Terraform の `authentication` 変更は ARM 経由で DB 接続を要しない。
-  復旧経路の詳細は手順書
+  **パスワード認証の一時的な再有効化（最後の手段）は Terraform ではなく az CLI で行い、構成は変えない**
+  （`--password-auth Enabled --admin-password` を ARM 1 回で。修復後の通常 apply が Disabled へ戻す収束操作になる。
+  修復までは apply しない）。Terraform で戻す設計を採らなかった理由: azurerm 5.1.0 の Update はパスワード認証を
+  有効にする apply で `administrator_login` とパスワード引数を同時に要求し、そのパスワード引数
+  （write-only `administrator_password_wo`）を sensitive / ephemeral 変数で常設すると、値が null でも
+  plan に空の in-place update が出続ける（原因はマーク。実測記録 §10）。長期維持が要る場合だけ override file
+  で一時的に構成を持つ（手順書 付録 A）。
+  **新規作成した Entra 認証のみのサーバーには管理者ログインが無く、パスワードによる復旧は構造的に不可能**
+  （復旧経路は Entra 管理者アカウントのみ）。復旧経路の詳細は手順書 §6
+- **新規作成（destroy 後の再構築）**: Entra 認証のみの Create では `administrator_login` を送れない
+  （azurerm 5.1.0 の Create が拒否する）ため、新規 DB に `felisadmin` は存在しない。identity のロールは
+  Entra 管理者が `pgaadauth_create_principal('id-felisaichatbot-dev', true, false)`（管理者）として作り、
+  migrate Job が全オブジェクトを identity 所有で作る（手順書 §3「新規作成時」）
 - **残課題**: 最小権限化（#86 / #280）、Easy Auth の federated identity credential 化（Container Apps
   の公式手順が出た時点で再検討）、chat API キーの Entra サービス間認証への置き換え（別 Issue）
 
