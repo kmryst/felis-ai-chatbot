@@ -55,6 +55,32 @@ variable "database_url" {
     condition     = var.database_url == "" || can(regex("^postgresql://", var.database_url))
     error_message = "database_url は空か postgresql:// で始まる libpq DSN を指定してください（backend/app/db.py は psycopg で接続する）。"
   }
+
+  validation {
+    # managed-identity モードでは DSN にパスワードを含めない（Issue #275。ADR-0031）。
+    # ユーザー情報部（`user:password@`）にコロンがあればパスワード入りと見なして弾く。
+    # DSN のユーザー名は managed identity の表示名（pgaadauth_create_principal で作ったロール名）。
+    condition     = var.db_auth_mode != "managed-identity" || var.database_url == "" || !can(regex("^postgresql://[^/@]*:[^/@]*@", var.database_url))
+    error_message = "db_auth_mode = \"managed-identity\" のときは database_url にパスワードを含めないでください（接続時に Entra のアクセストークンを password として渡す。ADR-0031）。"
+  }
+}
+
+variable "db_auth_mode" {
+  description = <<-DESC
+    backend / Job / ops が DB へ接続するときの認証方式（Issue #275。ADR-0031）。
+    "managed-identity"（既定）= Container Apps の user-assigned managed identity
+    （acr_pull_identity_name）で Entra のアクセストークンを取得し password として渡す。
+    DB_AUTH_MODE と AZURE_CLIENT_ID を各コンテナに注入し、database_url はパスワード無しの DSN にする。
+    "password" = 従来どおり database_url に含まれるパスワードで接続する（rollback 用。
+    PostgreSQL 側の password_auth_enabled が true の間だけ機能する）。
+  DESC
+  type        = string
+  default     = "managed-identity"
+
+  validation {
+    condition     = contains(["password", "managed-identity"], var.db_auth_mode)
+    error_message = "db_auth_mode は \"password\" か \"managed-identity\" を指定してください（backend/app/config.py の DB_AUTH_MODE と同じ語彙）。"
+  }
 }
 
 variable "acr_pull_identity_name" {
@@ -107,15 +133,22 @@ variable "ops_container_image" {
   }
 }
 
-variable "chat_api_key" {
+variable "chat_api_key_rotation" {
   description = <<-DESC
-    /chat 保護用の API キー（Issue #107。ADR-0020 の常時稼働の先行ゲート）。
-    secret のため tfvars に書かず TF_VAR_chat_api_key で渡す（.env 管理。コミット禁止）。
-    空のままなら backend は fail-closed（/chat が 404）で起動する。
+    /chat 保護用 API キー（Issue #107）のローテーション用キーパー（Issue #275 / ADR-0031）。
+    キー本体は random_password.chat_api_key が生成し、人が値を扱わない（tfvars にも書かない）。
+    この値を変えて apply すると新しいキーが生成され、backend serving と frontend の両方の
+    secret / CHAT_API_KEY_CONFIG_CHECKSUM が同じ apply で更新される（新 revision の作成は
+    CHAT_API_KEY_CONFIG_CHECKSUM が担保する。ADR-0027「付随する決定」）。
+    ローカル開発用の CHAT_API_KEY はこの値とは無関係（backend/.env.example 参照）。
   DESC
   type        = string
-  sensitive   = true
-  default     = ""
+  default     = "2026-09-20"
+
+  validation {
+    condition     = length(trimspace(var.chat_api_key_rotation)) > 0
+    error_message = "chat_api_key_rotation は空にできません（日付など、ローテーションごとに変える文字列）。"
+  }
 }
 
 variable "chat_disabled" {
@@ -181,8 +214,10 @@ variable "llm_provider" {
   description = <<-DESC
     backend serving の LLM provider 切替（Issue #195。ADR-0009）。
     空（既定）= LLM_PROVIDER env を注入しない = backend/app/config.py の既定 "stub"（ADR-0004）。
-    "azure-openai" = 実 Azure OpenAI へ切り替える（azure_openai_endpoint / azure_openai_api_key が
-    必須になる。azurerm_container_app.main の precondition が検査する）。
+    "azure-openai" = 実 Azure OpenAI へ切り替える（azure_openai_endpoint が必須になる。
+    azurerm_container_app.main の precondition が検査する）。Azure OpenAI への認証は
+    user-assigned managed identity（Cognitive Services OpenAI User ロール。Issue #275 / ADR-0031）で
+    行い、API キーは扱わない。
     rollback は空へ戻して apply する（手順は docs/operations/llm-provider-cutover.md）。
   DESC
   type        = string
@@ -209,18 +244,6 @@ variable "azure_openai_endpoint" {
   }
 }
 
-variable "azure_openai_api_key" {
-  description = <<-DESC
-    Azure OpenAI の API キー（ADR-0009。マネージド ID 化までの暫定 = production-readiness §2）。
-    Container Apps の secret（azure-openai-api-key）として保持し、tfvars に書かず
-    TF_VAR_azure_openai_api_key で渡す（.env 管理。コミット禁止）。
-    値の変更は AZURE_OPENAI_CONFIG_CHECKSUM env（ADR-0027「付随する決定」と同型）を通じて
-    必ず新 revision を作る。
-  DESC
-  type        = string
-  sensitive   = true
-  default     = ""
-}
 
 variable "azure_openai_api_version" {
   description = <<-DESC

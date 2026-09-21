@@ -101,6 +101,55 @@ data "azurerm_user_assigned_identity" "acr_pull" {
   resource_group_name = data.azurerm_resource_group.dev.name
 }
 
+locals {
+  # DB 接続の認証方式（Issue #275。ADR-0031）。managed-identity では、DB へ接続するすべての
+  # コンテナ（serving / ops / migrate / obs / seed / embed）に同じ 2 変数を注入する。
+  # - DB_AUTH_MODE: backend/app/config.py と migrations/env.py が読む
+  # - AZURE_CLIENT_ID: user-assigned identity の client ID。Container Apps では identity を
+  #   複数持ち得るため、SDK に使う identity を明示する必要がある
+  #   （出典: https://learn.microsoft.com/en-us/azure/container-apps/managed-identity ）
+  # password モードでは何も注入せず、backend の既定（password）で動く。
+  db_auth_envs = var.db_auth_mode == "managed-identity" ? {
+    DB_AUTH_MODE    = "managed-identity"
+    AZURE_CLIENT_ID = data.azurerm_user_assigned_identity.acr_pull.client_id
+  } : {}
+
+  # Azure OpenAI の認証方式（Issue #275。ADR-0031）。llm_provider = "azure-openai" のとき、
+  # serving と embed Job に AZURE_OPENAI_AUTH_MODE=managed-identity と AZURE_CLIENT_ID を注入する。
+  # 認可は Azure OpenAI リソースへの「Cognitive Services OpenAI User」ロール割当
+  # （Terraform 管理外。台帳 azure-resource-inventory.md §B #1 / #9）。API キーの secret / env は持たない。
+  # db_auth_envs と同じ AZURE_CLIENT_ID を含むため、両方を注入する箇所では merge() で重複を畳む
+  azure_openai_auth_envs = var.llm_provider == "azure-openai" ? {
+    AZURE_OPENAI_AUTH_MODE = "managed-identity"
+    AZURE_CLIENT_ID        = data.azurerm_user_assigned_identity.acr_pull.client_id
+  } : {}
+
+  # obs 採取 Job（psql）の接続コマンド。managed-identity では ops イメージ内の CLI
+  # （python -m app.entra_auth db。backend/app/entra_auth.py）で取得したトークンを PGPASSWORD に渡す。
+  # DSN にパスワードが無いため psql は PGPASSWORD を使う（libpq のパスワード解決順序）。
+  obs_collect_command = (
+    var.db_auth_mode == "managed-identity"
+    ? "PGPASSWORD=\"$(python -m app.entra_auth db)\" psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f /app/observability/collect.sql"
+    : "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f /app/observability/collect.sql"
+  )
+}
+
+# /chat 保護の API キー（Issue #107）を Terraform が生成する（Issue #275 / ADR-0031）。
+# 人が値を扱う秘密値から外し、backend serving と frontend（BFF）の secret に同じ値を注入する。
+# - 長さ 64 の英数字（backend の最小長 32 = CHAT_API_KEY_MIN_LENGTH を十分上回る。記号を含めないのは
+#   ヘッダ値・シェル経由の扱いを単純にするため）
+# - keepers.rotation を変えると再生成される（両 app の新 revision は CHAT_API_KEY_CONFIG_CHECKSUM が担保）
+# - 値は state にのみ存在する（Container Apps の secret に write-only 版は無い。Easy Auth の
+#   client secret と同じ扱い）。運用で値が要るときは `terraform output -raw chat_api_key`
+resource "random_password" "chat_api_key" {
+  length  = 64
+  special = false
+
+  keepers = {
+    rotation = var.chat_api_key_rotation
+  }
+}
+
 resource "azurerm_container_app" "main" {
   name                         = "ca-felisaichatbot-dev"
   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -130,25 +179,11 @@ resource "azurerm_container_app" "main" {
     }
   }
 
-  # /chat 保護の API キー（#107）。未指定なら secret / env とも作らず、backend は
-  # fail-closed（/chat 404）で動く
-  dynamic "secret" {
-    for_each = var.chat_api_key == "" ? [] : ["chat-api-key"]
-    content {
-      name  = "chat-api-key"
-      value = var.chat_api_key
-    }
-  }
-
-  # Azure OpenAI の API キー（Issue #195。ADR-0009）。database-url / chat-api-key と同方針で
-  # Container Apps の secret として保持し、環境変数から参照する。未指定なら secret / env とも
-  # 作らない（llm_provider = "azure-openai" のときの必須検査は下の precondition）
-  dynamic "secret" {
-    for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-api-key"]
-    content {
-      name  = "azure-openai-api-key"
-      value = var.azure_openai_api_key
-    }
+  # /chat 保護の API キー（#107）。Terraform 生成（random_password.chat_api_key）。
+  # frontend の secret と同じ値
+  secret {
+    name  = "chat-api-key"
+    value = random_password.chat_api_key.result
   }
 
   template {
@@ -216,13 +251,20 @@ resource "azurerm_container_app" "main" {
         }
       }
 
-      # /chat 保護（#107）
+      # DB / Azure OpenAI の認証方式（Issue #275。ADR-0031。local.db_auth_envs /
+      # local.azure_openai_auth_envs のコメント参照。AZURE_CLIENT_ID は merge で 1 つになる）
       dynamic "env" {
-        for_each = var.chat_api_key == "" ? [] : ["chat-api-key"]
+        for_each = merge(var.database_url == "" ? {} : local.db_auth_envs, local.azure_openai_auth_envs)
         content {
-          name        = "CHAT_API_KEY"
-          secret_name = "chat-api-key"
+          name  = env.key
+          value = env.value
         }
+      }
+
+      # /chat 保護（#107）
+      env {
+        name        = "CHAT_API_KEY"
+        secret_name = "chat-api-key"
       }
 
       # 緊急遮断フラグ（値の変更は revision-scope なので必ず新 revision が作られ、
@@ -239,12 +281,9 @@ resource "azurerm_container_app" "main" {
       # 同型。sha256 先頭 8 桁のみで不可逆）。cross-app の同時性・原子性は主張しない
       # （revision 切替は app ごとに独立。partial apply 時の収束手順は
       # vnet-integration-cutover.md §6-2）。
-      dynamic "env" {
-        for_each = var.chat_api_key == "" ? [] : ["chat-api-key-config-checksum"]
-        content {
-          name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
-          value = "key-${nonsensitive(substr(sha256(var.chat_api_key), 0, 8))}"
-        }
+      env {
+        name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
+        value = "key-${nonsensitive(substr(sha256(random_password.chat_api_key.result), 0, 8))}"
       }
 
       # LLM provider 切替（Issue #195。ADR-0009）。空なら env を注入せず backend の既定
@@ -270,14 +309,6 @@ resource "azurerm_container_app" "main" {
       }
 
       dynamic "env" {
-        for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-api-key"]
-        content {
-          name        = "AZURE_OPENAI_API_KEY"
-          secret_name = "azure-openai-api-key"
-        }
-      }
-
-      dynamic "env" {
         for_each = var.azure_openai_api_version == "" ? [] : ["azure-openai-api-version"]
         content {
           name  = "AZURE_OPENAI_API_VERSION"
@@ -298,21 +329,6 @@ resource "azurerm_container_app" "main" {
         content {
           name  = "AZURE_OPENAI_EMBEDDING_DEPLOYMENT"
           value = var.azure_openai_embedding_deployment
-        }
-      }
-
-      # AZURE_OPENAI_API_KEY rotation の revision 反映担保（ADR-0027「付随する決定」が規定した
-      # AZURE_OPENAI_CONFIG_CHECKSUM。DSN_CONFIG_CHECKSUM / CHAT_API_KEY_CONFIG_CHECKSUM と同型）。
-      # secret 更新は既存 revision に自動反映されないため、key のハッシュを revision-scope の
-      # 非 secret env として template に持たせ、rotation の apply が必ず新 revision を作るように
-      # する。ハッシュは sha256 の先頭 8 桁のみで不可逆（key は復元できない）。
-      # この key を参照するのは backend serving のみのため片側適用（CHAT_API_KEY と異なり
-      # cross-app の同期対象がない）
-      dynamic "env" {
-        for_each = var.azure_openai_api_key == "" ? [] : ["azure-openai-config-checksum"]
-        content {
-          name  = "AZURE_OPENAI_CONFIG_CHECKSUM"
-          value = "aoai-${nonsensitive(substr(sha256(var.azure_openai_api_key), 0, 8))}"
         }
       }
     }
@@ -347,8 +363,9 @@ resource "azurerm_container_app" "main" {
       # LLM_PROVIDER=azure-openai の env だけ注入して接続変数が欠ける計画を弾く
       # （backend は起動時 MissingEnvError で落ちる = 気づくのが apply 後になる。
       # plan 時に検査して事故を前倒しする。Issue #195。ADR-0009 の必須変数）
-      condition     = var.llm_provider != "azure-openai" || (var.azure_openai_endpoint != "" && var.azure_openai_api_key != "")
-      error_message = "llm_provider = \"azure-openai\" のときは azure_openai_endpoint / azure_openai_api_key が必須です（欠けると backend が起動時 MissingEnvError で落ちる。ADR-0009）。"
+      # API キーは扱わない（managed identity。Issue #275 / ADR-0031）ため検査対象は endpoint のみ
+      condition     = var.llm_provider != "azure-openai" || var.azure_openai_endpoint != ""
+      error_message = "llm_provider = \"azure-openai\" のときは azure_openai_endpoint が必須です（欠けると backend が起動時 MissingEnvError で落ちる。ADR-0009）。"
     }
   }
 }
@@ -428,6 +445,16 @@ resource "azurerm_container_app" "ops" {
         name  = "DSN_CONFIG_CHECKSUM"
         value = "dsn-${nonsensitive(substr(sha256(var.database_url), 0, 8))}"
       }
+
+      # DB 接続の認証方式（Issue #275。ADR-0031）。exec した psql からは
+      # `PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL"` で接続する
+      dynamic "env" {
+        for_each = local.db_auth_envs
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
     }
   }
 
@@ -493,6 +520,15 @@ resource "azurerm_container_app_job" "migrate" {
       env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
+      }
+
+      # DB 接続の認証方式（Issue #275。ADR-0031。migrations/env.py が読む）
+      dynamic "env" {
+        for_each = local.db_auth_envs
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
     }
   }
@@ -572,11 +608,20 @@ resource "azurerm_container_app_job" "obs_collect" {
 
       # $DATABASE_URL の展開にシェルが必要（exec 形式では環境変数が展開されない。
       # az containerapp exec で実測済みの挙動と同型）
-      command = ["/bin/sh", "-c", "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f /app/observability/collect.sql"]
+      command = ["/bin/sh", "-c", local.obs_collect_command]
 
       env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
+      }
+
+      # DB 接続の認証方式（Issue #275。ADR-0031。local.obs_collect_command が参照する）
+      dynamic "env" {
+        for_each = local.db_auth_envs
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
     }
   }
@@ -650,6 +695,15 @@ resource "azurerm_container_app_job" "seed" {
         name        = "DATABASE_URL"
         secret_name = "database-url"
       }
+
+      # DB 接続の認証方式（Issue #275。ADR-0031。app.ingest は app.credentials で serving と同じ規則を使う）
+      dynamic "env" {
+        for_each = local.db_auth_envs
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
     }
   }
 
@@ -709,11 +763,6 @@ resource "azurerm_container_app_job" "embed_backfill" {
     value = var.database_url
   }
 
-  secret {
-    name  = "azure-openai-api-key"
-    value = var.azure_openai_api_key
-  }
-
   template {
     container {
       name   = "embed-backfill"
@@ -728,6 +777,15 @@ resource "azurerm_container_app_job" "embed_backfill" {
         secret_name = "database-url"
       }
 
+      # DB / Azure OpenAI の認証方式（Issue #275。ADR-0031。AZURE_CLIENT_ID は merge で 1 つになる）
+      dynamic "env" {
+        for_each = merge(local.db_auth_envs, local.azure_openai_auth_envs)
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # LLM provider と Azure OpenAI 接続設定（backend serving と同じ注入作法。Issue #195）。
       # count のガードにより、この Job が存在する時点で llm_provider は "azure-openai"
       env {
@@ -738,11 +796,6 @@ resource "azurerm_container_app_job" "embed_backfill" {
       env {
         name  = "AZURE_OPENAI_ENDPOINT"
         value = var.azure_openai_endpoint
-      }
-
-      env {
-        name        = "AZURE_OPENAI_API_KEY"
-        secret_name = "azure-openai-api-key"
       }
 
       # api-version / deployment 名は空なら注入せず backend の既定
@@ -782,8 +835,8 @@ resource "azurerm_container_app_job" "embed_backfill" {
       # serving 側と同じ検査（Issue #195 の lifecycle precondition と同型）。count のガードで
       # llm_provider = "azure-openai" のときにしか評価されないが、接続変数の欠落は Job 実行時の
       # MissingEnvError まで気づけないため plan 時に前倒しで弾く
-      condition     = var.azure_openai_endpoint != "" && var.azure_openai_api_key != ""
-      error_message = "embedding backfill Job には azure_openai_endpoint / azure_openai_api_key が必須です（欠けると Job が実行時 MissingEnvError で落ちる。ADR-0009）。"
+      condition     = var.azure_openai_endpoint != ""
+      error_message = "embedding backfill Job には azure_openai_endpoint が必須です（欠けると Job が実行時 MissingEnvError で落ちる。ADR-0009）。"
     }
   }
 }
@@ -833,7 +886,7 @@ resource "azurerm_container_app" "front" {
   # BFF が server 側で付与する /chat の API キー（ADR-0027 決定 2。ブラウザには配らない）
   secret {
     name  = "chat-api-key"
-    value = var.chat_api_key
+    value = random_password.chat_api_key.result
   }
 
   # Easy Auth（authConfigs）が参照する client secret。secret 名は ACA の Entra 構成が使う
@@ -870,7 +923,7 @@ resource "azurerm_container_app" "front" {
       # 詳細コメントは serving 側の同名 env を参照）
       env {
         name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
-        value = "key-${nonsensitive(substr(sha256(var.chat_api_key), 0, 8))}"
+        value = "key-${nonsensitive(substr(sha256(random_password.chat_api_key.result), 0, 8))}"
       }
     }
   }
@@ -893,11 +946,6 @@ resource "azurerm_container_app" "front" {
       # Easy Auth の資材が揃うまで frontend は作成できない）
       condition     = var.easy_auth_client_id != "" && var.easy_auth_client_secret != ""
       error_message = "frontend_container_image を指定する場合は easy_auth_client_id / easy_auth_client_secret も必須です（authConfigs 無しの frontend 公開を防ぐ。ADR-0027 決定 6）。"
-    }
-    precondition {
-      # BFF は CHAT_API_KEY を server 側で付与するためだけに存在する（鍵なし公開を防ぐ）
-      condition     = var.chat_api_key != ""
-      error_message = "frontend_container_image を指定する場合は chat_api_key も必須です（BFF が server 側で付与する鍵。ADR-0027 決定 2）。"
     }
   }
 }
