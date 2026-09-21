@@ -146,22 +146,25 @@ resource "azurerm_postgresql_flexible_server" "main" {
   sku_name   = "B_Standard_B1ms"
   storage_mb = 32768
 
-  administrator_login    = var.administrator_login
-  administrator_password = var.administrator_password
+  # administrator_login は作成時に必要だった値（ForceNew）。パスワード認証は無効化済みで
+  # administrator_password は持たない（Issue #275。ADR-0031。旧 felisadmin ロールは DB 内に残り、
+  # managed identity のロールがその権限を継承している）
+  administrator_login = var.administrator_login
 
   # 認証方式（Issue #275。ADR-0031）。Microsoft Entra 認証を有効化し、アプリ・Job・ops は
   # user-assigned managed identity のアクセストークンで接続する。
   # - 有効化すると `PGAadAuth` 拡張が有効になりサーバーが再起動する（公式ドキュメント。
   #   出典: https://learn.microsoft.com/en-us/azure/postgresql/security/how-to-configure-sign-in-azure-ad-authentication ）。
   #   所要時間の実測は docs/verification/entra-auth/observations.md
-  # - password_auth_enabled は段階移行のスイッチ。managed identity 経路の疎通確認が済むまで
-  #   true（併存）にし、確認後に false へ切り替える（戻し方: true に戻して apply し、
-  #   `az postgres flexible-server update --admin-password` で管理者パスワードを再設定する）
+  # - password_auth_enabled = false: managed identity 経路（backend / Job / ops）の疎通を実測で
+  #   確認した後に閉じた（併存期間の手順と実測は docs/verification/entra-auth/observations.md）。
+  #   戻し方: true に戻して apply し、`az postgres flexible-server update --admin-password` で
+  #   管理者パスワードを再設定する（旧パスワードは再利用しない）
   # - azurerm 5.1.0 でこのブロックは ForceNew ではない（ForceNew は administrator_login のみ。
   #   `terraform providers schema -json` で確認。2026-09-19）。plan に replacement が出たら apply しない
   authentication {
     active_directory_auth_enabled = true
-    password_auth_enabled         = true
+    password_auth_enabled         = false
     tenant_id                     = data.azurerm_client_config.current.tenant_id
   }
 
