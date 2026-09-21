@@ -41,6 +41,10 @@ az ad app credential reset --id "$app_id" --append --display-name easyauth --yea
 
 - `easy_auth_client_id`（= `$app_id`）と `easy_auth_client_secret` を `terraform/ephemeral/terraform.tfvars` に
   書く（ADR-0030 決定 3: 秘密値は層ごとの tfvars で渡し、`TF_VAR_*` の export と混在させない）
+- **ローカルの環境変数ファイル（`.env`）には置かない。** 以前は `TF_VAR_easy_auth_client_id` /
+  `TF_VAR_easy_auth_client_secret` を export する方式で、ADR-0030 決定 3 で tfvars へ一本化した。
+  両方に持つと、どちらの値が apply に効いたのか追えず、ローテーション（§7）で古い値が残る。
+  これらを読むのは ephemeral 層の Terraform だけなので、環境変数側に残っていれば消す
 
 ## 2. enterprise application（service principal）側
 
@@ -125,9 +129,98 @@ az ad user delete --id "felis-test-unassigned@${domain}"
 az ad app delete --id "$app_id"   # service principal も同時に消える
 ```
 
+## 6. クライアントシークレットを失ったときの復旧
+
+Entra ID はクライアントシークレットの値を保持せず、発行時に一度だけ返す
+（Microsoft Graph `application: addPassword`: "There is no way to retrieve this password in the future."
+= このパスワードを後から取得する方法は無い。出典:
+<https://learn.microsoft.com/en-us/graph/api/application-addpassword?view=graph-rest-1.0> ）。
+`terraform/ephemeral/terraform.tfvars` を失ってもシークレット自体は失効していないので、
+**再発行の前に Terraform state を確認する**。
+
+### 6-1. state から取り出す（先に試す経路）
+
+ephemeral 層の state には frontend Container App の secret
+`microsoft-provider-authentication-secret` として平文で入っている（ADR-0031「影響」の
+「state に残る秘密値」）。**2026-09-21 に取り出せることを確認済み**（値は取り出さず、
+存在と長さだけを確認した）。
+
+```bash
+terraform -chdir=terraform/ephemeral state pull \
+  | jq -r '.resources[]
+           | select(.type=="azurerm_container_app" and .name=="front")
+           | .instances[].attributes.secret[]
+           | select(.name=="microsoft-provider-authentication-secret") | .value' \
+  | wc -c          # まず長さだけ確認する（値を画面に出さない）
+```
+
+- 値を戻すときも画面とシェル履歴に出さない。上記の `| wc -c` を
+  `> terraform/ephemeral/secret.tmp` 等（mode 600・書き戻し後に削除）に替えて
+  `terraform.tfvars` の `easy_auth_client_secret` へ貼り、一時ファイルを消す
+- frontend Container App を destroy 済みで state に `azurerm_container_app.front` が無い場合、
+  この経路は使えない（§6-2 へ）
+
+### 6-2. 再発行する（state から取れない場合のみ）
+
+**`--append` を必ず付ける。** `az ad app credential reset` は既定で既存の資格情報を消す
+（公式: "By default, this command clears all passwords and keys, and let graph service generate
+a password credential." = 既定ではすべてのパスワードとキーを削除し、Graph サービスに
+パスワード資格情報を生成させる。出典:
+<https://learn.microsoft.com/en-us/cli/azure/ad/app/credential?view=azure-cli-latest> ）。
+`--append` 無しで実行すると**現行のシークレットがその場で無効になり、新しい値で
+ephemeral 層を apply し直すまで frontend のサインインが失敗する**。
+
+```bash
+app_id=$(az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[0].appId" -o tsv)
+
+# 追加発行（既存は消さない）。値は画面に出さず terraform.tfvars へ書き込む
+az ad app credential reset --id "$app_id" --append \
+  --display-name "easyauth-$(date -u +%Y%m)" --years 1 --query password -o tsv > /dev/null
+```
+
+- 書き戻したら §7 の手順 3 以降（plan → apply → サインイン実測 → 旧 keyId の削除）を行う
+- 値を失った古い資格情報は、新しい値で apply して疎通を確認したあとに
+  `az ad app credential delete --id "$app_id" --key-id <古い keyId>` で削除する
+
+## 7. クライアントシークレットのローテーション（1 年ごと）
+
+[ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md) 決定で
+**Easy Auth のクライアントシークレットは残し、1 年ごとにローテーションする**と決めている。
+1 つの app registration は複数のクライアントシークレット（`passwordCredentials`）を持てるため、
+**重なり期間を作れば認証を止めずに入れ替えられる**（Graph `addPassword` は既存を消さずに追加する。
+az CLI では `--append`）。
+
+### 7-1. 期限の確認
+
+```bash
+app_id=$(az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[0].appId" -o tsv)
+az ad app credential list --id "$app_id" \
+  --query "[].{displayName:displayName,keyId:keyId,startDateTime:startDateTime,endDateTime:endDateTime}" -o table
+```
+
+2026-09-21 時点: `easyauth` 1 本のみ、2026-09-19 発行 / **2027-09-19 失効**
+（[azure-resource-inventory.md](./azure-resource-inventory.md) §12）。
+**失効したまま放置した場合の挙動は未検証**のため、失効の 1 か月前までに入れ替える。
+
+### 7-2. 入れ替えの順序
+
+1. 新しいシークレットを**追加**発行する（§6-2 のコマンド。`--append` 必須。
+   `--display-name` は `easyauth-<YYYYMM>` のように発行月で区別する）
+2. `terraform/ephemeral/terraform.tfvars` の `easy_auth_client_secret` を新しい値に差し替える。
+   編集前のコピーを `backup-before-*.tfvars`（gitignore 済み・Terraform は自動読込しない）に残す
+   （[entra-auth-cutover.md](./entra-auth-cutover.md) §6）
+3. `terraform -chdir=terraform/ephemeral plan` が frontend Container App の in-place update
+   （secret + authConfigs）だけで、destroy / replacement を含まないことを確認してから apply する
+4. 割当済みユーザーのブラウザで frontend にサインインできることを実測する
+   （新旧どちらの値でも Entra は検証するため、この時点では旧シークレットも生きている）
+5. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`
+6. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する
+
 ## 関連
 
 - [ADR-0027](../adr/0027-frontend-azure-deployment-and-public-surface.md) 決定 4 / 5
 - [ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — 権限境界
+- [ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md) 決定 3 — 秘密値は層ごとの `terraform.tfvars` で渡す
+- [ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md) — 残す秘密値と 1 年ごとのローテーション（§6 / §7）
 - [vnet-integration-cutover.md §7](./vnet-integration-cutover.md) — この手順の成果物
   （client id / secret）を使う bootstrap

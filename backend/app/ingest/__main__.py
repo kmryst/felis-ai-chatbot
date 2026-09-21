@@ -33,8 +33,20 @@ def main(argv: list[str]) -> int:
     if not database_url:
         print("DATABASE_URL が未設定です（.env を読み込んでください）", file=sys.stderr)
         return 1
+    # 認証方式（DB_AUTH_MODE / AZURE_OPENAI_AUTH_MODE）は backend serving と同じ規則で
+    # 環境変数から読む（Issue #275。ADR-0031）。組み立ては app.credentials が正本
+    from app.config import Settings
+    from app.credentials import managed_identity, sync_db_connect_kwargs
+
+    settings = Settings.from_env()
+    identity = managed_identity(settings)
     try:
-        with psycopg.connect(database_url, connect_timeout=5) as conn:
+        # managed-identity モードでは Entra トークンを password に渡す
+        with psycopg.connect(
+            database_url,
+            connect_timeout=5,
+            **sync_db_connect_kwargs(settings, identity),
+        ) as conn:
             summary = run_ingest(conn)
     except psycopg.OperationalError as exc:
         # 例外メッセージには DSN（secret）が含まれ得るためクラス名のみ出す
@@ -54,7 +66,7 @@ def main(argv: list[str]) -> int:
             f" (total {summary.total[table]})"
         )
     if embed:
-        generated = _run_backfill(database_url)
+        generated = _run_backfill(database_url, settings, identity)
         print(
             f"embedding backfill 完了: {generated} 行生成"
             "（embedding IS NULL の行のみ対象。冪等）"
@@ -62,18 +74,19 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def _run_backfill(database_url: str) -> int:
+def _run_backfill(database_url: str, settings, identity) -> int:
     """LLM クライアントを組み立てて embedding backfill を実行する。
 
-    クライアントの組み立ては app.main と同じく設定（環境変数）に従う。
-    LLM_PROVIDER=stub のままでも動く（決定的なダミーベクトル）が、
-    実運用の embedding には LLM_PROVIDER=azure-openai を明示すること。
+    クライアントの組み立ては app.main と同じく設定（環境変数）に従う
+    （app.credentials を共有する）。LLM_PROVIDER=stub のままでも動く（決定的な
+    ダミーベクトル）が、実運用の embedding には LLM_PROVIDER=azure-openai を明示すること。
     """
-    from app.config import Settings
+    from app.credentials import azure_openai_config, install_db_password_provider
     from app.ingest.embeddings import backfill_embeddings
-    from app.llm.client import AzureOpenAIConfig, RetryConfig, create_llm_client
+    from app.llm.client import RetryConfig, create_llm_client
 
-    settings = Settings.from_env()
+    # backfill は非同期経路（app.db.connect）で接続するため password provider を登録する
+    install_db_password_provider(settings, identity)
     llm = create_llm_client(
         settings.llm_provider,
         RetryConfig(
@@ -82,17 +95,7 @@ def _run_backfill(database_url: str) -> int:
             base_delay_seconds=settings.llm_retry_base_delay_seconds,
             max_delay_seconds=settings.llm_retry_max_delay_seconds,
         ),
-        azure=(
-            AzureOpenAIConfig(
-                endpoint=settings.azure_openai_endpoint,
-                api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
-                chat_deployment=settings.azure_openai_chat_deployment,
-                embedding_deployment=settings.azure_openai_embedding_deployment,
-            )
-            if settings.llm_provider == "azure-openai"
-            else None
-        ),
+        azure=azure_openai_config(settings, identity),
     )
     return asyncio.run(backfill_embeddings(database_url, llm))
 

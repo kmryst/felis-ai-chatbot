@@ -29,3 +29,12 @@ output "frontend_app_fqdn" {
   description = "frontend Container App の公開 FQDN（安定。frontend 未作成の間は null。外形監視は https://<FQDN>/readyz）"
   value       = one(azurerm_container_app.front[*].ingress[0].fqdn)
 }
+
+# /chat 保護の API キー（Terraform 生成。Issue #275 / ADR-0031）。値は sensitive で通常の出力には
+# 出ない。運用の疎通確認で要るときだけ `terraform output -raw chat_api_key` で取り出し、
+# ファイルや履歴に残さない
+output "chat_api_key" {
+  description = "backend serving / frontend に注入している /chat の API キー（sensitive。Terraform 生成）"
+  value       = random_password.chat_api_key.result
+  sensitive   = true
+}

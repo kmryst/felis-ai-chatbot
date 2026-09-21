@@ -68,8 +68,9 @@ ops リソースの precondition で失敗する。
 #    push 後に書き戻してから本節を再実行する
 
 # 2) .env から secret と DEPLOY_SHA を読み込む（値を画面に echo しない）。
-#    .env に TF_VAR_database_url が無ければ、TF_VAR_administrator_password と同じ作法で
-#    追記してから実行する（値の形式は terraform/ephemeral/variables.tf の database_url を参照）
+#    .env に TF_VAR_database_url が無ければ追記してから実行する（値の形式は
+#    terraform/ephemeral/variables.tf の database_url を参照。ADR-0031 以降はパスワード無しの DSN で、
+#    ユーザー名は managed identity の表示名 id-felisaichatbot-dev）
 set -a; source .env; set +a
 
 # 2') DEPLOY_SHA と HEAD の乖離検査（Issue #206）。backend/ / frontend/ に DEPLOY_SHA 以降の
@@ -87,12 +88,13 @@ export TF_VAR_frontend_container_image="felisaichatbotacrdev02.azurecr.io/fronte
 
 # 4) 設定の有無だけ確認する（値は表示しない）
 env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
-# → TF_VAR_administrator_password / TF_VAR_container_image /
-#   TF_VAR_database_url / TF_VAR_ops_container_image の 4 つに加え、
-#   /chat 保護（#107）導入後は TF_VAR_chat_api_key / TF_VAR_chat_disabled が並ぶこと。
-#   frontend + Easy Auth（#194。§7）では TF_VAR_frontend_container_image /
-#   TF_VAR_easy_auth_client_id / TF_VAR_easy_auth_client_secret も並ぶ
-#   （bootstrap 第 1 段 = frontend 未作成で apply する場合は
+# → TF_VAR_container_image / TF_VAR_database_url / TF_VAR_ops_container_image に加え、
+#   /chat 保護（#107）の TF_VAR_chat_disabled が並ぶこと（TF_VAR_administrator_password と
+#   TF_VAR_chat_api_key は ADR-0031 で変数ごと廃止。残っていると undeclared variable の警告）。
+#   frontend + Easy Auth（#194。§7）では TF_VAR_frontend_container_image も並ぶ
+#   （easy_auth_client_id / easy_auth_client_secret は TF_VAR_* では渡さない。
+#   terraform/ephemeral/terraform.tfvars に書く = ADR-0030 決定 3。
+#   bootstrap 第 1 段 = frontend 未作成で apply する場合は
 #   TF_VAR_frontend_container_image を意図的に未設定または空にする。§7-1）
 ```
 
@@ -288,7 +290,9 @@ test "$(gh variable list --json name,value --jq '.[] | select(.name == "PROBE_EN
 # レプリカに直接つながる（実測）ため、min-replicas の一時変更は不要
 az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops -o table  # Running 1 本を確認
 az containerapp exec  -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-ops --command bash
-#   コンテナ内で: psql "$DATABASE_URL" -c 'SELECT 1;' / \dt でマイグレーション結果を確認
+#   コンテナ内で: PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c 'SELECT 1;' / \dt で
+#   マイグレーション結果を確認（DSN にパスワードは無く、managed identity のトークンを渡す。ADR-0031 /
+#   entra-auth-cutover.md §5）
 ```
 
 - **旧手順（使うたびに min-replicas を 1 に上げ、終わったら 0 に戻す）の訂正（2026-08-22）**:
@@ -528,9 +532,10 @@ bootstrap）と決定 8（`READYZ_URL` の付け替え = ADR-0026 の順序）�
 
 前提:
 
-- §0-2 の `TF_VAR_*` が export 済み（`TF_VAR_easy_auth_client_id` /
-  `TF_VAR_easy_auth_client_secret` を含む。Entra 側の作成手順は
-  [entra-easy-auth-setup.md](./entra-easy-auth-setup.md)）
+- §0-2 の `TF_VAR_*` が export 済みで、`terraform/ephemeral/terraform.tfvars` に
+  `easy_auth_client_id` / `easy_auth_client_secret` が書かれている（ADR-0030 決定 3。
+  Entra 側の作成手順と、値を失った場合の復旧 / ローテーションは
+  [entra-easy-auth-setup.md](./entra-easy-auth-setup.md) / 同 §6 / §7）
 - §2 の 3 イメージ（backend / backend-ops / frontend）が同一 `DEPLOY_SHA` で push 済み
 
 ### 7-1. 第 1 段: `chat_disabled = true` かつ frontend 未作成で apply
@@ -551,7 +556,7 @@ az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 # 確認 2: 正しい key 付き POST /chat が 404 になること（鍵の有無にかかわらず LLM に到達しない）
 backend_fqdn=$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${backend_fqdn}/chat" \
-  -H "content-type: application/json" -H "X-API-Key: $TF_VAR_chat_api_key" \
+  -H "content-type: application/json" -H "X-API-Key: $(terraform -chdir=terraform/ephemeral output -raw chat_api_key)" \
   -d '{"message":"ping"}'   # → 404
 ```
 

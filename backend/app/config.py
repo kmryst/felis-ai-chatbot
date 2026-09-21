@@ -94,6 +94,23 @@ def _bool_env(name: str, default: bool) -> bool:
     raise InvalidEnvError(name, raw, "true か false を指定してください")
 
 
+# DB / Azure OpenAI の認証方式（Issue #275。ADR-0031）
+DB_AUTH_MODES = ("password", "managed-identity")
+AZURE_OPENAI_AUTH_MODES = ("api-key", "managed-identity")
+
+
+def _choice_env(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """列挙値の環境変数を読む。候補外は変数名を明示して即 fail する。"""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    if raw not in choices:
+        raise InvalidEnvError(
+            name, raw, "次のいずれかを指定してください: " + ", ".join(choices)
+        )
+    return raw
+
+
 def _require(name: str, missing: list[str]) -> str:
     value = os.environ.get(name)
     if value is None or value == "":
@@ -120,6 +137,14 @@ class Settings:
     # DB 接続文字列。secret を含むため repr=False（ログ・エラー画面への漏出防止）
     database_url: str = field(repr=False)
     db_connect_timeout_seconds: int
+    # DB の認証方式（Issue #275。ADR-0031）
+    # - password（既定）: DATABASE_URL のパスワードで接続する
+    # - managed-identity: 接続のたびに Entra のアクセストークンを取得して password に渡す。
+    #   DATABASE_URL にはパスワードを含めない。AZURE_CLIENT_ID が必須
+    db_auth_mode: str
+    # user-assigned managed identity の client ID（managed-identity モードで必須。
+    # Container Apps では複数 identity があり得るため明示する）
+    azure_client_id: str
     # LLM（既定はスタブ。提供元確定後に 'azure-openai' / 'openai' を追加）
     llm_provider: str
     llm_timeout_seconds: float
@@ -128,8 +153,13 @@ class Settings:
     llm_retry_max_delay_seconds: float
     # Azure OpenAI（LLM_PROVIDER=azure-openai のときのみ必須。ADR-0009）
     azure_openai_endpoint: str
-    # API キーは secret のため repr=False（ログ・エラー画面への漏出防止）
+    # API キーは secret のため repr=False（ログ・エラー画面への漏出防止）。
+    # AZURE_OPENAI_AUTH_MODE=managed-identity のときは不要（空のまま）
     azure_openai_api_key: str = field(repr=False)
+    # Azure OpenAI の認証方式（Issue #275。ADR-0031）
+    # - api-key（既定）: `api-key` ヘッダ。AZURE_OPENAI_API_KEY が必須
+    # - managed-identity: `Authorization: Bearer <Entra token>`。AZURE_CLIENT_ID が必須
+    azure_openai_auth_mode: str
     azure_openai_api_version: str
     azure_openai_chat_deployment: str
     azure_openai_embedding_deployment: str
@@ -152,11 +182,26 @@ class Settings:
         llm_provider = os.environ.get("LLM_PROVIDER", "stub")
         # Azure 用変数は azure-openai のときだけ必須（stub のままなら不要）
         azure_required = llm_provider == "azure-openai"
+        db_auth_mode = _choice_env("DB_AUTH_MODE", "password", DB_AUTH_MODES)
+        azure_openai_auth_mode = _choice_env(
+            "AZURE_OPENAI_AUTH_MODE", "api-key", AZURE_OPENAI_AUTH_MODES
+        )
+        # API キーは「azure-openai かつ api-key モード」のときだけ必須
+        azure_api_key_required = azure_required and azure_openai_auth_mode == "api-key"
+        # managed identity をどちらかで使うなら client ID は必須（起動時に fail させ、
+        # 実行時に system-assigned identity を探しに行って失敗する経路を作らない）
+        managed_identity_required = db_auth_mode == "managed-identity" or (
+            azure_required and azure_openai_auth_mode == "managed-identity"
+        )
         settings = cls(
             app_name=os.environ.get("APP_NAME", "felis-ai-chatbot-backend"),
             log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
             database_url=_require("DATABASE_URL", missing),
             db_connect_timeout_seconds=_int_env("DB_CONNECT_TIMEOUT_SECONDS", 2),
+            db_auth_mode=db_auth_mode,
+            azure_client_id=_require_if(
+                managed_identity_required, "AZURE_CLIENT_ID", missing
+            ),
             llm_provider=llm_provider,
             llm_timeout_seconds=_float_env("LLM_TIMEOUT_SECONDS", 10.0),
             llm_max_attempts=_int_env("LLM_MAX_ATTEMPTS", 3),
@@ -170,8 +215,9 @@ class Settings:
                 azure_required, "AZURE_OPENAI_ENDPOINT", missing
             ),
             azure_openai_api_key=_require_if(
-                azure_required, "AZURE_OPENAI_API_KEY", missing
+                azure_api_key_required, "AZURE_OPENAI_API_KEY", missing
             ),
+            azure_openai_auth_mode=azure_openai_auth_mode,
             # api-version は疎通実測済みの GA 版を既定にする（ADR-0009）
             azure_openai_api_version=os.environ.get(
                 "AZURE_OPENAI_API_VERSION", "2024-10-21"

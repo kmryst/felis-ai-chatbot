@@ -11,7 +11,46 @@ import logging
 
 import psycopg
 
+from app.entra_auth import AsyncTokenProvider
+
 logger = logging.getLogger("app.db")
+
+# DB パスワードの供給元（Issue #275。ADR-0031）。
+# - None（既定）: DATABASE_URL に含まれるパスワードで接続する（従来どおり）
+# - 設定あり: 接続のたびに呼び、返り値（Entra のアクセストークン）を password に渡す。
+#   DATABASE_URL にはパスワードを含めない
+# プロセス単位の設定にしているのは、接続を開く関数の呼び出し側（main.py の各 handler と
+# テストのフェイク）にパスワード供給を引き回さないため。起動時に main.py が設定する
+_password_provider: AsyncTokenProvider | None = None
+
+
+def set_password_provider(provider: AsyncTokenProvider | None) -> None:
+    """接続時のパスワード供給元を設定する（None で DATABASE_URL のパスワードに戻す）。"""
+    global _password_provider
+    _password_provider = provider
+
+
+async def connect_kwargs() -> dict[str, str]:
+    """psycopg の connect に追加で渡す引数（password の上書き）を返す。"""
+    if _password_provider is None:
+        return {}
+    return {"password": await _password_provider()}
+
+
+async def connect(
+    database_url: str, connect_timeout_seconds: int, **kwargs
+) -> psycopg.AsyncConnection:
+    """DB 接続を開く。パスワード供給元が設定されていれば password を上書きする。
+
+    kwargs の password は psycopg が DSN 内の値より優先する（conninfo と keyword の
+    マージ規則）。timeout は必ず明示する（timeout なしの外部通信を作らない）。
+    """
+    return await psycopg.AsyncConnection.connect(
+        database_url,
+        connect_timeout=connect_timeout_seconds,
+        **(await connect_kwargs()),
+        **kwargs,
+    )
 
 
 async def check_database_ready(database_url: str, connect_timeout_seconds: int) -> bool:
@@ -21,10 +60,7 @@ async def check_database_ready(database_url: str, connect_timeout_seconds: int) 
     （メッセージに DSN が含まれ得るため本文は出さない）。
     """
     try:
-        async with await psycopg.AsyncConnection.connect(
-            database_url,
-            connect_timeout=connect_timeout_seconds,
-        ) as conn:
+        async with await connect(database_url, connect_timeout_seconds) as conn:
             await conn.execute("SELECT 1")
         return True
     except Exception as exc:
@@ -71,9 +107,9 @@ async def fetch_observation_freshness(
       遅延を probe の時間予算より十分内側で打ち切る）
     """
     try:
-        async with await psycopg.AsyncConnection.connect(
+        async with await connect(
             database_url,
-            connect_timeout=connect_timeout_seconds,
+            connect_timeout_seconds,
             options=f"-c statement_timeout={connect_timeout_seconds * 1000}",
         ) as conn:
             cur = await conn.execute(_OBS_FRESHNESS_SQL)

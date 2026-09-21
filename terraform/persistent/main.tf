@@ -7,6 +7,10 @@ data "azurerm_resource_group" "dev" {
   name = var.resource_group_name
 }
 
+# Microsoft Entra 認証（authentication.tenant_id / Entra 管理者）に実行主体のテナント ID が要る
+# （値はコードに書かない。ephemeral 層の Easy Auth と同じ取り方）
+data "azurerm_client_config" "current" {}
+
 # ---------------------------------------------------------------------------
 # ネットワーク（VNet / 委任サブネット / private DNS zone。ADR-0018）
 # ---------------------------------------------------------------------------
@@ -142,8 +146,40 @@ resource "azurerm_postgresql_flexible_server" "main" {
   sku_name   = "B_Standard_B1ms"
   storage_mb = 32768
 
-  administrator_login    = var.administrator_login
-  administrator_password = var.administrator_password
+  # パスワード認証の管理者（ADR-0031）。通常運用では 3 つとも既定（null / null / 0）で、
+  # 何も送らない。
+  # - 既存サーバー: administrator_login は Optional + Computed のため null でも state の値
+  #   （felisadmin。ForceNew）が保たれ差分は出ない。旧 felisadmin ロールは DB 内に残り、managed identity の
+  #   ロールがその権限を継承している
+  # - 新規作成（Entra 認証のみ）: azurerm 5.1.0 の Create は password_auth_enabled = false のとき
+  #   administrator_login / administrator_password / administrator_password_wo の指定をエラーにするため、
+  #   null のままにする。新規 DB には felisadmin が存在しないので、DB ロールの初期化は
+  #   docs/operations/entra-auth-cutover.md §3「新規作成時」の手順（identity のロールを管理者として作る）
+  # - rollback（パスワード認証の一時的な再有効化）は Terraform ではなく az CLI で行う
+  #   （`az postgres flexible-server update --password-auth Enabled --admin-password …`。ARM 1 回で
+  #   認証の有効化と新パスワードの設定を同時に行う）。azurerm 5.1.0 の Update はパスワード認証を
+  #   有効にする apply で login と password 引数の両方を要求し、write-only の password 引数を
+  #   sensitive / ephemeral 変数で常設すると plan に空の in-place update が出続けるため（実測。
+  #   docs/verification/entra-auth/observations.md §10）、構成にはパスワード関連の引数を置かない。
+  #   手順と収束（修復後の apply が Disabled へ戻す）は entra-auth-cutover.md §6
+  administrator_login = var.administrator_login
+
+  # 認証方式（Issue #275。ADR-0031）。Microsoft Entra 認証を有効化し、アプリ・Job・ops は
+  # user-assigned managed identity のアクセストークンで接続する。
+  # - 有効化すると `PGAadAuth` 拡張が有効になりサーバーが再起動する（公式ドキュメント。
+  #   出典: https://learn.microsoft.com/en-us/azure/postgresql/security/how-to-configure-sign-in-azure-ad-authentication ）。
+  #   所要時間の実測は docs/verification/entra-auth/observations.md
+  # - password_auth_enabled = false: managed identity 経路（backend / Job / ops）の疎通を実測で
+  #   確認した後に閉じた（併存期間の手順と実測は docs/verification/entra-auth/observations.md）。
+  #   緊急時の戻し方は az CLI（上の administrator_login のコメントと entra-auth-cutover.md §6）。
+  #   この構成が正であり、修復後の通常 apply が Disabled へ戻す（収束）。修復まで apply しないこと
+  # - azurerm 5.1.0 でこのブロックは ForceNew ではない（ForceNew は administrator_login のみ。
+  #   `terraform providers schema -json` で確認。2026-09-19）。plan に replacement が出たら apply しない
+  authentication {
+    active_directory_auth_enabled = true
+    password_auth_enabled         = false
+    tenant_id                     = data.azurerm_client_config.current.tenant_id
+  }
 
   # 保持 7 日（既定のまま）: 検証期間 3 日 < 復旧ウィンドウ 7 日（ADR-0011）
   backup_retention_days = 7
@@ -225,6 +261,20 @@ resource "azurerm_postgresql_flexible_server" "main" {
   # VNet link が完成する前にサーバー作成を始めると名前解決の結線ができず失敗し得るため、
   # 依存を明示する（link はサーバーから属性参照されず、暗黙依存が発生しない）
   depends_on = [azurerm_private_dns_zone_virtual_network_link.pgsql]
+}
+
+# Microsoft Entra 管理者（Issue #275。ADR-0031）。プロジェクト所有者のアカウントを管理者にする。
+# 管理者は `pgaadauth_create_principal()` で managed identity のロールを作る主体で、azurerm では
+# サーバー本体とは独立したリソース（authentication ブロックと同時に apply できる）。
+# object ID / principal name はコードに書かず変数で渡す（個人のアカウント名をコミット対象に
+# 載せない。alert_email_address と同じ扱い）。tenant_id は実行主体の Entra テナント。
+resource "azurerm_postgresql_flexible_server_active_directory_administrator" "owner" {
+  server_name         = azurerm_postgresql_flexible_server.main.name
+  resource_group_name = data.azurerm_resource_group.dev.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  object_id           = var.entra_administrator_object_id
+  principal_name      = var.entra_administrator_principal_name
+  principal_type      = "User"
 }
 
 # CREATE EXTENSION は azure.extensions への allowlist 追加が前提（§2-1 No.27）。

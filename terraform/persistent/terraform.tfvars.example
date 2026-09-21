@@ -1,6 +1,18 @@
-# terraform.tfvars は gitignore 対象。実値はこのファイルをコピーして作る。
-# administrator_password はここにも書かず TF_VAR_administrator_password 環境変数で渡す。
-
+# terraform.tfvars は gitignore 対象。実値はこのファイルをコピーして作る（mode 600）。
+#
 # private access 化（ADR-0018）に伴い firewall_allowed_client_ips 変数は削除された。
-# 既存の terraform.tfvars に同名の行が残っていると undeclared variable の警告が出るので消すこと。
-# 現状 persistent 層に必須の tfvars 項目はない（resource_group_name / server_name は default あり）。
+# Microsoft Entra 認証への切替（ADR-0031）に伴い administrator_password 変数も削除された
+# （パスワード認証は無効。既存の terraform.tfvars に同名の行が残っていると undeclared variable の
+# 警告が出るので消すこと）。
+#
+# 必須: Microsoft Entra 管理者（プロジェクト所有者のアカウント）の 2 項目と、アラート通知先。
+# いずれも個人のアカウントに紐づく値なのでコミット対象には書かない。
+#   az ad signed-in-user show --query "{id:id, upn:userPrincipalName}" -o json
+entra_administrator_object_id      = "<object id (GUID)>"
+entra_administrator_principal_name = "<userPrincipalName。#EXT# を含む場合はそのまま>"
+alert_email_address                = "<notification email>"
+
+# resource_group_name / server_name / log_analytics_daily_quota_gb は default あり。
+# administrator_login は既定 null（Entra 認証のみの新規作成では指定しない。既存サーバーの値は state が保持する）。
+# パスワード認証の一時的な再有効化（rollback）は Terraform ではなく az CLI で行う
+# （docs/operations/entra-auth-cutover.md §6）。tfvars にパスワード関連の項目は無い。

@@ -15,13 +15,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import CHAT_API_KEY_MIN_LENGTH, Settings
-from app.db import check_database_ready, fetch_observation_freshness
-from app.llm.client import (
-    AzureOpenAIConfig,
-    LLMError,
-    RetryConfig,
-    create_llm_client,
+from app.credentials import (
+    azure_openai_config,
+    install_db_password_provider,
+    managed_identity,
 )
+from app.db import check_database_ready, fetch_observation_freshness
+from app.llm.client import LLMError, RetryConfig, create_llm_client
 from app.llm.prompts import NO_CONTEXT_NOTICE, build_context, build_messages
 from app.logging_setup import configure_logging
 from app.middleware import RequestContextMiddleware
@@ -37,6 +37,12 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 資格情報の供給元（Issue #275。ADR-0031）。managed-identity モードでは接続 /
+    # 呼び出しのたびに Entra トークンを取得する。既定（password / api-key）では
+    # azure-identity を読み込まない。組み立て規則は app.credentials が正本
+    # （ingest CLI と共有）
+    identity = managed_identity(settings)
+    install_db_password_provider(settings, identity)
     # LLM クライアントは境界モジュール（app.llm）でのみ組み立てる（ADR-0004）
     app.state.llm = create_llm_client(
         settings.llm_provider,
@@ -47,19 +53,9 @@ async def lifespan(app: FastAPI):
             max_delay_seconds=settings.llm_retry_max_delay_seconds,
         ),
         # azure-openai のときだけ組み立てる（stub では credential を含む
-        # オブジェクトを作らない）。endpoint / api_key の非空は Settings が
-        # 起動時に保証している（config.py）
-        azure=(
-            AzureOpenAIConfig(
-                endpoint=settings.azure_openai_endpoint,
-                api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
-                chat_deployment=settings.azure_openai_chat_deployment,
-                embedding_deployment=settings.azure_openai_embedding_deployment,
-            )
-            if settings.llm_provider == "azure-openai"
-            else None
-        ),
+        # オブジェクトを作らない）。endpoint / api_key / client ID の非空は
+        # Settings が起動時に保証している（config.py）
+        azure=azure_openai_config(settings, identity),
     )
     if not settings.chat_api_key:
         # fail-closed の可視化（値は出さない）。本番でこの警告が出ていたら設定漏れ
