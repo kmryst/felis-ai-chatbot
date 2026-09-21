@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:sli-local": "playwright test",
     "check:bundle-secrets": "node scripts/check-client-bundle-secrets.mjs"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^26",
     "@types/react": "^19",
     "@types/react-dom": "^19",
