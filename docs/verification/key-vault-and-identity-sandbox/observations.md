@@ -1,7 +1,7 @@
 # Key Vault 参照 / managed identity 検証環境（kv-sandbox）実測記録
 
 - 対象 Issue: #287（Refs #286 / #280）
-- 実施日: 2026-09-22（UTC 06:53 〜 08:20。項目 3 の二次観測のみ翌日）　実施者: kmryst
+- 実施日: 2026-09-22（UTC 06:53 〜 08:5x。8 項目すべて同日に完了）　実施者: kmryst
 - 検証環境: resource group `rg-kvsandbox-7x8cht`（japaneast）。
   Container Apps 環境だけは新規作成できず、既存の環境を参照した（後述）。
   felis 本体の Terraform state・コード・リソース設定には一切書き込んでいない
@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | 1 | Key Vault 参照 secret で Easy Auth サインイン | **可** | sidecar の `POST .../oauth2/v2.0/token` が `Completed with 200`。`LoginComplete` / `Authenticated: true`。サインイン後は `/` が HTTP 200（未サインインは 401） |
 | 2 | ローテーション追従（環境変数 / Easy Auth sidecar） | **可（両方とも自動追従）** | 2-a: t0 から 19 分 01 秒で環境変数が新値に。2-b: t0 から 7 分 28 秒で platform が同期し、サインインが回復。いずれも `RevisionRestartWithNewSecrets` による再起動を伴い、新 revision は作られない |
-| 3 | ロール剥奪の反映時間 | **可（21 秒以内）** | t0 = 2026-09-22T08:17:49Z に identity A の `Key Vault Secrets User` を剥奪 → t0 + 21 秒の probe 行で `kv_http` が 200 → 403。`token_exp` は同一値のまま（トークンは更新されていない） |
+| 3 | ロール剥奪の反映時間 | **可（21 秒以内）** | t0 = 2026-09-22T08:17:49Z → t0 + 21 秒の probe 行で `kv_http` が 200 → 403。`token_exp` は同一値のまま。二次観測: 08:43:53 の定期同期が `SyncingSecretFromAzureKeyVaultForContainerAppFailed` で失敗するが、アプリは旧値を保持して稼働を続ける |
 | 4 | `identitySettings.lifecycle = "None"` | **可** | azapi で in-place 更新（17 秒、replace 無し）。revision 再起動後に identity A は HTTP 400、B は 200。platform 側の Key Vault 参照は再起動後も解決 |
 | 5 | 複数 user-assigned identity で `client_id` 省略 | **可（公式どおり）** | `client_id` 省略で HTTP 400 `Unable to load the proper Managed Identity.`。A / B を明示すれば 200 |
 | 6 | `terraform state pull` に秘密値が残らない | **可（azurerm / azapi 両方）** | 解決済みの値の grep が 0 件。state には `keyVaultUrl` / `value_wo_version` / secret の URL だけが残る |
@@ -84,6 +84,16 @@ japaneast / japanwest / eastus の 3 リージョンで試し、いずれも HTT
   `managedEnvironmentId` / `container_app_environment_id` の**参照値としてのみ**現れた
 - 環境が Consumption ワークロードプロファイルかつ VNet 統合のため、アプリ側に
   `workloadProfileName = "Consumption"` の明示が要る（新規の Consumption 専用環境では不要だった項目）
+
+### 相乗りによる副作用（設定変更ではないが記録する）
+
+サンドボックスのアプリのコンソールログは、参照した Container Apps 環境のログ出力先の
+Log Analytics workspace に入る。サンドボックス用に作った `log-kvsandbox-7x8cht` は**使われなかった**。
+取り込み量は probe アプリが毎分 1 行、メインアプリが起動時に十数行で、30 分あたり計 265 行（実測）。
+RG を削除した時点でログの追加は止まり、既存の行は workspace の保持期間で消える。
+
+**項目 2 / 3 の観測はこの workspace に対して行った**（読み取りのみ）。
+相乗りする場合、観測先が自分の workspace ではなくなる点に注意する。
 
 ### felis 側への影響（作業前後の比較）
 
@@ -406,30 +416,58 @@ felis への含意:
 公式が警告する「約 24 時間のトークンキャッシュ」は**トークンの発行側**の話であり、
 **リソース側の認可には影響しない**（少なくとも Key Vault では）。
 
-### 二次観測（翌日まで継続）
+### 二次観測の結果（同日 08:43:53 に確定。当初「翌日」としていたが前倒しで採れた）
 
-| 観測 | t0 直後（08:19）の状態 |
-| --- | --- |
-| メインアプリの Key Vault 参照 secret | `az containerapp secret list --show-values` は **`len=40` のまま**。剥奪後も**既に解決済みの値は保持される** |
-| Easy Auth | `/.auth/login/aad` が HTTP 302。sidecar は動き続けている |
+**判定: (a) Container Apps は既に解決済みの旧値を保持し続ける。同期は失敗するが、アプリは停止しない。**
 
-**未確定（翌日に確認する）:** 次回の platform の Key Vault 同期（最大 30 分周期）で identity A が 403 になったとき、
-Container Apps が (a) 旧値を保持し続けるのか、(b) secret の解決に失敗してアプリが停止するのか。
-`ContainerAppSystemLogs_CL` の `SyncingSecretFromAzureKeyVaultForContainerApp*` の Reason（`Succeeded` か失敗系か）で判別できる。
+剥奪（t0 = 08:17:49Z）の後、**08:43:53Z** に platform の定期同期が走り、両アプリで失敗した。
 
-翌日の採取クエリ（ログは相乗り先の Container Apps 環境のログ出力先 workspace に入る）:
+| 時刻 (UTC) | アプリ | `Reason_s` |
+| --- | --- | --- |
+| 08:13:53 | `ca-kvsbx-7x8cht` / `ca-kvsbx-probe-7x8cht` | `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded`（剥奪前） |
+| **08:43:53** | **両方** | **`SyncingSecretFromAzureKeyVaultForContainerAppFailed`** |
 
-```bash
-az monitor log-analytics query -w <環境のログ出力先 workspace の customer ID> --analytics-query \
-  "ContainerAppSystemLogs_CL | where ContainerAppName_s startswith 'ca-kvsbx' \
-   | where Reason_s contains 'KeyVault' | project TimeGenerated, ContainerAppName_s, Reason_s, Log_s \
-   | order by TimeGenerated asc" -o table
+**定期同期の間隔は 08:13:53 → 08:43:53 でちょうど 30 分**（事実）。公式の「30 分以内」と整合する。
 
-az monitor log-analytics query -w <同上> --analytics-query \
-  "ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'ca-kvsbx-probe-7x8cht' and Log_s contains 'probe ts=' \
-   | extend exp = extract('token_exp=([0-9-]+)', 1, Log_s), http = extract('kv_http=([0-9]+)', 1, Log_s) \
-   | summarize mn=min(TimeGenerated), mx=max(TimeGenerated), n=count() by exp, http | order by mn asc" -o table
+失敗ログの本文（原文。subscription ID・テナント ID・principal ID は伏せる）:
+
+```text
+Failed to sync secret 'microsoft-provider-authentication-secret' from Azure Key Vault
+'https://<vault>.vault.azure.net/secrets/easyauth-client-secret' for ContainerApp 'ca-kvsbx-7x8cht'.
+Ensure the managed identity '<identity A の resource ID>' has the correct access policies or
+RBAC role assignments on the Key Vault.
+Error: GET request to Azure Key Vault ... returned error status: 403.
+body: {"error":{"code":"Forbidden","message":"Caller is not authorized to perform action on resource. ...
+Action: 'Microsoft.KeyVault/vaults/secrets/getSecret/action' ... Assignment: (not found) ...",
+"innererror":{"code":"ForbiddenByRbac"}}}
 ```
+
+日本語訳（要点）:
+
+> ContainerApp `ca-kvsbx-7x8cht` の secret `microsoft-provider-authentication-secret` を Azure Key Vault から同期できなかった。
+> managed identity が Key Vault に対して適切なアクセスポリシーまたは RBAC ロール割当を持っているか確認せよ。
+> Key Vault への GET が 403 を返した。呼び出し元は操作を許可されていない。
+> アクション: `Microsoft.KeyVault/vaults/secrets/getSecret/action`。割当: 見つからない。
+
+### 同期失敗後のアプリの状態（08:45:52 実測）
+
+| 確認 | 結果 |
+| --- | --- |
+| 両アプリの `provisioningState` / `runningStatus` | `Succeeded` / **`Running`**（停止していない） |
+| replica の `createdTime` | 両方とも **08:13:5x のまま**。**同期失敗では再起動されない**（成功時の `RevisionRestartWithNewSecrets` は出ない） |
+| `az containerapp secret list --show-values` | **`len=40`**。解決済みの値を保持している |
+| Easy Auth `/.auth/login/aad` | **HTTP 302**。sidecar は動き続けている |
+| probe の直接読み取り | `kv_http=403` が継続。`token_exp` は t0 前から一貫して同一値 |
+
+### felis への含意（追加）
+
+- **ロールを外しても、アプリはすぐには壊れない。** 既に解決済みの値を保持したまま動き続け、
+  30 分ごとの同期が静かに失敗する。**気づくには `SyncingSecretFromAzureKeyVaultForContainerAppFailed` を監視する必要がある**
+  （`ContainerAppSystemLogs_CL` の `Reason_s`）。#286 のアラート設計に入れる
+- 壊れるのは次に**新しい値が必要になったとき**（ローテーション）か、**replica が作り直されたとき**（推測。本作業では未検証）。
+  スケールアウトやノード入れ替えで初めて落ちる可能性がある
+- したがって「ロールを外してもアプリが動いているから問題ない」という確認は**無効**。
+  Key Vault への直接アクセスと同期ログの両方で確認する
 
 ### felis への含意（#280）
 
@@ -599,43 +637,63 @@ Microsoft 側（simonjj、2026-04-16）の返答（原文）:
 felis への含意: ADR-0031 が「将来の候補」とした Easy Auth の FIC 化は、この Issue が解決されるまで Container Apps では選べない。
 Easy Auth の client secret は当面 Key Vault に置いてローテーションする前提で #286 を進める。
 
-## 費用
+## 後片付け（2026-09-22 実施）
 
-- `usageDetails`（resource group 名に `kvsandbox` を含む行）: 2026-09-22 08:0x 時点で **0 行**（反映遅延があるため翌々日に再確認する）
-- 課金対象: Container App 2 つ（Consumption。メインアプリ 0.5 vCPU / 1 GiB、probe アプリ 0.25 vCPU / 0.5 GiB、いずれも min=max=1）。
-  稼働開始は 07:43:52。手順書 §1 の見積もりで最大 1.3 + 0.65 = 約 2 USD/日。
-  項目 3 の待ち（t0 = 08:17:49 から最大 24 時間）を含めて **2〜3 USD** の見込み
-- Key Vault は操作数のみ（作成・削除・purge を計 4 サイクル、secret 操作 15 件程度）。0.01 USD 未満（推測）
-- Container Apps 環境は新規作成していないため、環境そのものの課金は増えていない
-- 累計 5 USD の打ち切り基準には達していない
+項目 3 の二次観測が同日 08:43:53 に確定したため、当初「翌日」としていた後片付けを同日に実施した。
 
-## 残っているリソース（項目 3 の二次観測のため翌日まで残し、その後削除するもの）
-
-| 種類 | 名前 | 備考 |
+| 時刻 (UTC) | 操作 | 結果 |
 | --- | --- | --- |
-| Resource group | `rg-kvsandbox-7x8cht` | 中身: Container App `ca-kvsbx-7x8cht`（+ `authConfigs/current`）/ `ca-kvsbx-probe-7x8cht`、Log Analytics `log-kvsandbox-7x8cht`（未使用）、identity `id-kvsandbox-a-7x8cht` / `id-kvsandbox-b-7x8cht`、Key Vault `kv-sbx-7x8cht` |
-| Key Vault（RG 削除後） | `kv-sbx-7x8cht` | `az keyvault purge` が要る（soft-delete 7 日） |
-| Entra app registration | `kvsandbox-easyauth-7x8cht` | `az ad app delete`。service principal も同時に消える。redirect URI 設定済み |
-| ロール割当 | 実行アカウント → `Key Vault Secrets Officer`（vault スコープ）。identity A → `Key Vault Secrets User` は項目 3 で剥奪済み | RG 削除で消える |
-| リソースプロバイダー登録 | `Microsoft.KeyVault`、`Microsoft.Quota` | 登録のまま残す（課金なし。#286 で必要） |
+| 08:46:44 → 08:47:48 | `az group delete -n rg-kvsandbox-7x8cht --yes` | 成功（64 秒）。Container App 2 つ / Key Vault / identity ×2 / Log Analytics / ロール割当が削除 |
+| 08:47:51 | `az keyvault list-deleted` | `kv-sbx-7x8cht`（japaneast）が soft-delete 状態で 1 件 |
+| 08:47:51 → 08:48:21 | `az keyvault purge -n kv-sbx-7x8cht -l japaneast` | 成功（30 秒） |
+| 08:48:33 | `az ad app delete --id <appId>` | 成功。service principal も同時に削除 |
 
-**Container App を削除しても、参照していた Container Apps 環境には影響しない**（環境は `data` source で読んだだけで、
-Terraform の管理対象に入っていない。`terraform destroy` の対象にもならない）。
+削除前に対象名を確認した（`az resource list -g rg-kvsandbox-7x8cht`）。
+RG の中身は 6 件で、**`felisaichatbot` を含む名前は 0 件**。タグは `purpose=kv-sandbox` / `delete_after=2026-09-25`。
 
-### 相乗りによる副作用（設定変更ではないが記録する）
+### 消し残しの確認（すべて読み取り。08:48:33 実行）
 
-サンドボックスのアプリのコンソールログは、参照した Container Apps 環境のログ出力先（felis の Log Analytics workspace）に入る。
-サンドボックス用に作った `log-kvsandbox-7x8cht` は**使われていない**。
-取り込み量は probe アプリが毎分 1 行、メインアプリが起動時に十数行で、30 分あたり計 265 行（実測）。
-RG を削除すればログの追加は止まり、既存の行は workspace の保持期間（felis 側の設定）で消える。
+| 確認コマンド | 期待 | 結果 |
+| --- | --- | --- |
+| `az group list` で `rg-kvsandbox*` / `ME_cae-kvsandbox*` | 0 件 | **0 件** |
+| `az resource list --tag purpose=kv-sandbox` | 0 件 | **0 件** |
+| `az keyvault list-deleted` | 0 件 | **0 件** |
+| `az ad app list --display-name kvsandbox-easyauth-7x8cht` | 0 件 | **0 件** |
+| `az role assignment list --all` で scope に `kvsandbox` を含むもの | 0 件 | **0 件** |
+
+ローカルの Terraform state（`terraform.tfstate` / `*.tfplan`）も削除した。秘密値は含まれていなかった（項目 6 で確認済み）。
+
+`Microsoft.KeyVault` / `Microsoft.Quota` のリソースプロバイダー登録は**残した**（登録自体に課金は無く、#286 で再び必要になる）。
+
+### 後片付け後の felis 側の確認（08:48:53、すべて読み取り）
+
+| 確認 | 結果 |
+| --- | --- |
+| `az group list` の `felisaichatbot` 系 RG | **4 件**（`ME_cae-...` を含む）。作業前と同じ |
+| 相乗りした Container Apps 環境の設定 JSON | **作業前のベースラインと完全一致**（後片付け後も差分なし） |
+| felis の Container App 3 件 | `provisioningState: Succeeded`。`latestRevisionName` も作業前と同じ |
+| felis frontend `/readyz` | **HTTP 200** |
+
+**Container App を削除しても、参照していた Container Apps 環境には一切影響しなかった**（実測）。
+環境は `data` source で読んだだけで Terraform の管理対象ではなく、`terraform destroy` の対象にもならない。
+
+## 費用（実測）
+
+- `usageDetails`（resource group 名に `kvsandbox` を含む行、直近 3 日、`metric=actualcost`）: **0 行 / 0 USD**（08:48 時点）
+- 課金の反映には 1〜2 日の遅延があるため、**2026-09-24 に同じクエリで再確認する**
+- 稼働実績: Container App 2 つが 07:43:52 〜 08:47:48 の **約 64 分**（メインアプリ 0.5 vCPU / 1 GiB、probe アプリ 0.25 vCPU / 0.5 GiB、いずれも min=max=1）。
+  手順書 §1 の単価（active 0.000024 USD/vCPU 秒・0.000003 USD/GiB 秒）で全量 active 換算しても **0.1 USD 未満**（推測）
+- Key Vault は操作数のみ（vault の作成・削除・purge を計 4 サイクル、secret 操作 20 件程度）。0.01 USD 未満（推測）
+- Log Analytics への取り込みはサンドボックス側の workspace では 0。相乗り先 workspace への取り込みは約 1 時間分で数 MB
+- **手順書 §1 の見積もり 3〜5 USD に対し、実績は 0.2 USD 未満の見込み**（推測。確定は 2026-09-24 の再確認）
 
 ## 中止条件の該当
 
-- 参照した Container Apps 環境の設定に**差分は出ていない**（作業前後の JSON が完全一致）
-- felis frontend `/readyz` は作業前・phase 2 apply 直後・項目 4 の再起動後のいずれも **HTTP 200**
+- 参照した Container Apps 環境の設定に**差分は出ていない**（作業前・apply 直後・作業後・**後片付け後**の 4 回比較でいずれも完全一致）
+- felis frontend `/readyz` は作業前・phase 2 apply 直後・項目 4 の再起動後・**後片付け後**のいずれも **HTTP 200**
 - `terraform plan` に `felisaichatbot` を含む名前の**作成・変更・削除は 1 件も無い**
   （出現するのは `managedEnvironmentId` / `container_app_environment_id` の参照値のみ。変更対象 3 件はすべて `ca-kvsbx-`）
-- 費用は累計 5 USD 未満。想定外のメーターなし
+- 費用は累計 5 USD 未満（実測 0 USD、確定は 2026-09-24 の再確認）。想定外のメーターなし
 - 手順書 §10 の A〜I にはいずれも該当していない
 - 項目 1 は対話サインインを要したが、Playwright の永続プロファイルに残っていた Entra セッションで完了した。エージェントは資格情報を入力していない
 
