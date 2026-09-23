@@ -532,6 +532,15 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "kv_secret_sync_failed
   window_duration      = "PT1H"
   enabled              = true
 
+  # 作成時のクエリ検証を省く。ContainerAppSystemLogs_CL は Container Apps 環境（ephemeral 層）が
+  # ログを送り始めて初めて workspace に作られるテーブルで、revive runbook（destroy → persistent apply
+  # → ephemeral apply）では persistent apply の時点で存在しない。検証が有効（azurerm 5.1.0 の既定は
+  # false = 検証する）だと、テーブルが無いことでこのルールの作成が失敗し、persistent apply 全体が止まる。
+  # クエリ自体は 2026-09-23 に、Issue #287 の検証用アプリが既存 workspace に残した実際の同期失敗 2 件
+  # （2026-09-22T08:43:53Z）に対して同じ条件で 2 件返ることを確認済み
+  # （docs/verification/key-vault-secret-references/observations.md）。
+  skip_query_validation = true
+
   criteria {
     query                   = <<-QUERY
       ContainerAppSystemLogs_CL
