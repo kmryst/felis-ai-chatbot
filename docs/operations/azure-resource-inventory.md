@@ -884,6 +884,7 @@ PostgreSQL 側の Entra 管理者（`principal_type = "User"`。所有者のア�
 
 Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md) 決定 4。
 Key Vault（persistent 層）の作成後、secret を作る apply の前に手動で作る（台帳「再現手順」の手順 0）。
+2026-09-23T09:27Z に作成し、確認コマンドで 2 件のみであることを確認した（[実施記録](../verification/key-vault-secret-references/observations.md)）。
 
 | 項目 | あるべき値 |
 | --- | --- |

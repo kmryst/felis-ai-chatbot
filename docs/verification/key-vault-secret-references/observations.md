@@ -29,17 +29,34 @@
 
 ephemeral 層は PR 1 で変更しない。
 
-### apply とロール割当（ユーザーが実施。未実施）
+### apply とロール割当（2026-09-23 実施）
 
-以下は PR 1 のマージ前にユーザーが実施し、結果を本節に追記する。
+ユーザーの確認（plan の結果を提示して承認を得る）を 2 回挟み、Claude Code が実行した。
+apply はいずれも `plan -out` で保存した plan ファイルに対して行い、plan ファイルは実施後に削除した（コミットしていない）。
+事前に `terraform -chdir=terraform/persistent init -reconfigure` で、ローカルの backend 設定を移行先の Storage Account に合わせた（state の移行は無し）。
 
-| 順 | 操作 | 期待 | 結果 |
+| 順 | 時刻 (UTC) | 操作 | 結果 |
 | --- | --- | --- | --- |
-| 1 | persistent apply（`-target=azurerm_key_vault.main -target=azurerm_monitor_diagnostic_setting.key_vault`） | 2 added | 未実施 |
-| 2 | ロール割当 2 件（台帳 §B #15 の「作り直す手順」） | 作成成功。2 分待つ | 未実施 |
-| 3 | persistent apply（全体） | 2 added（secret / log search alert） | 未実施 |
-| 4 | 台帳 §B #15 の確認コマンド | Key Vault スコープに 2 件のみ | 未実施 |
-| 5 | `az keyvault secret show -n chat-api-key` の長さ（値は出さない） | 64 | 未実施 |
-| 6 | persistent 層の state に chat API キーの値が無いこと（`grep -F -f` で判定） | PASS | 未実施 |
-| 7 | 両層の `terraform plan -detailed-exitcode` | 両層とも exit 0 | 未実施 |
-| 8 | 実行中のアプリへの影響が無いこと（frontend `/readyz`、各 Container App の `latestRevisionName`） | 200 / 変化なし | 未実施 |
+| 1 | 09:24:15 → 09:27:24 | persistent apply（`-target=azurerm_key_vault.main -target=azurerm_monitor_diagnostic_setting.key_vault`） | `Apply complete! Resources: 2 added, 0 changed, 0 destroyed.` Key Vault の作成 2 分 39 秒、diagnostic setting 18 秒 |
+| 2 | 09:27:29 → 09:27:37 | ロール割当 2 件（台帳 §B #15 の「作り直す手順」） | 作成成功。`Key Vault Secrets User`（ServicePrincipal）/ `Key Vault Secrets Officer`（User） |
+| 3 | 09:30:30 → 09:30:43 | persistent apply（全体） | `Apply complete! Resources: 2 added, 0 changed, 0 destroyed.` secret 1 秒、log search alert 4 秒。secret の作成は 403 にならなかった |
+
+**手順からの逸脱（ロール反映の待ち時間）**: 手順では割当後に 2 分待つとしていたが、固定の待機の代わりに
+「data plane の操作（`az keyvault secret list`）が通るまで 10 秒間隔で試す」待ち方にした。
+所有者アカウントの `Key Vault Secrets Officer` は、割当の完了（09:27:37）から約 10 秒後（09:27:47）の最初の試行で通った。
+Issue #287 の実測（84 秒以内）より速い。全体の apply（手順 3）は割当から約 3 分後に行った。
+identity 側の `Key Vault Secrets User` の反映は、Container Apps から参照する PR 2 で確認する。
+
+### 確認（2026-09-23。読み取りのみ）
+
+| 確認 | 期待 | 結果 |
+| --- | --- | --- |
+| Key Vault スコープに直接付いたロール割当（台帳 §B #15 の確認コマンド） | 2 件のみ | PASS: `Key Vault Secrets User` / ServicePrincipal、`Key Vault Secrets Officer` / User の 2 件。継承分を含めても Key Vault 系のロールはこの 2 件だけ |
+| Key Vault の設定（`az keyvault show`） | RBAC / soft-delete 7 日 / purge protection 無効 | PASS: `enableRbacAuthorization: true`、`enableSoftDelete: true`、`softDeleteRetentionInDays: 7`、`enablePurgeProtection: null` |
+| `chat-api-key` の有効状態（`--query "attributes.enabled"`）と長さ（値は出さない） | `true` / 64 | PASS: `true` / 64 |
+| persistent 層の state に chat API キーの値が無い（`grep -F -f`。空入力・JSON 不正・grep エラーは FAIL 扱い） | PASS | PASS。`azurerm_key_vault_secret.chat_api_key` の `value` は空、`value_wo` は null、`value_wo_version` は 1 |
+| diagnostic setting | `AuditEvent` が Log Analytics へ | PASS: `diag-kv-felisaichatbot-dev` |
+| log search alert `alert-kv-secret-sync-failed` | 有効、15 分 / 1 時間、Sev2 | PASS |
+| persistent 層の `terraform plan -detailed-exitcode` | exit 0 | PASS: `No changes.`（`ephemeral "random_password"` が plan ごとに値を作っても差分にならない） |
+| ephemeral 層の `terraform plan -detailed-exitcode` | exit 0 | 未実施（ローカルの環境変数ファイルの値が要るため、ユーザーが実行する。PR 1 は ephemeral 層を変更していない） |
+| 実行中のアプリへの影響 | 無し | PASS: frontend `/readyz` が HTTP 200。Container App 3 件は `provisioningState: Succeeded` で、最新 revision の作成日時は 2026-09-19〜20 のまま（本作業で revision は作られていない） |
