@@ -462,3 +462,125 @@ resource "azurerm_monitor_metric_alert" "pgsql_storage_percent_80" {
     action_group_id = azurerm_monitor_action_group.email.id
   }
 }
+
+# ---------------------------------------------------------------------------
+# Azure Key Vault（Container Apps の secret の Key Vault 参照化。Issue #286 / ADR-0032）
+# ---------------------------------------------------------------------------
+
+# Easy Auth のクライアントシークレットと chat API キーの置き場（ADR-0032）。
+# ephemeral 層ではなくこの層に置く: soft-delete は既定で有効かつ無効化できず、soft-delete 中は
+# 同名で再作成できない（出典: https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview ）。
+# destroy / 再作成を前提にする ephemeral 層（ADR-0015）とは寿命が合わない。
+# ephemeral 層の Container Apps は data "azurerm_key_vault" で参照する（terraform_remote_state は
+# 使わない。ADR-0015 の 7）。
+#
+# ロール割当（Container Apps の identity に Key Vault Secrets User、所有者アカウントに
+# Key Vault Secrets Officer。いずれもこの Key Vault のスコープ）は Terraform に含めない。
+# roleAssignments/write を Terraform 実行主体に持たせない境界（ADR-0012）を維持するため、
+# 手動作成 + 台帳 azure-resource-inventory.md §B で管理する（AcrPull / Cognitive Services
+# OpenAI User と同じ扱い）。Secrets Officer が付くまで下の azurerm_key_vault_secret は作れない
+# （data plane の setSecret が 403 になる。2026-09-22 実測）ため、初回は Key Vault 本体だけを
+# -target で先に apply し、ロール割当を挟んでから全体を apply する（台帳の revive runbook）。
+resource "azurerm_key_vault" "main" {
+  name                = var.key_vault_name
+  resource_group_name = data.azurerm_resource_group.dev.name
+  location            = data.azurerm_resource_group.dev.location
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+
+  # アクセス制御は Azure RBAC（access policy は使わない）。
+  rbac_authorization_enabled = true
+
+  # soft-delete の保持は最小の 7 日、purge protection は無効（ADR-0032 決定 6）。
+  # purge protection を有効にすると保持期間が過ぎるまで同名で作り直せず、revive runbook
+  # （destroy 後に apply だけで戻す）が成立しない。誤削除で失う値は、Easy Auth は Entra で再発行、
+  # chat API キーは Terraform で再生成できる。
+  soft_delete_retention_days = 7
+  purge_protection_enabled   = false
+
+  # firewall / private endpoint は付けない（Container Apps は trusted services に無く、
+  # 有効化には VNet ルールか private endpoint が要る。ADR-0018 と同じ判断軸で別 Issue。ADR-0032 決定 7）
+  public_network_access_enabled = true
+}
+
+# 誰の identity がいつ secret を読んだかの証跡（AuditEvent）を Log Analytics に送る。
+# 診断設定が無いと SecretGet などは記録されない（2026-09-22 の検証環境で確認）。
+# メトリクス（ServiceApiHit など）は platform metrics として診断設定なしで読めるので送らない。
+resource "azurerm_monitor_diagnostic_setting" "key_vault" {
+  name                       = "diag-kv-felisaichatbot-dev"
+  target_resource_id         = azurerm_key_vault.main.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+
+  enabled_log {
+    category = "AuditEvent"
+  }
+}
+
+# Key Vault 参照の同期失敗を検知する log search alert（ADR-0032 決定 5）。
+# identity のロールが外れても、Container Apps は解決済みの値を保持して動き続け、30 分ごとの
+# 同期だけが SyncingSecretFromAzureKeyVaultForContainerAppFailed で失敗する（2026-09-22 実測）。
+# アプリの死活監視では検知できないため、ContainerAppSystemLogs_CL の Reason_s を直接見る。
+# ウィンドウ 1 時間 / 評価 15 分: 同期周期 30 分に対して、失敗 1 回を取りこぼさない幅。
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "kv_secret_sync_failed" {
+  name                 = "alert-kv-secret-sync-failed"
+  resource_group_name  = data.azurerm_resource_group.dev.name
+  location             = data.azurerm_resource_group.dev.location
+  scopes               = [azurerm_log_analytics_workspace.main.id]
+  description          = "Container Apps failed to sync a secret from Azure Key Vault (SyncingSecretFromAzureKeyVaultForContainerAppFailed). Apps keep running on the cached value, so this is the only signal until the next restart or rotation. Check the Key Vault Secrets User role assignment of the referencing identity."
+  severity             = 2
+  evaluation_frequency = "PT15M"
+  window_duration      = "PT1H"
+  enabled              = true
+
+  criteria {
+    query                   = <<-QUERY
+      ContainerAppSystemLogs_CL
+      | where Reason_s == "SyncingSecretFromAzureKeyVaultForContainerAppFailed"
+      | summarize FailedCount = count() by ContainerAppName_s
+    QUERY
+    time_aggregation_method = "Total"
+    metric_measure_column   = "FailedCount"
+    operator                = "GreaterThan"
+    threshold               = 0
+
+    dimension {
+      name     = "ContainerAppName_s"
+      operator = "Include"
+      values   = ["*"]
+    }
+
+    failing_periods {
+      minimum_failing_periods_to_trigger_alert = 1
+      number_of_evaluation_periods             = 1
+    }
+  }
+
+  auto_mitigation_enabled = true
+
+  action {
+    action_groups = [azurerm_monitor_action_group.email.id]
+  }
+}
+
+# chat API キー（/chat 保護。Issue #107）を生成し、Key Vault に write-only argument で書く。
+# 【ephemeral について】ここの ephemeral は Terraform 言語の ephemeral resource（値を state / plan に
+# 保存しない。 https://developer.hashicorp.com/terraform/language/resources/ephemeral ）で、
+# 層名の ephemeral（ADR-0015）とは無関係。
+# 仕様は ephemeral 層の旧 random_password.chat_api_key と同じ（長さ 64 の英数字。backend の最小長 32 を
+# 十分上回り、記号を含めないのはヘッダ値・シェル経由の扱いを単純にするため）。
+ephemeral "random_password" "chat_api_key" {
+  length  = 64
+  special = false
+}
+
+# value_wo は write-only argument で、値は state に入らない（2026-09-22 実測）。
+# ephemeral resource は plan / apply のたびに新しい値を作るが、Azure に送られるのは
+# value_wo_version が変わったときだけ。ローテーションは chat_api_key_version を +1 して apply する
+# （新バージョンは Container Apps が 30 分以内に取り込み、revision を再起動する。ADR-0032 決定 3）。
+# data "azurerm_key_vault_secret" は値を state に読み込むので使わない。
+resource "azurerm_key_vault_secret" "chat_api_key" {
+  name             = "chat-api-key"
+  key_vault_id     = azurerm_key_vault.main.id
+  value_wo         = ephemeral.random_password.chat_api_key.result
+  value_wo_version = var.chat_api_key_version
+}
