@@ -58,5 +58,13 @@ identity 側の `Key Vault Secrets User` の反映は、Container Apps から参
 | diagnostic setting | `AuditEvent` が Log Analytics へ | PASS: `diag-kv-felisaichatbot-dev` |
 | log search alert `alert-kv-secret-sync-failed` | 有効、15 分 / 1 時間、Sev2 | PASS |
 | persistent 層の `terraform plan -detailed-exitcode` | exit 0 | PASS: `No changes.`（`ephemeral "random_password"` が plan ごとに値を作っても差分にならない） |
-| ephemeral 層の `terraform plan -detailed-exitcode` | exit 0 | 未実施（ローカルの環境変数ファイルの値が要るため、ユーザーが実行する。PR 1 は ephemeral 層を変更していない） |
+| ephemeral 層の `terraform plan -detailed-exitcode` | exit 0 | exit 2（PR 1 とは無関係の既存の差分。下記「ephemeral 層の plan」） |
 | 実行中のアプリへの影響 | 無し | PASS: frontend `/readyz` が HTTP 200。Container App 3 件は `provisioningState: Succeeded` で、最新 revision の作成日時は 2026-09-19〜20 のまま（本作業で revision は作られていない） |
+
+### ephemeral 層の plan（ユーザーが実施）
+
+`terraform -chdir=terraform/ephemeral plan -detailed-exitcode` は **exit 2（`2 to change`）** だった。
+
+- 差分の内容: `azurerm_container_app.main`（backend serving）と `azurerm_container_app_job.embed_backfill` に、環境変数 3 件（`AZURE_OPENAI_API_VERSION=2024-10-21`、`AZURE_OPENAI_CHAT_DEPLOYMENT=chat`、`AZURE_OPENAI_EMBEDDING_DEPLOYMENT=embedding`）を追加する in-place update のみ
+- 原因: ローカルの環境変数ファイルでは `TF_VAR_azure_openai_*` を設定しているが、直前の ephemeral apply はそれを設定せずに実行されていた。3 件の値はいずれも `backend/app/config.py` の既定値と同じで、適用しても動作は変わらない
+- PR 1 との関係: PR 1 は ephemeral 層を変更していないため、PR 1 が原因の差分ではない。PR 2 の ephemeral apply で同時に取り込まれる（PR 2 の plan で、この 3 件が差分に含まれることを確認する）
