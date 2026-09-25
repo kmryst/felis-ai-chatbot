@@ -77,3 +77,28 @@ variable "entra_administrator_principal_name" {
     error_message = "entra_administrator_principal_name は空にできません。"
   }
 }
+
+variable "key_vault_name" {
+  description = <<-DESC
+    Azure Key Vault 名（グローバル一意、3〜24 文字。ADR-0013 の予約名。Issue #286 / ADR-0032）。
+    作成前に checkNameAvailability で空きを確認済み（2026-09-23）。取れない場合は ADR-0030 と
+    同じ規則で `02` サフィックスを付ける。
+  DESC
+  type        = string
+  default     = "kv-felisaichatbot-dev"
+}
+
+variable "chat_api_key_version" {
+  description = <<-DESC
+    chat API キー（azurerm_key_vault_secret.chat_api_key の value_wo）のバージョン番号（ADR-0032）。
+    +1 して apply すると新しいキーが生成され、Key Vault に新バージョンとして書かれる
+    （= ローテーション）。値そのものは state にも tfvars にも入らない。
+  DESC
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.chat_api_key_version >= 1 && floor(var.chat_api_key_version) == var.chat_api_key_version
+    error_message = "chat_api_key_version は 1 以上の整数を指定してください（ローテーションごとに +1 する）。"
+  }
+}

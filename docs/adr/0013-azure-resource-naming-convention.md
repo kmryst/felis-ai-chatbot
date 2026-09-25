@@ -64,6 +64,15 @@ Azure リソースの命名規則を次のとおり制定し、**未作成のリ
 1. frontend Container App（ADR-0027 / Issue #194）は `ca-felisaichatbot-dev-front`
    （`ca` + qualifier `-front`。ops 用 `-ops` と同じ付け方）として予約・作成する。27/32 文字で上限内
 
+### 追記（2026-09-23。ADR-0032 / Issue #286 による Key Vault の作成）
+
+1. 本 ADR で予約した `kv-felisaichatbot-dev` を、そのまま Key Vault の名前として使う（persistent 層。ADR-0032）。
+   作成前に `Microsoft.KeyVault/checkNameAvailability` で `nameAvailable: true` を確認した（2026-09-23）ため、
+   ADR-0030 の `02` サフィックスは付けない
+2. 付随するリソースの名前: diagnostic setting は `diag-kv-felisaichatbot-dev`（CAF 略語表に diagnostic setting の項目は無く、
+   対象リソース名に `diag-` を付けた記述的な名前）、log search alert は `alert-kv-secret-sync-failed`
+   （既存のメトリクスアラート `alert-pgsql-*` と同じ付け方。台帳 §B #11）
+
 ### 既存リソースの例外（改名しない）
 
 `felisaichatbot-openai-dev` は規則どおりなら `oai-felisaichatbot-dev` だが、**改名・再作成しない**。

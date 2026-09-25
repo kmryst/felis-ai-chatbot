@@ -16,3 +16,7 @@ alert_email_address                = "<notification email>"
 # administrator_login は既定 null（Entra 認証のみの新規作成では指定しない。既存サーバーの値は state が保持する）。
 # パスワード認証の一時的な再有効化（rollback）は Terraform ではなく az CLI で行う
 # （docs/operations/entra-auth-cutover.md §6）。tfvars にパスワード関連の項目は無い。
+
+# Key Vault（ADR-0032 / Issue #286）の変数 key_vault_name / chat_api_key_version は default あり。
+# chat_api_key_version を +1 して apply すると chat API キーがローテーションされる
+# （Key Vault に新バージョンが書かれ、Container Apps が 30 分以内に取り込む）。値は tfvars にも state にも入らない。

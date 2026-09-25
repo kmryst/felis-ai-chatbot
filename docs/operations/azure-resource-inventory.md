@@ -25,6 +25,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | リソース | 管理区分 | 日々の運用 | プロジェクト終了時 | 残した場合の課金 |
 | --- | --- | --- | --- | --- |
 | RG ×3 / OIDC アプリ + federated credential / マネージド ID / ロール割当 3 件（§B #2〜#4 / #6〜#9。**#6 / #7 は移行先では未作成** = ADR-0030 決定 4） | 管理外 | 触らない | 残す | $0 |
+| Key Vault スコープのロール割当 2 件（§B #15。`Key Vault Secrets User` / `Key Vault Secrets Officer`。Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md)） | 管理外 | 触らない | Key Vault の destroy 後に残っていれば削除する（§B #15） | $0 |
 | Azure OpenAI + デプロイ 2 件（§B #1） | 管理外 | 触らない | 残す | アイドル $0（トークン従量。ADR-0014 (d)） |
 | tfstate Storage Account + container（§B #5） | 管理外 | 触らない | 残す | 誤差（数 MB の LRS blob） |
 | PostgreSQL Flexible Server（**private access**。ADR-0018。**geo 冗長バックアップ有効**。ADR-0019） / `azure.extensions` | persistent | 残す（**stop しない**。ADR-0017） | destroy | 無料枠内（本書「12か月無料枠」節。ネットワーク方式で無料枠が変わるかは未確定 = ADR-0018。geo 冗長有効でバックアップ消費は 2 倍だが、実測約 2.7 MiB × 2 は無料枠 32 GB の桁外れ下 = ADR-0019） |
@@ -32,6 +33,7 @@ Terraform 管理下のリソースには `terraform plan` による差分検出�
 | Log Analytics workspace | persistent | 残す | destroy | 未確認（取込ゼロなら取込課金 0、保持 30 日は取込料金に含まれるが、放置時の総額は実測していない） |
 | ACR / Container Apps Environment（VNet 統合・workload profiles） / Container App / **frontend Container App `ca-felisaichatbot-dev-front`（Easy Auth 付き公開面。Issue #194 / ADR-0027）** / ops Container App / migration Job（ADR-0018。**2026-08-22 ステップ B で作成済み・稼働中** = [実測記録](../verification/vnet-cutover/observations.md)） / **obs cron Job `caj-felisaichatbot-dev-obs`**（Schedule トリガー・毎分。Issue #104。**2026-08-23T07:14:58Z 作成・稼働中** = [フェーズ 1 実測記録](../verification/observation-phase1/observations.md)） | ephemeral | 残す（**夜間 destroy しない**。ops 経路が唯一の DB アクセス経路のため。ADR-0018 追記・計画書 §3-6。destroy は失効前の最終 teardown のみ = [ADR-0020](../adr/0020-credit-window-resource-strategy.md) / [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9、2026-09-15 目安（当初 2026-09-16 想定 → フェーズ 1 の 72h 化で 2026-09-03〜09-04 へ前倒し → 2026-08-30 の作業窓再設定（8/27〜9/14）で 9/15 に確定 = 計画 §10-5） 予定） | destroy | ACR 約 5 USD/月（0.1666 USD/日 × 30。ADR-0015 実測単価。**請求実績は 0.145 USD/日** = 2026-08-30 取得の usageDetails で `Basic Registry Unit` 8/19〜8/29 合計 1.305 USD）。CAE 稼働中は custom VNet の managed resources（Standard LB + static public IP）分が加わる（24h 換算含め ADR-0018。destroy で止まる）。Container App / ops / Job 群は **2026-08-27 分から `microsoft.app` のメーターが `usageDetails` に現れるようになり、リソース単位の按分ができる**（2026-08-30 取得。**8/26 以前は 1 件も無い**という当時の実測 = [フェーズ 1 実測記録 §9-4](../verification/observation-phase1/observations.md) は誤りではなく、前提のほうが変わった）。8 月合計 **1.145 USD**（`Standard vCPU Active` 0.692 / `Standard vCPU Idle` 0.089 / `Standard Memory Idle` 0.185 / `Standard Memory Active` 0.180）。リソース別の累計は `ca-felisaichatbot-dev` 0.455 / `ca-felisaichatbot-dev-ops` 0.279 / `caj-felisaichatbot-dev-obs` 0.412。**8/27 に出始めた理由は未検証**（`- Free` 対のメーターが 1 件も無く、無料付与枠の消費過程を `usageDetails` から観測できない。月次付与枠の使い切りは**推測**であって確認していない）。**平常運転の日額は確定していない**: 8/28 は HA ドリル日かつ測定用 Monitor の停止忘れ（約 14h）で汚染、8/29 はその残り（推定 ~0.5h・終了時刻未確認）を含む。追跡は Issue #115（同 Issue のコールドスタートコスト実測は、外形監視 probe が設計頻度で動いていないため未達） |
 | Action Group `ag-felisaichatbot-dev-email` / メトリクスアラート 5 件（§B #10 / #11。Issue #145 で 3 件、Issue #148 で `storage_free` 系 2 件。**2026-08-27 作成・稼働中**。az CLI 作成分を **2026-08-27 に `terraform import` で persistent 層へ移行**（Issue #151 / [ADR-0022](../adr/0022-import-azure-monitor-into-terraform.md)。リソース ID は不変 = 発火試験の証跡は有効なまま）） | persistent | 残す | destroy | **未実測**（Action Group のメール通知には無料枠があり、メトリクスアラートはルール単位の月額課金だが、いずれも本プロジェクトで請求実績を確認していない。Issue #145 時点では単価を裏取りしていないため数字を書かない） |
+| Key Vault `kv-felisaichatbot-dev`（Standard・RBAC 権限モデル・soft-delete 7 日・purge protection 無効）+ secret `chat-api-key`（`value_wo`。値は state に入らない）/ diagnostic setting `diag-kv-felisaichatbot-dev`（`AuditEvent` → Log Analytics）/ log search alert `alert-kv-secret-sync-failed`（Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md)） | persistent | 残す | destroy（`features.key_vault` により purge まで進む） | **未実測**（Key Vault は操作数課金、log search alert はルール単位の月額、`AuditEvent` は Log Analytics の取り込み。Issue #286 の PR 4 で 7 日間の実測から月額を推定して記入する） |
 
 上表のほかに、VNet の作成に伴い Azure が自動作成する `NetworkWatcher_japaneast`（RG `NetworkWatcherRG`）が
 サブスクリプションに存在する（2026-09-19 読み取り実測）。Terraform 管理外で本台帳の管理対象にも含めない（触らない）。
@@ -73,6 +75,7 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 | `Microsoft.CognitiveServices` | Registered | Azure OpenAI（§B #1）。移行先では手動作成の前に登録 |
 | `Microsoft.Insights` | Registered | Action Group / メトリクスアラート（§B #10 / #11。persistent 層が作る）。移行先で NotRegistered だったため登録 |
 | `Microsoft.AlertsManagement` | Registered | メトリクスアラートに付随。移行先で登録 |
+| `Microsoft.KeyVault` | Registered | Key Vault（ADR-0032。persistent 層が作る）。2026-09-22 の検証環境（Issue #287）で登録し、2026-09-23 に Registered を読み取りで確認 |
 
 ## 12か月無料枠（PostgreSQL Flexible Server）
 
@@ -286,6 +289,8 @@ terraform -chdir=terraform/persistent destroy
 
 # 3. 残存確認
 az resource list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず（マネージド ID を除く）
+az keyvault list-deleted --query "[].name" -o tsv       # 空になるはず（destroy が purge まで行う。残っていれば az keyvault purge）
+az role assignment list --all --query "[?contains(scope, 'Microsoft.KeyVault/vaults/kv-felisaichatbot-dev')]" -o table   # 空になるはず（残っていれば §B #15 の割当を削除）
 az monitor metrics alert list -g rg-felisaichatbot-dev-tf -o table   # 空になるはず
 az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空になるはず
 ```
@@ -300,7 +305,8 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 | # | 手順 | 所要時間 |
 | --- | --- | --- |
-| 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics。Entra 認証のみで作成され `felisadmin` は存在しない = ADR-0031） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
+| 0 | Key Vault を先に作る: `terraform -chdir=terraform/persistent apply -target=azurerm_key_vault.main -target=azurerm_monitor_diagnostic_setting.key_vault` → §B #15 のロール割当 2 件を作る（反映は実測 84 秒以内。2 分待つ）。Secrets Officer が無いと手順 1 の `azurerm_key_vault_secret` が 403 で失敗する（ADR-0032） | 未実測（Key Vault の作成は数十秒見込み） |
+| 1 | `terraform -chdir=terraform/persistent apply`（PostgreSQL + Log Analytics + Key Vault の secret / log search alert。Entra 認証のみで作成され `felisadmin` は存在しない = ADR-0031。log search alert `alert-kv-secret-sync-failed` は `skip_query_validation = true` で作る。対象テーブル `ContainerAppSystemLogs_CL` は手順 2 で Container Apps 環境がログを送り始めるまで新しい workspace に存在せず、作成時のクエリ検証が有効だとこの apply が失敗するため。テーブルができるまでの評価の扱い（クエリ失敗になるか、0 件として扱われるか）は未検証） | 約 7 分（2026-08-21 実測。サーバー本体 5m32s。[restore-drill/observations.md](../verification/restore-drill/observations.md)） |
 | 1' | Entra 管理者のトークンで ops から `pgaadauth_create_principal('id-felisaichatbot-dev', true, false)`（managed identity のロールを管理者として作る。[entra-auth-cutover.md §3「新規作成時」](./entra-auth-cutover.md)） | 未実測（数分見込み） |
 | 2 | ephemeral apply（2 段階: ACR を `-target` で先行 → serving / ops イメージ push → 全体 apply。`terraform/ephemeral/main.tf` 冒頭コメントと [vnet-integration-cutover.md](./vnet-integration-cutover.md) §2） | 旧構成実測 約 4〜5 分（2026-08-21。[walking-skeleton/observations.md](../verification/walking-skeleton/observations.md)）。VNet 統合 CAE の作成時間は未実測（ADR-0018 後に更新） |
 | 3 | Alembic マイグレーション適用（`az containerapp job start` で `caj-felisaichatbot-dev-migrate` を起動。[vnet-integration-cutover.md](./vnet-integration-cutover.md) §3） | 未実測（数分見込み） |
@@ -330,6 +336,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 | 12 | Easy Auth 用アプリ登録 `felis-ai-chatbot-dev-easyauth` + service principal + テストユーザー 2 名 | Entra ID アプリ登録 / service principal / ユーザー | Entra ID（リージョン概念なし） | SP が Entra オブジェクトを作れない（ADR-0012 の権限境界。ADR-0027） |
 | 13 | `Cognitive Services OpenAI User` ロール割当（#8 → #1）+ #1 の `disableLocalAuth = true` | Role assignment / Azure OpenAI の設定 | #1 のスコープ | #1 が管理外（ADR-0014）のため、その設定と割当も管理外（ADR-0031） |
 | 14 | PostgreSQL 内の DB ロール `id-felisaichatbot-dev`（Entra principal。`felisadmin` を継承） | PostgreSQL ロール（SQL で作成） | `pgsql-felisaichatbot-dev-02` の `postgres` DB | Terraform / ARM の対象外（DB 内オブジェクト。ADR-0031） |
+| 15 | Key Vault スコープのロール割当 2 件（`Key Vault Secrets User` → #8、`Key Vault Secrets Officer` → 所有者アカウント） | Role assignment | Key Vault `kv-felisaichatbot-dev` のスコープ | SP がロール割当を作れない（ADR-0012）。ADR-0032 |
 
 理由区分の意味:
 
@@ -556,7 +563,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
   ```
 
 - **固有のリスク・注意**:
-  - 確認結果は **2 件**（AcrPull = RG スコープ、Cognitive Services OpenAI User = #1 スコープ。2026-09-19 以降。#13）。これより**多い**のは「誰かがこの ID に権限を足した」兆候。**少ない**なら pull か Azure OpenAI 呼び出しが壊れる予兆。どちらも即調査する
+  - 確認結果は **2 件**（AcrPull = RG スコープ、Cognitive Services OpenAI User = #1 スコープ。2026-09-19 以降。#13）。**#15 の割当を作った後は 3 件**（Key Vault Secrets User = Key Vault スコープ。Issue #286）。これより**多い**のは「誰かがこの ID に権限を足した」兆候。**少ない**なら pull か Azure OpenAI 呼び出しが壊れる予兆。どちらも即調査する
   - #8 を再作成した場合、この割当は旧 principalId 宛てのまま残り**効かない**（assignee が Unknown と表示される）。#8 の手順どおり割当も作り直し、孤児の割当は削除する
 
 ---
@@ -873,10 +880,57 @@ PostgreSQL 側の Entra 管理者（`principal_type = "User"`。所有者のア�
 - **固有のリスク・注意**: identity #8 を作り直すと object ID が変わり、このロールでは認証できなくなる（`DROP ROLE` して作り直す）。
   Entra 管理者（所有者のアカウント）は managed identity と独立に接続でき、復旧経路になる
 
+## 15. Key Vault スコープのロール割当 2 件（`Key Vault Secrets User` / `Key Vault Secrets Officer`）
+
+Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md) 決定 4。
+Key Vault（persistent 層）の作成後、secret を作る apply の前に手動で作る（台帳「再現手順」の手順 0）。
+2026-09-23T09:27Z に作成し、確認コマンドで 2 件のみであることを確認した（[実施記録](../verification/key-vault-secret-references/observations.md)）。
+
+| 項目 | あるべき値 |
+| --- | --- |
+| 割当 1 | `Key Vault Secrets User` → #8 `id-felisaichatbot-dev`（principal type: ServicePrincipal）。Container Apps が Key Vault 参照を解決するため（secret の値の読み取り） |
+| 割当 2 | `Key Vault Secrets Officer` → 所有者アカウント（principal type: User）。Terraform の `azurerm_key_vault_secret`（`value_wo` の書き込みと refresh）と、人による `az keyvault secret set` のため。subscription の Owner だけでは data plane の操作はできない（2026-09-22 実測） |
+| スコープ | Key Vault `kv-felisaichatbot-dev`（リソース個体。RG ではない） |
+| 上記以外 | Key Vault スコープに直接付いた割当は無いこと。上位スコープから継承される Key Vault 系の data plane ロールも無いこと |
+
+- **なぜ管理外か**: CI 用 SP は `Microsoft.Authorization/roleAssignments/write` を持たない（ADR-0012）。#9 / #13 と同じ扱い
+- **スコープが Key Vault 個体である理由**: Key Vault は persistent 層にあり、ACR（#9）のように作り直しを繰り返さない。
+  RG スコープにすると、同じ RG に将来置く別の Key Vault にも権限が及ぶ
+- **作り直す手順**（Key Vault が存在する前提）:
+
+  ```bash
+  KV_ID=$(az keyvault show -n kv-felisaichatbot-dev -g rg-felisaichatbot-dev-tf --query id -o tsv)
+  PRINCIPAL_ID=$(az identity show --name id-felisaichatbot-dev \
+    --resource-group rg-felisaichatbot-dev-tf --query principalId -o tsv)
+  az role assignment create --role "Key Vault Secrets User" \
+    --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal --scope "$KV_ID"
+  az role assignment create --role "Key Vault Secrets Officer" \
+    --assignee-object-id "$(az ad signed-in-user show --query id -o tsv)" --assignee-principal-type User --scope "$KV_ID"
+  ```
+
+- **確認コマンド**（読み取りのみ）:
+
+  ```bash
+  KV_ID=$(az keyvault show -n kv-felisaichatbot-dev -g rg-felisaichatbot-dev-tf --query id -o tsv)
+  # Key Vault スコープに直接付いた割当: Key Vault Secrets User（ServicePrincipal）と Key Vault Secrets Officer（User）の 2 件のみのはず
+  az role assignment list --scope "$KV_ID" --query "[?scope=='$KV_ID'].{role:roleDefinitionName, type:principalType}" -o table
+  # 継承分を含めて Key Vault 系のロールを確認: 上の 2 件以外が出ないこと
+  az role assignment list --scope "$KV_ID" --include-inherited \
+    --query "[?contains(roleDefinitionName, 'Key Vault')].{role:roleDefinitionName, type:principalType, scope:scope}" -o table
+  ```
+
+- **固有のリスク・注意**:
+  - `Key Vault Secrets User` が外れても、Container Apps は解決済みの値で動き続け、30 分ごとの同期だけが
+    `SyncingSecretFromAzureKeyVaultForContainerAppFailed` で失敗する（2026-09-22 実測）。検知は log search alert
+    `alert-kv-secret-sync-failed`（persistent 層）が担う。剥奪の確認はアプリの挙動ではなく、Key Vault への直接アクセスと同期ログで行う
+  - ロール剥奪は数十秒で効く（2026-09-22 実測 21 秒以内）。#280 で identity を付け替えるときは「新 identity に付与 → 同期成功を確認 → 旧 identity から剥奪」の順にする
+  - #8 を作り直した場合、割当 1 は旧 principalId 宛てのまま残り効かない。#9 と同じく作り直し、孤児の割当は削除する
+
 ---
 
 ## 関連
 
+- [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md) — Key Vault 参照（#15 の正本）
 - [ADR-0031](../adr/0031-entra-managed-identity-auth-and-remaining-secrets.md) — Entra 認証への切替（#13 / #14 の正本）
 - [ADR-0009](../adr/0009-azure-openai-as-llm-provider.md) — Azure OpenAI 採用と手動作成の経緯
 - [ADR-0012](../adr/0012-least-privilege-oidc-sp-and-dedicated-terraform-rg.md) — SP 最小権限・RG 分離（#3 / #6 / #7 の設計判断）

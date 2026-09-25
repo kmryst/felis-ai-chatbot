@@ -14,6 +14,13 @@ terraform {
       # 明示 pin（範囲指定にしない）。更新は Dependabot / 明示的な PR で行う。
       version = "5.1.0"
     }
+    # chat API キーを ephemeral resource（random_password）で生成し、Key Vault に write-only
+    # argument（value_wo）で書く（Issue #286 / ADR-0032）。ephemeral resource は random 3.7.0 以降。
+    # ephemeral 層と同じ明示 pin。
+    random = {
+      source  = "hashicorp/random"
+      version = "3.9.1"
+    }
   }
 }
 
@@ -40,6 +47,20 @@ provider "azurerm" {
       # apply が同名 workspace を作れず成立しない。誤 destroy 時の 14 日間の復旧の窓
       # （ADR-0016 起案時の判断）より runbook の成立を優先する（改訂の経緯は ADR-0016 追記）。
       permanently_delete_on_destroy = true
+    }
+
+    key_vault {
+      # 既定値に依存せず明示する（ADR-0032 決定 6。Key Vault は soft-delete 保持 7 日・purge protection 無効）。
+      # destroy では soft-delete を経由して purge まで行い、同名の即時再作成を可能にする
+      # （revive runbook は「destroy 後に apply だけで戻す」前提。Log Analytics と同じ理由）。
+      # 失う値は再発行（Easy Auth）・再生成（chat API キー）できる。
+      purge_soft_delete_on_destroy          = true
+      purge_soft_deleted_secrets_on_destroy = true
+      # soft-delete 中の同名リソースを黙って回復しない。回復は旧い値・旧い設定を持ち込むため、
+      # 作り直しは purge を挟んだ新規作成に限る（az keyvault create は同名で回復してしまう。
+      # 2026-09-22 実測）。soft-delete 中の同名があれば apply はエラーで止まる。
+      recover_soft_deleted_key_vaults = false
+      recover_soft_deleted_secrets    = false
     }
   }
   # subscription_id はコードに書かず ARM_SUBSCRIPTION_ID 環境変数

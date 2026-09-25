@@ -17,3 +17,18 @@ output "log_analytics_workspace_id" {
   description = "Log Analytics workspace のリソース ID（ログ確認クエリで使う）"
   value       = azurerm_log_analytics_workspace.main.id
 }
+
+output "key_vault_name" {
+  description = "Azure Key Vault 名（読み取りコマンドとロール割当のスコープ指定で使う）"
+  value       = azurerm_key_vault.main.name
+}
+
+output "key_vault_id" {
+  description = "Azure Key Vault のリソース ID（ロール割当の --scope に使う）"
+  value       = azurerm_key_vault.main.id
+}
+
+output "key_vault_uri" {
+  description = "Azure Key Vault の URI（Container Apps の Key Vault 参照 URL の組み立てに使う。末尾 / 付き）"
+  value       = azurerm_key_vault.main.vault_uri
+}
