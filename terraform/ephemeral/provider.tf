@@ -21,12 +21,9 @@ terraform {
       source  = "Azure/azapi"
       version = "2.12.0"
     }
-    # /chat 保護の API キーを Terraform 側で生成する（random_password。Issue #275 / ADR-0031）。
-    # 人が扱う秘密値から外し、state にだけ存在させる
-    random = {
-      source  = "hashicorp/random"
-      version = "3.9.1"
-    }
+    # hashicorp/random は Issue #286（ADR-0032）で外した: /chat 保護の API キーの生成は
+    # persistent 層（ephemeral resource random_password + value_wo）に移り、この層に
+    # random provider を使う資源が無くなったため
   }
 }
 
