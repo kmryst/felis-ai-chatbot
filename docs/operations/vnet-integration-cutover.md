@@ -556,7 +556,7 @@ az containerapp revision show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-d
 # 確認 2: 正しい key 付き POST /chat が 404 になること（鍵の有無にかかわらず LLM に到達しない）
 backend_fqdn=$(terraform -chdir=terraform/ephemeral output -raw container_app_fqdn)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://${backend_fqdn}/chat" \
-  -H "content-type: application/json" -H "X-API-Key: $(terraform -chdir=terraform/ephemeral output -raw chat_api_key)" \
+  -H "content-type: application/json" -H "X-API-Key: $(az keyvault secret show --vault-name kv-felisaichatbot-dev -n chat-api-key --query value -o tsv)" \
   -d '{"message":"ping"}'   # → 404
 ```
 
@@ -700,23 +700,38 @@ terraform -chdir=terraform/ephemeral apply
 
 いずれも Terraform 変数の戻しだけで完結し、`terraform destroy` / `state rm` は使わない。
 
-### 7-7. `CHAT_API_KEY_CONFIG_CHECKSUM` 不一致時の再 apply 収束
+### 7-7. rotation 中に frontend と backend の `chat-api-key` が一致しないときの収束確認
 
-rotation の apply が片側の反映後に失敗した場合（partial apply）、自動 rollback はされない。
-frontend / backend serving 両 app の 100% traffic revision の template に**同一 checksum**が
-あることを確認し、不一致なら再 apply で収束させる（ADR-0027「付随する決定」）。
+chat API キーは Key Vault `kv-felisaichatbot-dev` の secret `chat-api-key` をバージョン無しで参照する
+（Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md)。
+旧 `CHAT_API_KEY_CONFIG_CHECKSUM` は廃止）。ローテーション（persistent 層の `chat_api_key_version` を +1 して apply）の後、
+Container Apps は 30 分以内に新バージョンを取り込み、参照する revision を再起動する。両 app の再起動は独立に進むため、
+その間は frontend と backend の `chat-api-key` が一致しない期間（[ADR-0027](../adr/0027-frontend-azure-deployment-and-public-surface.md) で混在窓と呼んでいる期間）が
+生じ、`/chat` が 401 になり得る。収束は次で確認する。
 
 ```bash
+# 1. 両 app が同じ Key Vault secret を参照していること
 for app in ca-felisaichatbot-dev ca-felisaichatbot-dev-front; do
-  rev=$(az containerapp show -g rg-felisaichatbot-dev-tf -n "$app" \
-    --query "properties.latestRevisionName" -o tsv)
-  az containerapp revision show -g rg-felisaichatbot-dev-tf -n "$app" --revision "$rev" \
-    --query "properties.template.containers[0].env[?name=='CHAT_API_KEY_CONFIG_CHECKSUM'].value" -o tsv
+  az containerapp show -g rg-felisaichatbot-dev-tf -n "$app" \
+    --query "properties.configuration.secrets[?name=='chat-api-key'].keyVaultUrl" -o tsv
 done
-# → 2 行が同一値でなければ terraform -chdir=terraform/ephemeral apply を再実行して収束させる。
-# 切替中は「新 key の frontend × 旧 key の backend」（またはその逆）の混在窓が残る
-# （静的共有鍵の原理的 limitation = ADR-0027 検討した選択肢 8。緊急遮断は CHAT_DISABLED が担う）
+# → 2 行とも https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key
+
+# 2. 両 app の解決済みの値が Key Vault の最新バージョンと一致すること（値は出さず sha256 先頭 12 桁だけ比較）
+az keyvault secret show --vault-name kv-felisaichatbot-dev -n chat-api-key --query value -o tsv | tr -d '\n' | sha256sum | cut -c1-12
+for app in ca-felisaichatbot-dev ca-felisaichatbot-dev-front; do
+  az containerapp secret list -g rg-felisaichatbot-dev-tf -n "$app" --show-values \
+    --query "[?name=='chat-api-key'].value" -o tsv | tr -d '\n' | sha256sum | cut -c1-12
+done
+# → 3 行が同じ値
+
+# 3. 直近の同期が成功していること
+#    ContainerAppSystemLogs_CL | where Reason_s startswith "SyncingSecret" | top 10 by TimeGenerated
 ```
+
+一致しないときの復旧の順序は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の
+PR 2 の節（原因の解消 → Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...`）→ 上の 2 で一致確認 → 必要なら
+`az containerapp revision restart`）。緊急遮断は従来どおり `CHAT_DISABLED` が担う。
 
 ## PITR ドリル（Day 4）への影響
 
