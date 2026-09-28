@@ -68,3 +68,77 @@ identity 側の `Key Vault Secrets User` の反映は、Container Apps から参
 - 差分の内容: `azurerm_container_app.main`（backend serving）と `azurerm_container_app_job.embed_backfill` に、環境変数 3 件（`AZURE_OPENAI_API_VERSION=2024-10-21`、`AZURE_OPENAI_CHAT_DEPLOYMENT=chat`、`AZURE_OPENAI_EMBEDDING_DEPLOYMENT=embedding`）を追加する in-place update のみ
 - 原因: ローカルの環境変数ファイルでは `TF_VAR_azure_openai_*` を設定しているが、直前の ephemeral apply はそれを設定せずに実行されていた。3 件の値はいずれも `backend/app/config.py` の既定値と同じで、適用しても動作は変わらない
 - PR 1 との関係: PR 1 は ephemeral 層を変更していないため、PR 1 が原因の差分ではない。PR 2 の ephemeral apply で同時に取り込まれる（PR 2 の plan で、この 3 件が差分に含まれることを確認する）
+
+## PR 2: chat API キーの Container Apps secret を Key Vault 参照に切り替える
+
+対象: backend serving `ca-felisaichatbot-dev` と frontend `ca-felisaichatbot-dev-front` の secret `chat-api-key`。
+Easy Auth の `microsoft-provider-authentication-secret` は PR 3。計画は PR 本文の「ユーザーが実施する手順」。
+
+### 変更内容（ephemeral 層）
+
+- `random_password.chat_api_key`、変数 `chat_api_key_rotation`、output `chat_api_key`、env `CHAT_API_KEY_CONFIG_CHECKSUM`、
+  `required_providers.random` を削除。`data "azurerm_key_vault" "main"`（変数 `key_vault_name`）と、
+  バージョン無しの secret ID `local.chat_api_key_secret_id` を追加し、両 app の `secret "chat-api-key"` を
+  `key_vault_secret_id` + `identity`（`id-felisaichatbot-dev`）に変更
+- 同時に取り込む既存の差分（PR 1 の記録参照）: serving と embed Job への `AZURE_OPENAI_API_VERSION` /
+  `AZURE_OPENAI_CHAT_DEPLOYMENT` / `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`（値は backend の既定と同じ）
+
+### 事前確認（2026-09-28。すべて読み取り）
+
+| 確認 | 結果 |
+| --- | --- |
+| 3 つの Container App の secret | serving: `database-url` / `chat-api-key`、frontend: `microsoft-provider-authentication-secret` / `chat-api-key`、ops: `database-url`。いずれも値方式（`keyVaultUrl` 無し） |
+| 稼働 revision | `ca-felisaichatbot-dev--0000004` / `ca-felisaichatbot-dev-front--0000003` / `ca-felisaichatbot-dev-ops--0000001`。3 件とも `Running` |
+| Key Vault の secret | `chat-api-key` 1 件（enabled、2026-09-23 作成） |
+| Key Vault スコープのロール割り当て | `Key Vault Secrets User`（identity）/ `Key Vault Secrets Officer`（所有者）の 2 件のみ |
+| `ContainerAppSystemLogs_CL` | 現在の workspace に存在（直近 1 日 14,000 行超）。log search alert の評価対象テーブルは既にある |
+| azurerm 5.1.0 の `azurerm_container_app.secret` の schema | set。属性 `name` / `identity` / `key_vault_secret_id` / `value`。Key Vault 参照の secret は state の `value` が空文字になり、plan 差分にならない（2026-09-22 実測） |
+| `terraform validate`（ephemeral。別 `TF_DATA_DIR` で `init -backend=false`） | `Success! The configuration is valid.` `.terraform.lock.hcl` から random の項が消える |
+
+### plan（2026-09-28。ユーザーが実施）
+
+`terraform -chdir=terraform/ephemeral init` の後、`plan -detailed-exitcode -out=tfplan-pr2-cutover` は exit 2、
+`Plan: 0 to add, 3 to change, 1 to destroy.`、`Changes to Outputs: - chat_api_key`。
+
+| 差分 | 内容 |
+| --- | --- |
+| `random_password.chat_api_key` | destroy（state からの削除のみ） |
+| `azurerm_container_app.main` | in-place。secret `chat-api-key` が `value` → `key_vault_secret_id` + `identity`、env `CHAT_API_KEY_CONFIG_CHECKSUM` 削除、env `AZURE_OPENAI_API_VERSION=2024-10-21` / `AZURE_OPENAI_CHAT_DEPLOYMENT=chat` / `AZURE_OPENAI_EMBEDDING_DEPLOYMENT=embedding` 追加（既存の差分） |
+| `azurerm_container_app.front[0]` | in-place。secret `chat-api-key` の同じ変更、env `CHAT_API_KEY_CONFIG_CHECKSUM` 削除 |
+| `azurerm_container_app_job.embed_backfill[0]` | in-place。env 3 件追加 |
+| その他（`azapi_resource.front_auth`、ops、Job、ingress） | 差分なし |
+
+plan の `secret` ブロックは set 型かつ sensitive のため両 app とも「- 2 / + 2」と表示される。`terraform show -json` の
+`resource_changes[].change.before / after` を name ごとに（値は sha256 先頭 12 桁と長さだけに加工して）比較し、
+`database-url`（main）と `microsoft-provider-authentication-secret`（front）は before / after で同一（同じハッシュ・同じ長さ・Key Vault 参照なし）、
+変わるのは `chat-api-key` だけであることを確認してから apply した。
+
+`init` について: `required_providers` から random を外しても、state に `random_password` が残っている間は init が
+state 側の要求として random 3.9.1 を取得し、`.terraform.lock.hcl` に random の項が戻る。apply 後の init で外れる（下記）。
+
+### apply と確認（2026-09-28 実施）
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 07:37:58 | 切替前の基準（読み取り） | serving `ca-felisaichatbot-dev--0000004`（replica 2026-09-20T08:46:40Z）/ frontend `ca-felisaichatbot-dev-front--0000003`（replica 2026-09-20T08:46:58Z）。frontend `/readyz` 200。両 app の `chat-api-key` の sha256 先頭 12 桁は `6e0b695a2ecf`（旧 `random_password` の値）、Key Vault の `chat-api-key` は `a934ba6b5413` |
+| 07:40:00 → 07:40:39 | `terraform -chdir=terraform/ephemeral apply tfplan-pr2-cutover`（ユーザー） | `Apply complete! Resources: 0 added, 3 changed, 1 destroyed.` `random_password` destroy 0 秒 → main と embed Job が同時に開始、main 18 秒 → front 開始、17 秒 → embed Job 24 秒 |
+| 07:40:12 〜 07:40:14 | Key Vault `AuditEvent`（`AzureDiagnostics`） | `SecretGet` `chat-api-key` が identity `id-felisaichatbot-dev` の client ID から `OK` で複数回（取り込み遅延があり、07:41 の時点では 0 行、07:47 の再確認で見えた） |
+| 07:40:13 / 07:40:29 | `ContainerAppSystemLogs_CL` | `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded` が serving / frontend の順。以後も成功のみ |
+| 07:40:14 / 07:40:30 | 新 revision の replica | serving `ca-felisaichatbot-dev--0000005`、frontend `ca-felisaichatbot-dev-front--0000004`。両方 `Running`。**rotation 中に frontend と backend の `chat-api-key` が一致しない期間（ADR-0027 で混在窓と呼んでいる期間）の上限は、両 app の新 replica の作成時刻の差 = 約 16 秒** |
+| 07:41:09 | 構成（`az containerapp show`） | PASS: 両 app の `chat-api-key` が `https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key` + identity `id-felisaichatbot-dev`。`database-url` / `microsoft-provider-authentication-secret` は値方式のまま |
+| 07:41〜07:42 | frontend `/readyz` 10 秒間隔 6 回 | PASS: すべて 200 |
+| 07:42 | 値の一致（sha256 先頭 12 桁のみ） | PASS: Key Vault / serving / frontend の 3 つとも `a934ba6b5413` |
+| 07:45:25 | 機能確認（ユーザーのブラウザ） | PASS: 所有者アカウントで Entra に手動サインイン → チャット画面に戻る → チャット 1 往復成功（応答は最後までストリーミング）。backend の access log は `POST /chat` `200`。07:38〜07:50Z に両 app のコンソールログに `401` / `Unauthorized` は 0 件 |
+| 07:47 | state（`state pull` を jq で加工。値は出さない） | PASS: `random_password` 0 件、output `chat_api_key` 無し、両 app の `chat-api-key` は `key_vault_secret_id` あり・`identity` あり・`value` の長さ 0 |
+
+切替 apply による `/readyz` のダウンタイムは観測されなかった（10 秒間隔の 6 回と Container Apps のログのみで、秒単位の計測ではない = ADR-0023）。
+`/chat` は切替中の実トラフィックが無く、401 の実測は無い。
+
+### lock ファイルの整理と plan 収束（2026-09-28。ユーザーが実施）
+
+apply 後に `terraform -chdir=terraform/ephemeral init` を再実行すると、state に `random_password` が無くなったため
+random が不要になり、`.terraform.lock.hcl` から random の項（21 行）が外れた（init の出力に
+"Terraform has made some changes to the provider dependency selections"）。続く `plan -detailed-exitcode` は `No changes.`（exit 0）。
+lock ファイルの変更はこの PR に含める。
+
+（以下、rollback・restart の再取得確認・ローテーション・アラート発火試験の結果は実施後に追記する）
