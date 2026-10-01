@@ -141,4 +141,52 @@ random が不要になり、`.terraform.lock.hcl` から random の項（21 行�
 "Terraform has made some changes to the provider dependency selections"）。続く `plan -detailed-exitcode` は `No changes.`（exit 0）。
 lock ファイルの変更はこの PR に含める。
 
-（以下、rollback・restart の再取得確認・ローテーション・アラート発火試験の結果は実施後に追記する）
+### rollback 1 回（Key Vault 参照 → 直接値 → Key Vault 参照。2026-09-28 実施。すべて az CLI）
+
+rollback 用の値は apply の前（07:37Z）に Key Vault から scratchpad の mode 600 ファイル（改行なし、64 バイト）へ取り出しておいたものを使い、
+Key Vault へは読みに行かない（Key Vault の読み取り障害が切替失敗の原因だった場合でも戻せるようにするため）。
+直接値が入っている間は ephemeral 層で Terraform（plan を含む）を実行しない（値方式の secret の値が state に書かれるため）。
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 08:52:07 | 外形監視の停止 `gh variable set PROBE_ENABLED --body false`（restart を可用性 SLI に入れない） | `false` を確認 |
+| 08:52:26 → 08:52:56 | `az containerapp secret set ... --secrets "chat-api-key=<値ファイルの内容>" --output none`（serving 08:52:42、frontend 08:52:56） | 両 app の `keyVaultUrl` が空（値方式に戻った）。値は Key Vault と同じなのでアプリの挙動は変わらない |
+| 08:52:59 / 08:53:01 | `az containerapp revision restart`（serving `--0000005` / frontend `--0000004`） | `Restart succeeded`。replica は 08:53:00Z / 08:53:02Z に再作成され、08:54:25Z に両方 `Running`。新 revision は作られない |
+| 08:53〜08:54 | frontend `/readyz` 10 秒間隔 6 回 | すべて 200（restart 直後の 1 分間でも 503 は観測されなかった。10 秒間隔の 6 回であり秒単位の計測ではない） |
+| 08:54 | 値の一致（sha256 先頭 12 桁） | 値ファイル / serving / frontend とも `a934ba6b5413` |
+| 10:43:40 | 機能確認（ユーザーのブラウザ） | チャット 1 往復成功。backend の access log は `POST /chat` `200`。08:50〜10:50Z に両 app のログに `401` / `Unauthorized` は 0 件 |
+| 10:44:50 | 外形監視の再開 `gh variable set PROBE_ENABLED --body true` | `true` を確認。**欠測期間: 08:52:07Z 〜 10:44:50Z（約 1 時間 53 分）**。rollback の作業自体は 3 分で終わっており、大半はブラウザ確認までの待ち時間 |
+| 10:44:51 → 10:45:25 | Key Vault 参照へ戻す `az containerapp secret set ... --secrets "chat-api-key=keyvaultref:https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key,identityref:<identity の resource ID>" --output none`（serving 10:45:09、frontend 10:45:25） | 両 app の `keyVaultUrl` と `identity` が戻る。`SyncingSecretFromAzureKeyVaultForContainerAppSucceeded` が serving 10:45:03、frontend 10:45:21（設定直後に platform が解決する）。replica は 08:53 のまま（restart は不要） |
+| 10:45 | 値の一致（sha256 先頭 12 桁） | 値ファイル / serving / frontend とも `a934ba6b5413` |
+| 10:46 | 値ファイルを `shred -u` | 削除済み |
+
+分かったこと:
+
+- Key Vault 参照 → 直接値 → Key Vault 参照の往復は、`az containerapp secret set` 2 回と `revision restart` 1 回で完結し、Terraform を要しない。
+  戻す側（Key Vault 参照の設定し直し）は replica の再起動を伴わない
+- `az containerapp secret set` の `identityref` に `az identity show --query id` の値をそのまま渡すと、resource ID の `resourcegroups` が小文字で入る
+  （Terraform apply 後は `resourceGroups`）。この表記差は次の plan で差分になった（下記「plan 収束」）。
+  **以後 az CLI で `identityref:` に渡す ID は、Terraform が書いた表記そのものを持つ
+  `az containerapp show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev --query "properties.configuration.registries[0].identity" -o tsv`
+  から取る**（`az identity show --query id` は使わない）
+
+### plan 収束（identity の resource ID の表記差。2026-10-01。Terraform はユーザーが実施）
+
+rollback の往復後に ephemeral 層の `terraform -chdir=terraform/ephemeral plan -detailed-exitcode` を再開したところ exit 2
+（`Plan: 0 to add, 2 to change, 0 to destroy.`）。差分は `azurerm_container_app.main` と `azurerm_container_app.front[0]` の
+`secret` ブロック（set 型かつ sensitive のため両 app とも「- 2 / + 2」表示）のみ。
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 事前 | `plan -out=tfplan-pr2-identity-case` の `terraform show -json` を name ごとに比較（値は sha256 先頭 12 桁と長さのみ） | 変わるのは両 app の `chat-api-key` の `identity` だけで、`/resourcegroups/` → `/resourceGroups/` の大文字小文字の差のみ。`key_vault_secret_id` は同一、`value` は両側とも空。`database-url` / `microsoft-provider-authentication-secret` は before / after 同一。`template` / `ingress` / `identity` / `registry` に差分なし、`replace_paths` なし、output の変更なし |
+| 04:23:3x → 04:24:0x | `apply tfplan-pr2-identity-case`（ユーザー） | `Apply complete! Resources: 0 added, 2 changed, 0 destroyed.` main 18 秒、front 19 秒。plan ファイルは削除 |
+| 04:23:50 / 04:24:07 | `ContainerAppSystemLogs_CL` | 両 app で `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded`、`Revision '...' updated. No new revision was provisioned.`、`No revision restart or provisioning was needed.` のみ。`Failed` は 0 件 |
+| 04:25 | revision と replica | serving `ca-felisaichatbot-dev--0000005` / frontend `ca-felisaichatbot-dev-front--0000004` のまま（新 revision なし）。replica の `createdTime` は 2026-09-28T08:53:00Z / 08:53:02Z（rollback の restart 時）のまま = replica の再作成もなし |
+| 04:25 | 構成（`az containerapp show`） | 両 app の `chat-api-key` の `identity` が `/resourceGroups/` 表記に揃った |
+| 04:25 | frontend `/readyz` 3 回 | すべて 200 |
+| 事後 | `plan -detailed-exitcode`（ユーザー） | `No changes.`（exit 0） |
+
+分かったこと: secret の `identity` だけが変わる in-place update は、Container Apps 側では新 revision も replica の再起動も伴わない
+（platform のログに "No revision restart or provisioning was needed." と出る）。利用者影響なし。
+
+（以下、restart の再取得確認・ローテーション・アラート発火試験の結果は実施後に追記する）

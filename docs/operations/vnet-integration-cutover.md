@@ -730,8 +730,11 @@ done
 ```
 
 一致しないときの復旧の順序は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の
-PR 2 の節（原因の解消 → Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...`）→ 上の 2 で一致確認 → 必要なら
-`az containerapp revision restart`）。緊急遮断は従来どおり `CHAT_DISABLED` が担う。
+PR 2 の節「rollback 1 回」と「plan 収束」（原因の解消 → Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...,identityref:...`）→ 上の 2 で一致確認 → 必要なら
+`az containerapp revision restart`）。`identityref:` に渡す identity の resource ID は
+`az containerapp show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev --query "properties.configuration.registries[0].identity" -o tsv`
+から取る（`az identity show --query id` は `/resourcegroups/` を小文字で返し、Terraform の `/resourceGroups/` と表記が食い違って次の
+plan が in-place update の差分になる。2026-10-01 実測）。緊急遮断は従来どおり `CHAT_DISABLED` が担う。
 
 ## PITR ドリル（Day 4）への影響
 
