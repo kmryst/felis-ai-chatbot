@@ -908,6 +908,7 @@ teardown を前倒ししても 9 月分の**確定値**は失効前に取れず�
 | 〜9/1 | Cost Management の daily Export（Cost and usage details (actual)、CSV、**billing profile スコープ**）を作成する | 初回データの準備に最大 24 時間かかる。Export 機能自体は無料 |
 | 即時 | `usageDetails` を **billingProfile スコープ**で叩けることを確認する（失効後の代替経路の事前検証） | 課金スコープはサブスクリプションより上位の別系統 |
 | 日次〜9/18 | `lots` / `balanceSummary` を `az rest` でスナップショット保存する | **どちらも CLI 非対応**（「現在、PowerShell と Azure CLI はサポートされていません」）のため REST を直接叩く |
+| 各月の invoice 発行後 | その月の invoice PDF と Azure usage file（CSV）をダウンロードしてローカル保存する | `usageDetails` 由来の数字は invoice と一致する保証がないため、**両方を残し、差分そのものを証跡として扱う**（§10-6 M2） |
 | teardown 実施日（9/15） | teardown 直前・直後のリソース一覧を記録する | 課金停止の根拠（§9 の実体確認と同じ資料） |
 | 9/17 | 全期間（8/19〜当日）の使用量明細を再取得してローカル保存する | **最後の確実な機会** |
 | 9/18 直前 | クレジット画面・Cost Analysis を記録する | **「余ったまま失効した」ことの証跡** |
