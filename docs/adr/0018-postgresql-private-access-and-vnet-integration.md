@@ -374,7 +374,7 @@ Retail Prices API 実測単価）が加わることが判明した（当時の�
 [observations.md](../verification/vnet-cutover/observations.md) の「G4 の訂正」節が正本）。
 是正後は idle 適格条件を満たすことを実測確認済み（適用時の机上計算 0.194 USD/日。**単価の実適用は
 課金データ未反映のため未確認**）。なお Consumption の月次無料枠が先に吸収するため請求実額は
-さらに小さい可能性があり、サブスクリプションは FreeTrial / spendingLimit: On（2026-08-22 実測）で
+さらに小さい可能性があり、サブスクリプションは Free Trial で spending limit が有効（2026-08-22 実測）で
 クレジット枯渇が当面の制約にならないことも確認済み。「destroy を後ろへ移す」判断自体は変えない。
 
 ### 未実測のまま残る事項

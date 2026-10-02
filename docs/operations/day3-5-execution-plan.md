@@ -481,7 +481,7 @@ az resource list -g rg-felisaichatbot-dev-tf -o table   # 残存ゼロ確認（�
   ```
 
 - **PostgreSQL は stop しない**（§3-6 / ADR-0017）。stop で止まるのはコンピュート課金のみで、ストレージ + バックアップストレージは停止中も課金が継続し（§2-1 No.6）、B1ms 1 台の常時稼働は無料枠内のため、stop に得がない。7 日で自動再起動する仕様（§2-1 No.8）もあり、stop 前提の運用はもともと「放置してよい」状態を作れなかった
-- **プロジェクト完了後の後片付け**: 正本は [azure-resource-inventory.md](./azure-resource-inventory.md) の「プロジェクト終了時の後片付け」節（**`terraform destroy` 2 本で済み、`az group delete` は使わない**。当初の「3 RG 全消し」から改訂）。**従量課金へアップグレードしない場合はクレジット失効 2026-09-18 より前に必ず実施**する（アップグレードの判断期限も同日。台帳の「従量課金へのアップグレード」節）
+- **プロジェクト完了後の後片付け**: 正本は [azure-resource-inventory.md](./azure-resource-inventory.md) の「プロジェクト終了時の後片付け」節（**`terraform destroy` 2 本で済み、`az group delete` は使わない**。当初の「3 RG 全消し」から改訂）
 
 ---
 
