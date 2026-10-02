@@ -395,8 +395,8 @@ Action Group の実行は history に残るが、メールの配送結果（受�
 ポータルには Action Group の「テスト」ボタンがある（旧 subscription では API が `Free subscription not supported` を返した。現 subscription での可否は未確認）。
 
 残る可能性: Action Group のメール送信から受信箱までの区間（送信元 3 アドレスのいずれかが Gmail 側で拒否されている、など）。ユーザーの Gmail 検索は迷惑メール・プロモーション・
-すべてのメールを含めても 2 回目の Fired メールを見つけられなかった（2026-10-01）。公式ドキュメント上は "Emails are sent from the following email addresses: azure-noreply@microsoft.com,
-azureemail-noreply@microsoft.com, alerts-noreply@mail.windowsazure.com"（通知メールはこの 3 アドレスから送られる）。
+すべてのメールを含めても 2 回目の Fired メールを見つけられなかった（2026-10-01）。公式ドキュメント上は "Emails are sent from the following email addresses:"（通知メールは次のアドレスから送られる）として
+`azure-noreply@microsoft.com` / `azureemail-noreply@microsoft.com` / `alerts-noreply@mail.windowsazure.com` の 3 つを挙げている。
 2026-10-02 02:54Z（11:54 JST）、ユーザーが Azure portal の Action Group の「テスト」を実行（通知の種類 = 電子メール、通知名 = `opsmail`）: **失敗**。
 表示は「このテストの完了で問題が発生しました。数分後にもう一度お試しください。」、状態は「不明」。旧 subscription（同じ Free Trial）では同じ機能の API
 `actionGroups/createNotifications` が `(Conflict) Free subscription not supported` を返して実行できなかった（台帳 §B #10）。現 subscription も
