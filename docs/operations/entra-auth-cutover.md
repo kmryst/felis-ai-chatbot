@@ -179,7 +179,9 @@ PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c 'select curr
   `az keyvault secret show --vault-name kv-felisaichatbot-dev -n chat-api-key --query value -o tsv`
   の出力をパイプで直接使い、画面・ファイル・履歴に残さない。
   Key Vault 参照から直接値へ戻す手順と、rotation 中に frontend と backend の `chat-api-key` が一致しないときの
-  復旧手順は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の PR 2 の節
+  復旧手順は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の PR 2 の節。
+  `az containerapp revision restart` は Key Vault の値を取り直さない（2026-10-01 実測。platform が最後に同期した値のまま replica が作り直される）ので、
+  値を取り直すには Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...,identityref:...`）か 30 分周期の定期同期を使う
 - tfvars の編集は編集前のコピーを `backup-before-*.tfvars`（gitignore 済み。Terraform は自動読込しない）に
   残してから行う
 

@@ -593,6 +593,17 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
   `enabled: true` / receiver の `status: Enabled` が期待値。**`status` が `Disabled` になっていたら通知が飛ばない**（受信者が Azure のメール内リンクから配信停止した場合にこうなる）
 
+- **email receiver の宛先確認（OTP。2026-10-01 に実測）**: 新しいメールアドレスを receiver にすると Azure から
+  "Action required: Verify your email for Azure Monitor action group" が届き、**30 分以内に OTP で確認するまで通知もテスト通知も届かない**。
+  確認はテナント単位で引き継がれるため、テナント（Azure アカウント）を変えたら同じアドレスでも再確認が要る
+  （[Microsoft Learn: action-groups](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups) Notification types の Email 行）。
+  確認状態は `az monitor action-group show` にも REST にも出ない（未確認でも `status: Enabled`）。OTP が失効したら Azure portal で Action Group を開き
+  receiver の **Resend**（CLI / REST には無い）。2026-09-19 の移行時に作った receiver は確認されておらず、2026-10-01 まで新 subscription の
+  アラートメールが 1 通も届いていなかった（[key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) PR 2 の節）
+- **受信者アドレスの渡し方**: `TF_VAR_alert_email_address`（ローカル環境変数ファイル）で渡す。`terraform.tfvars` に `alert_email_address` を書くと
+  tfvars が環境変数より優先され、環境変数側を変えても plan に出ない（2026-09-19 の移行時に tfvars に書かれていたため、2026-10-01 まで旧アドレスのままだった。
+  同日に tfvars の行を削除し、環境変数の値で apply して付け替えた）
+
 - **固有のリスク・注意**:
   - Action Group を消すと #11 の 5 件は**アラート自体は発火し続けるが通知が飛ばない**（沈黙する監視になる）。消すなら 5 件と同時に消す
   - メール通知は月 1,000 通まで無料。それを超える量が飛ぶ状況は、閾値かワークロードのどちらかが壊れている兆候

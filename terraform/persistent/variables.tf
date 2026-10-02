@@ -39,7 +39,7 @@ variable "log_analytics_daily_quota_gb" {
 }
 
 variable "alert_email_address" {
-  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email）のメール受信者。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_email_address 環境変数（.env）で渡す"
+  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email）のメール受信者。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_email_address 環境変数（.env）で渡す。terraform.tfvars には書かない（tfvars は環境変数より優先され、環境変数を変えても反映されない）。新しいアドレスは Azure からの OTP メールで 30 分以内に確認するまで通知が届かない（docs/operations/azure-resource-inventory.md §B #10）"
   type        = string
 
   validation {

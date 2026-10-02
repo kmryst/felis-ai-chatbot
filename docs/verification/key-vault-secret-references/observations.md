@@ -133,6 +133,8 @@ state 側の要求として random 3.9.1 を取得し、`.terraform.lock.hcl` �
 
 切替 apply による `/readyz` のダウンタイムは観測されなかった（10 秒間隔の 6 回と Container Apps のログのみで、秒単位の計測ではない = ADR-0023）。
 `/chat` は切替中の実トラフィックが無く、401 の実測は無い。
+embed backfill Job `caj-felisaichatbot-dev-embed` の template は 2026-10-01 に `az containerapp job show` で読み取りのみ確認した（手動実行はしない。`--embed` は
+seed の diff-sync と stale 行の削除を伴うため）: env に `AZURE_OPENAI_API_VERSION=2024-10-21` / `AZURE_OPENAI_CHAT_DEPLOYMENT=chat` / `AZURE_OPENAI_EMBEDDING_DEPLOYMENT=embedding` が入っている。
 
 ### lock ファイルの整理と plan 収束（2026-09-28。ユーザーが実施）
 
@@ -189,4 +191,238 @@ rollback の往復後に ephemeral 層の `terraform -chdir=terraform/ephemeral 
 分かったこと: secret の `identity` だけが変わる in-place update は、Container Apps 側では新 revision も replica の再起動も伴わない
 （platform のログに "No revision restart or provisioning was needed." と出る）。利用者影響なし。
 
-（以下、restart の再取得確認・ローテーション・アラート発火試験の結果は実施後に追記する）
+### revision restart による Key Vault 参照の再取得確認（ops app のテスト用 secret。2026-10-01 実施）
+
+目的: `az containerapp revision restart` が Key Vault 参照の secret を Key Vault の最新バージョンに取り直すかを本番構成で実測し、
+ローテーション失敗時の復旧手順（restart を先にするか、Key Vault 参照の設定し直しを先にするか）を決める。
+対象は ops app `ca-felisaichatbot-dev-ops`（利用者トラフィック無し）。テスト用 secret `kv-sync-alert-test` はアラート発火試験でも使う。
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 04:27:29 | Key Vault にテスト用 secret `kv-sync-alert-test` のバージョン 1 を作成（`openssl rand -hex 16`） | 作成 |
+| 04:27:48 | ops app に Key Vault 参照で付与（`identityref:` は `registries[0].identity` から取得） | `keyVaultUrl` と `identity`（`/resourceGroups/` 表記）が付く。`SyncingSecret...Succeeded` 04:27:41 / 04:27:42 |
+| 04:28:09 | env `KV_SYNC_ALERT_TEST=secretref:kv-sync-alert-test` を追加（`az containerapp update --set-env-vars`） | 新 revision `ca-felisaichatbot-dev-ops--0000002`、replica 04:28:06Z 作成、04:28:35 に `latestReadyRevisionName` が切り替わる。`SyncingSecret...Succeeded` 04:28:06（5 行）/ 04:28:36 |
+| 04:28:58 〜 04:29:55 | 基準（sha256 先頭 12 桁。値は出さない） | (a) Key Vault 最新 = (b) platform `secret list --show-values` = (c) コンテナ内 env（`az containerapp exec --command env` の出力をローカルでハッシュ化）= `fbae6e9bd451`。直近の同期 04:28:36 |
+| 04:30:12 → 04:30:13 | **バージョン 2 の作成時刻**: Key Vault にバージョン 2 を作成 | `list-versions` 2 件。(a) は `244405669b48` に変わる |
+| 04:30:15 → 04:30:16 | **restart の実行時刻**: `az containerapp revision restart --revision ca-felisaichatbot-dev-ops--0000002` | `Restart succeeded`。新 replica 04:30:17Z 作成、04:30:35 に `Running`（旧 replica は 04:30:36 に `NotRunning`） |
+| 04:31:14 | **再測定の時刻**: (b) と (c) を取り直す | (b) `fbae6e9bd451`、(c) `fbae6e9bd451`（新 replica `...-5846479f75-j5vzr` 内）。**どちらもバージョン 1 のまま** |
+| 04:38:00 | 定期同期の割り込み確認（KQL: ops app の `SyncingSecret*` を 04:28:30Z 以降で検索。04:33:35 のログまで取り込み済み） | バージョン 2 の作成時刻 〜 再測定の時刻の間の `SyncingSecret*` は **0 件**（直近は 04:28:36）。判定は有効 |
+
+判定: **`az containerapp revision restart` は Key Vault の値を取り直さない**。restart 後の replica には、platform が最後に同期した値（バージョン 1）がそのまま入る。
+Microsoft Learn manage-secrets の記述（Key Vault 参照は "the app automatically retrieves the latest version within 30 minutes"（30 分以内に自動で最新バージョンを取得する）、
+更新した secret の反映は "1. Deploy a new revision. 2. Restart an existing revision."（新 revision のデプロイか既存 revision の再起動））は platform が解決済みの値を
+replica に配る話であり、Key Vault への再取得は定期同期（または Key Vault 参照の設定し直し）が担う、という理解と一致する。
+ローテーション失敗時の復旧は計画どおり「原因の解消 → Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...,identityref:...`。設定直後に同期が走る。rollback 節で実測）→ sha256 の一致確認 → 必要なら restart」の順とする。
+
+補足: `az containerapp exec --command 'sh -c "..."'` は接続は成功するが出力が返らなかった（引用符の多重エスケープが原因とみられる）。
+`--command env` は出力が返るので、その出力をローカルでパイプしてハッシュ化した（値は画面に出していない）。
+
+### ローテーション試験（ADR-0032 決定 3 を本番構成で確認。2026-10-01 実施。Terraform はユーザーが実施）
+
+同じ Key Vault secret `chat-api-key` を backend serving と frontend が環境変数で参照し、新バージョンの取り込みで両 app が再起動する構成の実測。
+Key Vault 参照はバージョン無しなので ephemeral 層の apply は不要で、persistent 層の `chat_api_key_version` を +1 して apply するだけ。
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 04:38:29 | 基準（読み取り） | serving `--0000005`（replica 2026-09-28T08:53:00Z）/ frontend `--0000004`（replica 08:53:02Z）。Key Vault / serving / frontend の sha256 先頭 12 桁は 3 つとも `a934ba6b5413`。`list-versions` 1 件 |
+| 04:38 | rollback 用の値（ローテーション前のバージョン）を scratchpad の mode 600 ファイルへ（改行なし、64 バイト） | 6-9 の PASS まで保持 |
+| 04:38:56 | 外形監視の停止 `gh variable set PROBE_ENABLED --body false` | `false` を確認 |
+| 04:39:04 | persistent 層 `terraform.tfvars` に `chat_api_key_version = 2` を追記（編集前のコピーを `backup-before-chat-api-key-rotation-<UTC>.tfvars` に残す。いずれも gitignore 済み） | — |
+| 04:4x | `terraform -chdir=terraform/persistent plan -detailed-exitcode -out=tfplan-pr2-rotation`（ユーザー） | exit 2、`Plan: 0 to add, 1 to change, 0 to destroy.`。差分は `azurerm_key_vault_secret.chat_api_key` の `value_wo_version: 1 -> 2`（`value_wo = (write-only attribute)`）のみ。他のリソースに差分なし |
+| 04:42:59 → 04:43:02 | `apply tfplan-pr2-rotation`（ユーザー。**ローテーション apply の完了時刻 = 04:43:02**） | `Apply complete! Resources: 0 added, 1 changed, 0 destroyed.`（3 秒）。plan ファイルは削除 |
+| 04:43:17 | 新バージョンの確認 | `list-versions` 2 件: 旧 `19ec93bf...`（2026-09-23 作成、enabled）/ 新 `c2eb05b4...`（04:43:03 作成、enabled）。Key Vault 最新の sha256 先頭 12 桁は `74919a81d6a3`。両 app の platform 側の値はまだ `a934ba6b5413`（旧） |
+
+| 04:43:52 〜 05:06:35 | 取り込みの観測ループ（platform 側 sha256・replica を 35 秒間隔、frontend `/readyz` を 10 秒間隔） | `/readyz` 123 回すべて 200 |
+| 04:57:42 | （参考）ops app のテスト用 secret `kv-sync-alert-test` の定期同期 | ops は 04:27:42 の付与から 30 分後に同期し、バージョン 2 を取り込んで `RevisionRestartWithNewSecrets`（replica 再作成）。手順 5 で restart が取り直さなかった値が、定期同期では取り込まれた |
+| 05:03:45.87 | **両 app の取り込み（同一秒）**: `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded` → `RevisionRestartWithNewSecrets`（serving `--0000005` / frontend `--0000004`。新 revision は作られない） | apply 完了（04:43:02）から **20 分 43 秒**。両 app の定期同期は 04:03:44 / 04:33:44 の 30 分周期で、次の周期 05:03:45 に乗った |
+| 05:03:45 | 新 replica 作成（両 app とも `createdTime` 05:03:45Z） | 05:04:01 frontend `ContainerStarted`、05:04:05 serving `ContainerStarted`、05:04:12 両 app の旧 container `ManuallyStopped` |
+| 05:04:19 | platform 側の値（sha256 先頭 12 桁） | serving / frontend とも `74919a81d6a3` = Key Vault 最新。6-1 の `a934ba6b5413` から変わった |
+| 05:08:18 | 外形監視の再開 `gh variable set PROBE_ENABLED --body true` | `true` を確認。**欠測期間: 04:38:56Z 〜 05:08:18Z（約 29 分）**。再起動は 05:04:12 に終わっており、ブラウザ確認を待たずに戻した |
+| 04:43〜05:08 | 両 app のコンソールログの `401` / `Unauthorized` | 0 件（`has "401"` に一致した 2 行はタイムスタンプ `.401` の誤検知） |
+
+rotation 中に frontend と backend の `chat-api-key` が一致しない期間（ADR-0027 で混在窓と呼んでいる期間）: 両 app の同期と replica 作成は同一秒（05:03:45）で、
+新 container の起動は frontend 05:04:01 / serving 05:04:05、旧 container の停止は両方 05:04:12。新旧の container が混在していた
+**05:04:01 〜 05:04:12 の約 11 秒**が上限（2026-09-22 の sandbox 実測「同じ同期周期で同時再起動」と一致）。実トラフィックは無く、401 の実測は無い。
+
+| 05:11:21 / 05:12:15 | 機能確認（ユーザーのブラウザ。Entra にサインイン → チャット） | PASS: backend の access log は `POST /chat` `200` が 2 件（1,592 ms / 364 ms）、frontend の `/api/chat` も `200`（SSE）。05:04〜05:13Z に両 app のログに `401` / `Unauthorized` は 0 件 |
+| 05:13 | rollback 用の値ファイルを `shred -u` | 削除済み（ローテーション前のバージョンは Key Vault に残るが、参照されない） |
+
+| 05:1x | `terraform -chdir=terraform/persistent plan -detailed-exitcode`（ユーザー） | `No changes.`（exit 0）。state の `azurerm_key_vault_secret.chat_api_key` の ID は新バージョン `c2eb05b4...` を指す。tfvars の `chat_api_key_version = 2` と一致 |
+
+分かったこと（ADR-0032 決定 3 の確認）:
+
+- ローテーションは persistent 層の apply 1 回（3 秒）で済み、ephemeral 層の apply は不要。取り込みは Container Apps の 30 分周期の定期同期に乗るため、
+  apply 直後ではなく次の同期（今回は 20 分 43 秒後）に起きる。両 app は同じ周期で同一秒に同期・再起動した
+- 再起動は replica の再作成で、新 revision は作られない（`RevisionRestartWithNewSecrets`）。`/readyz` は 10 秒間隔の観測で 503 なし
+- rotation 中に frontend と backend の `chat-api-key` が一致しない期間は、新旧 container が混在した約 11 秒が上限。切替 apply のとき（約 16 秒）と同程度
+
+### アラート発火試験（ops app のテスト用 secret を Key Vault 側で無効化。2026-10-01 実施）
+
+log search alert `alert-kv-secret-sync-failed`（`ContainerAppSystemLogs_CL | where Reason_s == "SyncingSecretFromAzureKeyVaultForContainerAppFailed" | summarize FailedCount = count() by ContainerAppName_s`、
+`FailedCount > 0`、評価 15 分ごと、ウィンドウ 1 時間、Sev2）が実際の同期失敗で発火することの確認。
+対象は ops app のテスト用 secret `kv-sync-alert-test`（手順 5 で付与済み。`chat-api-key` と serving / frontend には触らない）。
+復旧（再有効化）は発火・メール確認を待たずに行い、失敗ログが評価ウィンドウ 1 時間に残ることで発火と通知を観測する。
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 05:13 | 事前確認（読み取り） | テスト用 secret は 2 バージョンとも enabled。ops app の定期同期は 04:27:42 / 04:57:42 の 30 分周期（次は 05:27:42 の見込み）。Key Vault スコープのロール割り当ては 2 件（`Key Vault Secrets User` / `Key Vault Secrets Officer`）。復旧コマンド（再有効化、ロール割り当ての再作成 = 台帳 §B #15）を準備 |
+| 05:14:09 | **無効化の時刻**: `az keyvault secret set-attributes --vault-name kv-felisaichatbot-dev -n kv-sync-alert-test --enabled false` | 無効化（`az keyvault secret show` は disabled の secret に対して失敗するので、`list-versions` の `attributes.enabled` で確認） |
+
+| 05:27:42 | ops app の定期同期（無効化から 13 分 33 秒。04:27:42 起点の 30 分周期どおり） | **`SyncingSecretFromAzureKeyVaultForContainerAppFailed`** 1 件。本文: "Failed to sync secret 'kv-sync-alert-test' from Azure Key Vault '...' for ContainerApp 'ca-felisaichatbot-dev-ops'. The secret is in a disabled state in Azure Key Vault. Please enable the secret in Key Vault to resolve this issue. Retries: 1."（無効化された secret の同期に失敗。Key Vault で有効化すれば解消する）。serving / frontend の `chat-api-key` の同期には影響なし |
+| 05:27:57 | 失敗ログの取り込み確認（30 秒間隔のポーリング） | 失敗の 15 秒後には KQL で見えた |
+| 05:31:13 | **復旧の完了時刻**: 再有効化 `az keyvault secret set-attributes ... --enabled true` | 2 バージョンとも enabled。ロール剥奪は行っていないので Key Vault スコープのロール割り当ては 2 件のまま（再作成不要） |
+
+ロール一時剥奪（代替案）は不要だった。無効化した secret は最初の定期同期で `Failed` になる（Microsoft Learn の Troubleshoot Key Vault references の
+"Secret disabled in Key Vault" のとおり）。
+
+| 05:36:52 | **発火**: `Microsoft.AlertsManagement/alerts` に `alert-kv-secret-sync-failed` が `monitorCondition: Fired`、`alertState: New`、Sev2、対象 `log-felisaichatbot-dev`（60 秒間隔のポーリングで 05:37:24 に確認） | 失敗ログ（05:27:42）から **9 分 10 秒**、無効化から 22 分 43 秒。復旧（05:31:13）の後に発火しており、「復旧を発火確認から切り離す」設計どおり |
+
+| 05:55 | メール受信（ユーザーの Gmail で `azure-noreply` を検索） | **未着**（発火から 18 分）。詳細は下記「メール未着」 |
+| 05:57:42 | ops app の次の定期同期（復旧から 26 分 29 秒） | `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded`。失敗は 05:27:42 の 1 件だけで収まった |
+
+#### メール未着（読み取りのみで調査。2026-10-01 05:45〜05:58Z）
+
+| 確認 | 結果 |
+| --- | --- |
+| ルール `alert-kv-secret-sync-failed` | `enabled: true`、`actions.actionGroups` に `ag-felisaichatbot-dev-email`、`autoMitigate: true`、`muteActionsDuration` なし |
+| Action Group `ag-felisaichatbot-dev-email` | `enabled: true`、email receiver `opsmail` は `status: Enabled`、`useCommonAlertSchema: true`、宛先は設定あり。他の receiver なし |
+| 発火した alert の `actionStatus` | `isSuppressed: false`（Alert Processing Rule による抑止なし） |
+| rate limit | この subscription の過去 30 日の alert は 2 件（本件と 2026-09-19 の `alert-pgsql-cpu-credits-remaining-low`）。メール上限（1 宛先 100 通 / 時）に遠い |
+| Activity Log | Action Group の通知送信は Activity Log に残らないため判定材料にならない |
+| 受信実績 | 旧 subscription（2026-09-18 に失効）では 2026-08-27〜09-23 の Fired / Resolved メールが届いている。**現 subscription（2026-09-18 作成、Free Trial）では、09-19 の `alert-pgsql-cpu-credits-remaining-low` の Fired / Resolved も、Action Group 作成時の "You've been added to an Azure Monitor action group" も届いておらず、受信実績は 0 件** |
+| `az monitor action-group test-notifications` | 旧 subscription で `(Conflict) Free subscription not supported` だったため実行していない（台帳 §B #10） |
+
+**原因（2026-10-01 確定）: email receiver の宛先確認（OTP による verification）が未完了。** ユーザーの受信箱に 2026-09-19 06:53Z（Activity Log によれば現 subscription の `ag-felisaichatbot-dev-email` は Terraform apply で 06:53:08〜06:53:09Z に作成されており、その直後）、
+`azure-noreply@microsoft.com` から "Action required: Verify your email for Azure Monitor action group" が届いていた。本文:
+"Someone added your email address as a notification receiver in Azure Monitor - Action group(s). To receive these notifications, please verify your email address.
+To verify, click the link below and enter the OTP code displayed. The code expires in 30 minutes."
+（誰かがあなたのメールアドレスを Azure Monitor の Action group の通知先に追加した。通知を受け取るにはメールアドレスを確認する必要がある。リンクを開いて表示された OTP を入力する。コードは 30 分で失効する）。
+この確認を行っておらず、OTP は失効していた。
+
+Microsoft Learn [Create and manage action groups in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups)（Notification types の Email 行、2026-07-21 版）:
+"Email addresses must be verified through a one-time passcode (OTP) within 30 minutes of saving the action group. This verification persists across all past and future action groups within the same tenant.
+If the passcode expires, open the action group and select Resend. An unverified receiver can't receive alert or test notifications after enforcement is active."
+（メールアドレスは Action Group の保存から 30 分以内に OTP で確認しなければならない。確認は同じテナント内の過去・将来のすべての Action Group に引き継がれる。
+パスコードが失効したら Action Group を開いて Resend を選ぶ。未確認の受信者は、強制が有効になった後はアラート通知もテスト通知も受け取れない）。
+同ページの作成手順の注記: "New email addresses receive a one-time passcode (OTP) validation request. Previously validated email addresses receive a standard notification email."
+（新しいメールアドレスには OTP の確認要求が送られ、確認済みのアドレスには通常の通知メールが送られる）。
+
+旧 subscription（別テナント）では 2026-08-27 に同じアドレスで受信できていたが、確認はテナント単位で引き継がれるため、09-18 に作った新テナントでは改めて確認が必要だった。
+`az monitor action-group show` の `emailReceivers[].status` は確認の有無に関係なく `Enabled` で、確認状態は Azure CLI / REST（api-version 2023-01-01 / 2024-10-01-preview）には出ない。
+Resend も Azure portal の Action Group 画面の操作のみで、CLI / REST には無い。
+
+もう 1 つの食い違い: ユーザーはローカル環境変数ファイルの `TF_VAR_alert_email_address` を別のアドレスに変えていたが、`terraform/persistent/terraform.tfvars`
+（gitignore 済み）に移行時（09-19）から `alert_email_address` が書かれており、tfvars は環境変数より優先されるため、環境変数の変更が plan に出ていなかった
+（6-11 の `No changes` もこのため）。`variables.tf` の説明文「環境変数で渡す」と実態がずれていた。
+
+対処（2026-10-01。ユーザーは OTP 確認メールが届いていた旧アドレスを使い続けるのではなく、環境変数側の新アドレスへ付け替える方を選んだ）:
+
+| 時刻 (UTC) | 操作 | 結果 |
+| --- | --- | --- |
+| 06:06:48 | tfvars の直前コピーを `backup-before-alert-email-<UTC>.tfvars` に残し、`alert_email_address` の行を削除（環境変数に任せる） | tfvars は `entra_administrator_*` と `chat_api_key_version` のみ |
+| 06:07 | `terraform -chdir=terraform/persistent plan -detailed-exitcode -out=tfplan-alert-email`（ユーザー） | exit 2、`0 to add, 1 to change`。差分は `azurerm_monitor_action_group.email` の `email_receiver.email_address` のみ |
+| 06:07:56 → 06:08:00 | `apply tfplan-alert-email`（ユーザー） | `0 added, 1 changed`。plan ファイルは削除 |
+| 06:08 | 読み取り確認 `az monitor action-group show` | receiver `opsmail` は `status: Enabled`、アドレスの sha256 先頭 12 桁が `16458216cf25` → `02406007e366` に変わった（ドメインは gmail.com のまま） |
+| 06:08 | 新アドレスに "Action required: Verify your email for Azure Monitor action group" が届き、ユーザーが OTP を入力（15:08 JST） | 確認完了（apply から数分以内）。以後このアドレスへ通知が届くはず。最初の配送確認は本ルールの `Resolved` 通知 |
+| 06:09 | 新アドレスに Action Group からの通知メール（"You've been added to an Azure Monitor action group" とみられる）が届く（15:09 JST） | **新テナントの Action Group から配送されたメールの最初の実績**。アラート通知そのものの配送は本ルールの `Resolved` メールで確認する |
+
+`variables.tf` の説明文と台帳 §B #10 に、tfvars に書かないこと・OTP 確認が要ることを追記した（本 PR に含める）。
+本 PR の発火試験は「ルールが実際の同期失敗で `Fired` になる」までを PASS とし、メール到達は Action Group の宛先確認（Key Vault 参照とは独立）として記録する。
+OTP 確認後の最初の配送確認は、本ルールの `Resolved` 通知（間に合えば）か、次に発火するアラートのメールで行う。
+
+#### 後片付け（2026-10-01。自動解決の観測と並行して実施）
+
+| 時刻 (UTC) | 操作 | 結果 |
+| --- | --- | --- |
+| 05:59:33 → 05:59:56 | ops app から env を外す `az containerapp update --remove-env-vars KV_SYNC_ALERT_TEST` | 新 revision `ca-felisaichatbot-dev-ops--0000003`（06:00:08 に ready）。env は手順 5 の前の 4 件に戻る |
+| 06:00:29 → 06:00:42 | ops app から secret を外す `az containerapp secret remove --secret-names kv-sync-alert-test` | secret は `database-url` のみ。revision は `--0000003` のまま（secret の削除は新 revision を作らない） |
+| 06:00:43 → 06:00:49 | Key Vault から削除 `az keyvault secret delete` → soft-delete 状態を確認 → `az keyvault secret purge` | Key Vault の secret は `chat-api-key` のみ。soft-delete 中の secret 0 件 |
+
+env → secret の順を守った（secret を先に消すと env の `secretref` の参照先が無くなり更新が失敗する）。
+
+| 06:0x | `terraform -chdir=terraform/ephemeral plan -detailed-exitcode`（ユーザー） | `No changes.`（exit 0）。ops app の管理外の env / secret は残っていない |
+
+#### 自動解決の見込みの訂正
+
+計画では「最後の `Failed` から約 1 時間〜1 時間 15 分で `Resolved`」としていたが、06:52Z を過ぎても `Fired` のままだった。
+Microsoft Learn [Overview of Azure Monitor alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview)（Stateful alerts、2026-07-08 版）の表:
+"Log search alerts — The alert condition isn't met for a specific time range. The time range differs based on the frequency of the alert: 1 minute: The alert condition isn't met for 10 minutes.
+5 to 15 minutes: The alert condition isn't met for three frequency periods. 15 minutes to 11 hours: The alert condition isn't met for two frequency periods."
+（log search alert は、条件が満たされない状態が一定時間続いたときに解決される。評価頻度 1 分なら 10 分、5〜15 分なら 3 周期、15 分〜11 時間なら 2 周期）。
+本ルールは評価 15 分・ウィンドウ 1 時間なので、`Failed`（05:27:42）がウィンドウから外れて初めて条件不成立になる評価（06:36:52 頃）の後、さらに 2〜3 周期（30〜45 分）必要で、
+**`Resolved` の見込みは 07:07〜07:22Z**（最後の `Failed` から約 1 時間 40 分〜1 時間 55 分 = ウィンドウ 1 時間 + 評価位相 + 2〜3 周期）。
+
+| 時刻 (UTC) | 事象 | 結果 |
+| --- | --- | --- |
+| 07:07:51 | **自動解決**: `monitorCondition: Resolved`（`monitorConditionResolvedDateTime` 07:07:51.87Z。60 秒間隔のポーリングで 07:08:52 に確認） | 最後の `Failed`（05:27:42）から **1 時間 40 分 9 秒**、`Fired`（05:36:52）から 1 時間 31 分。訂正後の見込み（07:07〜07:22Z）の範囲内。評価位相 05:36:52 + 15 分 × n の 07:06:52 の評価で条件不成立 2 周期目となり解決 |
+| 〜07:45 | Resolved 通知メール（新アドレス） | **未着**。受信箱の最後のメールは 06:08Z の "You've been added to an Azure Monitor action group" |
+
+Resolved メールが届かなかった理由: Microsoft Learn [alerts-overview](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview) は
+"Fired alert instances in Azure Monitor are read-only and cannot be edited. Configuration changes apply only to future alerts."
+（発火済みの alert インスタンスは読み取り専用で編集できない。設定変更は以後の alert にだけ適用される）としており、
+05:36:52 に発火した alert は受信者が OTP 未確認だった時点の構成で処理される。06:08 のアドレス付け替えと OTP 確認は以後の alert にしか効かないため、
+この alert では Fired / Resolved いずれの通知も到達を実証できない。そこで発火試験を同じ手順でもう 1 回行う（下記）。
+
+#### 発火試験 2 回目（受信者の OTP 確認後。アラート通知メールの到達確認）
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 07:50:17 | テスト用 secret `kv-sync-alert-test` を再作成（1 回目は purge 済み） | 作成 |
+| 07:50:37 | ops app に Key Vault 参照で付与（`identityref:` は `registries[0].identity`） | 付与 |
+| 07:50:50 | env `KV_SYNC_ALERT_TEST=secretref:kv-sync-alert-test` を追加 | 新 revision `ca-felisaichatbot-dev-ops--0000004`（07:51:10 に ready） |
+| 07:51:21 | **無効化の時刻**: `--enabled false` | 無効化 |
+
+| 07:57:42 | ops app の定期同期 | **`SyncingSecretFromAzureKeyVaultForContainerAppFailed`**（Retries: 1）。**同期の周期は 1 回目の付与（04:27:42）起点の :27:42 / :57:42 のままで、secret の外し・付け直しや revision の更新では位相が変わらなかった**（07:50 の付与直後に即時同期は走るが、定期同期の位相は変わらない）。「07:50:37 起点で 08:20:37 頃」という見込みは誤り |
+| 08:06:49 | **発火**: `alert-kv-secret-sync-failed` の新しい alert インスタンスが `Fired`（`startDateTime` 08:06:49.89Z） | 失敗ログから 9 分 7 秒（1 回目は 9 分 10 秒）。受信者の OTP 確認（06:08）より後に発火した alert なので、通知メールはこの alert で初めて実証できる |
+| 08:27:42 | ops app の定期同期（再有効化前） | `...Failed`（Retries: 2）。監視スクリプトが `Failed` の検知に失敗しており（KQL 結果の判定ミス）、再有効化が遅れた。影響は ops app のテスト用 secret のみ |
+| 08:30:01 | **復旧の完了時刻**: 再有効化 `--enabled true`（手動） | `enabled: true` |
+
+| 09:02:06 → 09:02:58 | 後片付け: env を外す（新 revision `ca-felisaichatbot-dev-ops--0000005`、09:02:41 ready）→ secret を外す | ops app は `database-url` のみ、env は手順 5 の前の 4 件 |
+| 09:02:59 → 09:03:01 | Key Vault から削除 → purge | Key Vault の secret は `chat-api-key` のみ、soft-delete 中 0 件 |
+
+| 09:0x | `terraform -chdir=terraform/ephemeral plan -detailed-exitcode`（ユーザー） | `No changes.`（exit 0） |
+| 〜09:3x | Fired 通知メール（新アドレス。08:06:49 の発火分） | **未着**（ユーザーの受信箱の確認。`azure-noreply` の検索） |
+| 10:07:52 | 自動解決: 2 件目の alert が `Resolved`（最後の `Failed` 08:27:42 から 1 時間 40 分 10 秒。1 回目と同じ） | alert の history（`Microsoft.AlertsManagement/alerts/{id}/history`）には 08:06:50.82 と 10:07:52.82 に `ActionsTriggered` "Action group ag-felisaichatbot-dev-email executed (Configured on alert rule)"（Action Group `ag-felisaichatbot-dev-email` を実行した）が記録されている = **Azure Monitor 側は Fired / Resolved の両方で Action Group を実行済み** |
+
+Fired メールが届かない件の読み取り確認（2026-10-01 09:3x〜10:1x）: alert インスタンス `3401ddee-...` の `actionStatus.isSuppressed: false`、`monitorService: Log Alerts V2`、
+dimension `ContainerAppName_s = ca-felisaichatbot-dev-ops`、`metricValue 1`。ルールの `actions.actionGroups` は `.../Microsoft.Insights/actionGroups/ag-felisaichatbot-dev-email`、
+Action Group の `id` は `.../microsoft.insights/actionGroups/...`（provider 名の大文字小文字が違うだけ。ARM の resource ID は大文字小文字を区別しない）。
+receiver `opsmail` は `status: Enabled`、アドレスの sha256 先頭 12 桁 `02406007e366`（OTP 確認済みのアドレス）。rate limit（1 宛先 100 通 / 時）に遠い。
+Action Group の実行は history に残るが、メールの配送結果（受理 / 拒否 / 遅延）は API に出ない。
+
+2026-10-02 02:52Z（11:52 JST）、ユーザーが Azure portal の Action Group `ag-felisaichatbot-dev-email` の「通知」欄を確認: receiver `opsmail`（電子メール、新アドレス）の
+「メール アドレスの確認」は **「確認済み」**。**OTP 未確認が原因という線は消えた**（確認状態はポータルにだけ表示され、CLI / REST には出ない）。
+ポータルには Action Group の「テスト」ボタンがある（旧 subscription では API が `Free subscription not supported` を返した。現 subscription での可否は未確認）。
+
+残る可能性: Action Group のメール送信から受信箱までの区間（送信元 3 アドレスのいずれかが Gmail 側で拒否されている、など）。ユーザーの Gmail 検索は迷惑メール・プロモーション・
+すべてのメールを含めても 2 回目の Fired メールを見つけられなかった（2026-10-01）。公式ドキュメント上は "Emails are sent from the following email addresses: azure-noreply@microsoft.com,
+azureemail-noreply@microsoft.com, alerts-noreply@mail.windowsazure.com"（通知メールはこの 3 アドレスから送られる）。
+2026-10-02 02:54Z（11:54 JST）、ユーザーが Azure portal の Action Group の「テスト」を実行（通知の種類 = 電子メール、通知名 = `opsmail`）: **失敗**。
+表示は「このテストの完了で問題が発生しました。数分後にもう一度お試しください。」、状態は「不明」。旧 subscription（同じ Free Trial）では同じ機能の API
+`actionGroups/createNotifications` が `(Conflict) Free subscription not supported` を返して実行できなかった（台帳 §B #10）。現 subscription も
+`quotaId: FreeTrial_2014-09-01` / `spendingLimit: On`。Activity Log（subscription スコープ）に 02:54:30Z と 02:57:41Z の 2 回、
+`Microsoft.Insights/actiongroups/createNotifications/action` が `status: Failed` / `subStatus: Conflict`、`statusMessage: {"code":"Conflict","message":"Free subscription not supported"}`
+で記録されており、**旧 subscription と同じ原因（Free Trial ではテスト通知が使えない）と確定**。ポータルの「テスト」も内部で同じ API を呼ぶ。
+テスト通知の失敗は Action Group の実通知の可否とは別で、Fired メールが届かない原因の説明にはならない。
+
+#### 発火試験の判定（2026-10-02 確定）
+
+| 区分 | 内容 |
+| --- | --- |
+| **PASS** | ルールが実際の同期失敗で `Fired`（2 回、失敗ログから約 9 分）、公式の解決条件どおり自動 `Resolved`（2 回、最後の失敗から約 1 時間 40 分）、Azure Monitor による Action Group の実行（alert の history に `ActionsTriggered` 4 件）、ルール・Action Group・receiver（OTP 確認済み）の設定 |
+| **未確認** | アラートのメール（Fired / Resolved）が受信箱に届くこと。2 回の発火・4 回の Action Group 実行で 0 通。Free Trial ではテスト通知が使えないため、ポータルの「テスト」でも切り分けできない |
+| **別 Issue** | 「Action Group `ag-felisaichatbot-dev-email` からアラートのメールが届かない」。PR 2 のマージ後、PR 3（Easy Auth secret の Key Vault 参照化）より前に着手する |
+
+Codex による読み取りのみの調査（2026-10-02）の要点: 原因は不明。候補は (1) Azure 側のメール配送障害 (2) Gmail 側の拒否（bounce は送信側にしか見えない）
+(3) OTP の確認状態の反映の不整合（ポータルは「確認済み」だが、送信経路の判定が追随していない可能性）。通常の通知の配送結果を見る公開 API は無い
+（`notificationStatus` はテスト通知専用）。推奨される次の一手は、検証用のルールを 1 本作り、通常のメール receiver・Email Azure Resource Manager role（OTP 確認が不要）・
+Azure mobile app の push の 3 経路を同時に比べる試験。これを別 Issue の最初の作業にする。
+
+分かったこと（発火試験全体）:
+
+- 無効化した Key Vault secret は次の定期同期で `Failed` になり、log search alert は失敗ログから約 9 分で `Fired`、条件不成立が続くと公式の解決条件（15 分評価では 2 周期）どおり約 1 時間 40 分で `Resolved` になる。
+  復旧（再有効化）は発火を待たずに行ってよく、発火・解決の観測には影響しない
+- 定期同期の位相は app ごとに固定され（ops は :27:42 / :57:42、serving / frontend は :03:4x / :33:4x）、secret の付け直しや revision の更新では変わらない。
+  試験の時刻計画はこの位相から立てる
+- Action Group の email receiver は OTP 確認が済むまで通知を受け取れず、確認前に発火した alert は確認後も通知されない（設定変更は以後の alert にだけ適用）。
+  受信者を変えたら、必ずその後に発火する alert で到達を確認する
