@@ -39,12 +39,22 @@ variable "log_analytics_daily_quota_gb" {
 }
 
 variable "alert_email_address" {
-  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email）のメール受信者。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_email_address 環境変数（.env）で渡す。terraform.tfvars には書かない（tfvars は環境変数より優先され、環境変数を変えても反映されない）。新しいアドレスは Azure からの OTP メールで 30 分以内に確認するまで通知が届かない（docs/operations/azure-resource-inventory.md §B #10）"
+  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email-02）のメール受信者。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_email_address 環境変数（.env）で渡す。terraform.tfvars には書かない（tfvars は環境変数より優先され、環境変数を変えても反映されない）。新しいアドレスは Azure からの OTP メールで 30 分以内に確認するまで通知が届かない（docs/operations/azure-resource-inventory.md §B #10）"
   type        = string
 
   validation {
     condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email_address))
     error_message = "alert_email_address はメールアドレス形式で指定してください。"
+  }
+}
+
+variable "alert_push_account_email" {
+  description = "Azure Monitor Action Group（ag-felisaichatbot-dev-email-02）の Azure mobile app push 通知の受信者。Azure mobile app にサインインしているアカウントのメールアドレスを指定する（Microsoft Learn action-groups の Azure app push notifications 行: \"enter the email address that you use as your account ID when you configure the Azure mobile app\"）。個人のアドレスをコード・tfvars のコミット対象に書かないため、TF_VAR_alert_push_account_email 環境変数（.env）で渡す。terraform.tfvars には書かない（tfvars は環境変数より優先され、環境変数を変えても反映されない）"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_push_account_email))
+    error_message = "alert_push_account_email はメールアドレス形式で指定してください。"
   }
 }
 

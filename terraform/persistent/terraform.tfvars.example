@@ -5,12 +5,16 @@
 # （パスワード認証は無効。既存の terraform.tfvars に同名の行が残っていると undeclared variable の
 # 警告が出るので消すこと）。
 #
-# 必須: Microsoft Entra 管理者（プロジェクト所有者のアカウント）の 2 項目と、アラート通知先。
-# いずれも個人のアカウントに紐づく値なのでコミット対象には書かない。
+# 必須: Microsoft Entra 管理者（プロジェクト所有者のアカウント）の 2 項目。
+# 個人のアカウントに紐づく値なのでコミット対象には書かない。
 #   az ad signed-in-user show --query "{id:id, upn:userPrincipalName}" -o json
 entra_administrator_object_id      = "<object id (GUID)>"
 entra_administrator_principal_name = "<userPrincipalName。#EXT# を含む場合はそのまま>"
-alert_email_address                = "<notification email>"
+
+# アラート通知先 alert_email_address / alert_push_account_email（Issue #296）はここに書かない。
+# 環境変数 TF_VAR_alert_email_address / TF_VAR_alert_push_account_email で渡す。
+# tfvars は環境変数より優先されるため、ここに書くと環境変数を変えても plan に出ない
+# （2026-09-19〜10-01 に実際に起きた。docs/operations/azure-resource-inventory.md §B #10）。
 
 # resource_group_name / server_name / log_analytics_daily_quota_gb は default あり。
 # administrator_login は既定 null（Entra 認証のみの新規作成では指定しない。既存サーバーの値は state が保持する）。

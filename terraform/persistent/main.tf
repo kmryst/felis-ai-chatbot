@@ -324,20 +324,43 @@ resource "azurerm_log_analytics_workspace" "main" {
 # 6 件とも 2026-08-27 に az CLI で作成したものを **削除せず terraform import で取り込んだ**
 # （Issue #151）。2026-08-27T05:17:38Z の実発火試験の証跡（台帳 §B #11）が既存の
 # リソース ID に紐づいており、作り直すと ID が変わって証跡の対象が消えるため。
+# 例外として Action Group だけは 2026-10-02 に作り直した（Issue #296。理由は下の Action Group の
+# コメント）。証跡が紐づくのはアラートルールの ID で、ルールはこの作り直しでは置き換わらない。
 # 閾値・severity・条件の設計値と根拠の正本は docs/operations/azure-resource-inventory.md §B #10 / #11。
 # ここのコメントは配置と import の判断のみを持ち、値の根拠は台帳に寄せる。
 
-# メール通知の Action Group。#11 のアラート 5 件すべてがこの 1 件を宛先にしている。
-# 受信者アドレスはコードに書かず TF_VAR_alert_email_address（.env）で渡す。
+# アラート通知の Action Group。#11 のメトリクスアラート 5 件と log search alert
+# alert-kv-secret-sync-failed の計 6 件すべてがこの 1 件を宛先にしている（参照は .id なので、
+# 作り直しで ID が変わっても 6 件は in-place 更新で追随する）。
+# 受信者アドレスはコードに書かず TF_VAR_alert_email_address / TF_VAR_alert_push_account_email
+# （.env）で渡す。
+#
+# 2026-10-02 に旧 Action Group ag-felisaichatbot-dev-email（email receiver opsmail）から
+# 作り直した（Issue #296）。旧 receiver は OTP 未確認のまま作られ、アドレスの付け替えと OTP 確認の
+# 後も、Action Group は実行される（alert の history に ActionsTriggered）のにアラートのメールが
+# 1 通も届かなかった。同じアドレスでも、新しく作った Action Group からはメトリクスアラート・
+# log search alert とも届いた（docs/verification/alert-notification-delivery/observations.md）。
+# create_before_destroy: 新しい Action Group を先に作り、6 件の参照を付け替えてから旧を消す。
+# 既定の順序（旧を消してから作る）だと、その間アラートの宛先が存在しない。
 resource "azurerm_monitor_action_group" "email" {
-  name                = "ag-felisaichatbot-dev-email"
+  name                = "ag-felisaichatbot-dev-email-02"
   resource_group_name = data.azurerm_resource_group.dev.name
   short_name          = "felisdev"
 
   email_receiver {
-    name                    = "opsmail"
+    name                    = "opsmail-02"
     email_address           = var.alert_email_address
     use_common_alert_schema = true
+  }
+
+  # Azure mobile app の push 通知。メールとは別の経路（2026-10-02 の比較試験で到達を確認）。
+  azure_app_push_receiver {
+    name          = "push"
+    email_address = var.alert_push_account_email
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
