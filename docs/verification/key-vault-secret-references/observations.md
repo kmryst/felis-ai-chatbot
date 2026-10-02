@@ -289,8 +289,8 @@ log search alert `alert-kv-secret-sync-failed`（`ContainerAppSystemLogs_CL | wh
 | 発火した alert の `actionStatus` | `isSuppressed: false`（Alert Processing Rule による抑止なし） |
 | rate limit | この subscription の過去 30 日の alert は 2 件（本件と 2026-09-19 の `alert-pgsql-cpu-credits-remaining-low`）。メール上限（1 宛先 100 通 / 時）に遠い |
 | Activity Log | Action Group の通知送信は Activity Log に残らないため判定材料にならない |
-| 受信実績 | 旧 subscription（2026-09-18 に失効）では 2026-08-27〜09-23 の Fired / Resolved メールが届いている。**現 subscription（2026-09-18 作成、Free Trial）では、09-19 の `alert-pgsql-cpu-credits-remaining-low` の Fired / Resolved も、Action Group 作成時の "You've been added to an Azure Monitor action group" も届いておらず、受信実績は 0 件** |
-| `az monitor action-group test-notifications` | 旧 subscription で `(Conflict) Free subscription not supported` だったため実行していない（台帳 §B #10） |
+| 受信実績 | 旧 subscription（2026-09-18 に失効）では 2026-08-27〜09-23 の Fired / Resolved メールが届いている。**現 subscription（2026-09-18 作成）では、09-19 の `alert-pgsql-cpu-credits-remaining-low` の Fired / Resolved も、Action Group 作成時の "You've been added to an Azure Monitor action group" も届いておらず、受信実績は 0 件** |
+| `az monitor action-group test-notifications` | 旧 subscription で API が `Conflict` を返して実行できなかった（サブスクリプションの種類による制限。台帳 §B #10）ため実行していない |
 
 **原因（2026-10-01 確定）: email receiver の宛先確認（OTP による verification）が未完了。** ユーザーの受信箱に 2026-09-19 06:53Z（Activity Log によれば現 subscription の `ag-felisaichatbot-dev-email` は Terraform apply で 06:53:08〜06:53:09Z に作成されており、その直後）、
 `azure-noreply@microsoft.com` から "Action required: Verify your email for Azure Monitor action group" が届いていた。本文:
@@ -392,17 +392,17 @@ Action Group の実行は history に残るが、メールの配送結果（受�
 
 2026-10-02 02:52Z（11:52 JST）、ユーザーが Azure portal の Action Group `ag-felisaichatbot-dev-email` の「通知」欄を確認: receiver `opsmail`（電子メール、新アドレス）の
 「メール アドレスの確認」は **「確認済み」**。**OTP 未確認が原因という線は消えた**（確認状態はポータルにだけ表示され、CLI / REST には出ない）。
-ポータルには Action Group の「テスト」ボタンがある（旧 subscription では API が `Free subscription not supported` を返した。現 subscription での可否は未確認）。
+ポータルには Action Group の「テスト」ボタンがある（旧 subscription では API が `Conflict` を返して実行できなかった。現 subscription での可否は未確認）。
 
 残る可能性: Action Group のメール送信から受信箱までの区間（送信元 3 アドレスのいずれかが Gmail 側で拒否されている、など）。ユーザーの Gmail 検索は迷惑メール・プロモーション・
 すべてのメールを含めても 2 回目の Fired メールを見つけられなかった（2026-10-01）。公式ドキュメント上は "Emails are sent from the following email addresses:"（通知メールは次のアドレスから送られる）として
 `azure-noreply@microsoft.com` / `azureemail-noreply@microsoft.com` / `alerts-noreply@mail.windowsazure.com` の 3 つを挙げている。
 2026-10-02 02:54Z（11:54 JST）、ユーザーが Azure portal の Action Group の「テスト」を実行（通知の種類 = 電子メール、通知名 = `opsmail`）: **失敗**。
-表示は「このテストの完了で問題が発生しました。数分後にもう一度お試しください。」、状態は「不明」。旧 subscription（同じ Free Trial）では同じ機能の API
-`actionGroups/createNotifications` が `(Conflict) Free subscription not supported` を返して実行できなかった（台帳 §B #10）。現 subscription も
-`quotaId: FreeTrial_2014-09-01` / `spendingLimit: On`。Activity Log（subscription スコープ）に 02:54:30Z と 02:57:41Z の 2 回、
-`Microsoft.Insights/actiongroups/createNotifications/action` が `status: Failed` / `subStatus: Conflict`、`statusMessage: {"code":"Conflict","message":"Free subscription not supported"}`
-で記録されており、**旧 subscription と同じ原因（Free Trial ではテスト通知が使えない）と確定**。ポータルの「テスト」も内部で同じ API を呼ぶ。
+表示は「このテストの完了で問題が発生しました。数分後にもう一度お試しください。」、状態は「不明」。旧 subscription では同じ機能の API
+`actionGroups/createNotifications` が `Conflict` を返して実行できなかった（サブスクリプションの種類による制限。台帳 §B #10）。
+Activity Log（subscription スコープ）に 02:54:30Z と 02:57:41Z の 2 回、`Microsoft.Insights/actiongroups/createNotifications/action` が
+`status: Failed` / `subStatus: Conflict` で記録されており、**旧 subscription と同じ原因（テスト通知は本サブスクリプションでは実行できない）と確定**。
+ポータルの「テスト」も内部で同じ API を呼ぶ。
 テスト通知の失敗は Action Group の実通知の可否とは別で、Fired メールが届かない原因の説明にはならない。
 
 #### 発火試験の判定（2026-10-02 確定）
@@ -410,7 +410,7 @@ Action Group の実行は history に残るが、メールの配送結果（受�
 | 区分 | 内容 |
 | --- | --- |
 | **PASS** | ルールが実際の同期失敗で `Fired`（2 回、失敗ログから約 9 分）、公式の解決条件どおり自動 `Resolved`（2 回、最後の失敗から約 1 時間 40 分）、Azure Monitor による Action Group の実行（alert の history に `ActionsTriggered` 4 件）、ルール・Action Group・receiver（OTP 確認済み）の設定 |
-| **未確認** | アラートのメール（Fired / Resolved）が受信箱に届くこと。2 回の発火・4 回の Action Group 実行で 0 通。Free Trial ではテスト通知が使えないため、ポータルの「テスト」でも切り分けできない |
+| **未確認** | アラートのメール（Fired / Resolved）が受信箱に届くこと。2 回の発火・4 回の Action Group 実行で 0 通。テスト通知は API が `Conflict` を返して実行できない（サブスクリプションの種類による制限）ため、ポータルの「テスト」でも切り分けできない |
 | **別 Issue** | 「Action Group `ag-felisaichatbot-dev-email` からアラートのメールが届かない」。PR 2 のマージ後、PR 3（Easy Auth secret の Key Vault 参照化）より前に着手する |
 
 Codex による読み取りのみの調査（2026-10-02）の要点: 原因は不明。候補は (1) Azure 側のメール配送障害 (2) Gmail 側の拒否（bounce は送信側にしか見えない）
