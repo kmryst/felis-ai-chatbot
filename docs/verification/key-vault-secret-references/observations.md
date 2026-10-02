@@ -289,7 +289,7 @@ log search alert `alert-kv-secret-sync-failed`（`ContainerAppSystemLogs_CL | wh
 | 発火した alert の `actionStatus` | `isSuppressed: false`（Alert Processing Rule による抑止なし） |
 | rate limit | この subscription の過去 30 日の alert は 2 件（本件と 2026-09-19 の `alert-pgsql-cpu-credits-remaining-low`）。メール上限（1 宛先 100 通 / 時）に遠い |
 | Activity Log | Action Group の通知送信は Activity Log に残らないため判定材料にならない |
-| 受信実績 | 旧 subscription（2026-09-18 に失効）では 2026-08-27〜09-23 の Fired / Resolved メールが届いている。**現 subscription（2026-09-18 作成）では、09-19 の `alert-pgsql-cpu-credits-remaining-low` の Fired / Resolved も、Action Group 作成時の "You've been added to an Azure Monitor action group" も届いておらず、受信実績は 0 件** |
+| 受信実績 | 移行前の subscription では 2026-08-27〜09-23 の Fired / Resolved メールが届いている。**移行後の subscription では、09-19 の `alert-pgsql-cpu-credits-remaining-low` の Fired / Resolved も、Action Group 作成時の "You've been added to an Azure Monitor action group" も届いておらず、受信実績は 0 件** |
 | `az monitor action-group test-notifications` | 旧 subscription で API が `Conflict` を返して実行できなかった（サブスクリプションの種類による制限。台帳 §B #10）ため実行していない |
 
 **原因（2026-10-01 確定）: email receiver の宛先確認（OTP による verification）が未完了。** ユーザーの受信箱に 2026-09-19 06:53Z（Activity Log によれば現 subscription の `ag-felisaichatbot-dev-email` は Terraform apply で 06:53:08〜06:53:09Z に作成されており、その直後）、
