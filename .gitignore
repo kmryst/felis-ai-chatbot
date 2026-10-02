@@ -15,3 +15,6 @@ __pycache__/
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# Terraform plan files (terraform plan -out=tfplan-*)
+tfplan-*

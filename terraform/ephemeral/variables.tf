@@ -133,21 +133,20 @@ variable "ops_container_image" {
   }
 }
 
-variable "chat_api_key_rotation" {
+variable "key_vault_name" {
   description = <<-DESC
-    /chat 保護用 API キー（Issue #107）のローテーション用キーパー（Issue #275 / ADR-0031）。
-    キー本体は random_password.chat_api_key が生成し、人が値を扱わない（tfvars にも書かない）。
-    この値を変えて apply すると新しいキーが生成され、backend serving と frontend の両方の
-    secret / CHAT_API_KEY_CONFIG_CHECKSUM が同じ apply で更新される（新 revision の作成は
-    CHAT_API_KEY_CONFIG_CHECKSUM が担保する。ADR-0027「付随する決定」）。
-    ローカル開発用の CHAT_API_KEY はこの値とは無関係（backend/.env.example 参照）。
+    /chat 保護用 API キー（Issue #107）を置く Azure Key Vault 名（persistent 層が作る。
+    Issue #286 / ADR-0032。ADR-0013 の予約名）。この層は data "azurerm_key_vault" で参照し、
+    secret `chat-api-key` をバージョン無しの Key Vault 参照で Container Apps に渡す。
+    値は tfvars にも state にも入らない。ローテーションは persistent 層の chat_api_key_version を
+    +1 して apply する（この層の apply は不要）。
   DESC
   type        = string
-  default     = "2026-09-20"
+  default     = "kv-felisaichatbot-dev"
 
   validation {
-    condition     = length(trimspace(var.chat_api_key_rotation)) > 0
-    error_message = "chat_api_key_rotation は空にできません（日付など、ローテーションごとに変える文字列）。"
+    condition     = length(trimspace(var.key_vault_name)) > 0
+    error_message = "key_vault_name は空にできません。"
   }
 }
 

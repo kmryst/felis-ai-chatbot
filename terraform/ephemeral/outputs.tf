@@ -30,11 +30,6 @@ output "frontend_app_fqdn" {
   value       = one(azurerm_container_app.front[*].ingress[0].fqdn)
 }
 
-# /chat 保護の API キー（Terraform 生成。Issue #275 / ADR-0031）。値は sensitive で通常の出力には
-# 出ない。運用の疎通確認で要るときだけ `terraform output -raw chat_api_key` で取り出し、
-# ファイルや履歴に残さない
-output "chat_api_key" {
-  description = "backend serving / frontend に注入している /chat の API キー（sensitive。Terraform 生成）"
-  value       = random_password.chat_api_key.result
-  sensitive   = true
-}
+# /chat 保護の API キーは Key Vault の secret `chat-api-key`（persistent 層）に移り、この層の
+# state には無い（Issue #286 / ADR-0032）。運用で値が要るときは `az keyvault secret show` で
+# 取り出し、ファイルや履歴に残さない。旧 output chat_api_key は廃止した

@@ -134,20 +134,25 @@ locals {
   )
 }
 
-# /chat 保護の API キー（Issue #107）を Terraform が生成する（Issue #275 / ADR-0031）。
-# 人が値を扱う秘密値から外し、backend serving と frontend（BFF）の secret に同じ値を注入する。
-# - 長さ 64 の英数字（backend の最小長 32 = CHAT_API_KEY_MIN_LENGTH を十分上回る。記号を含めないのは
-#   ヘッダ値・シェル経由の扱いを単純にするため）
-# - keepers.rotation を変えると再生成される（両 app の新 revision は CHAT_API_KEY_CONFIG_CHECKSUM が担保）
-# - 値は state にのみ存在する（Container Apps の secret に write-only 版は無い。Easy Auth の
-#   client secret と同じ扱い）。運用で値が要るときは `terraform output -raw chat_api_key`
-resource "random_password" "chat_api_key" {
-  length  = 64
-  special = false
+# Key Vault（persistent 層。Issue #286 / ADR-0032）。/chat 保護の API キー（Issue #107）は
+# persistent 層が ephemeral resource random_password + write-only argument value_wo で
+# Key Vault の secret `chat-api-key` に書き、この層の Container Apps は Key Vault 参照
+# （key_vault_secret_id + identity）で読む。値は tfvars にも state にも入らない。
+# terraform_remote_state は使わず data source で参照する（ADR-0015 の 7）。
+data "azurerm_key_vault" "main" {
+  name                = var.key_vault_name
+  resource_group_name = data.azurerm_resource_group.dev.name
+}
 
-  keepers = {
-    rotation = var.chat_api_key_rotation
-  }
+locals {
+  # バージョン無しの secret ID。Container Apps は 30 分以内に最新バージョンを取り込み、
+  # その secret を環境変数で参照する revision を再起動する（RevisionRestartWithNewSecrets。
+  # 新しい revision は作られない。2026-09-22 実測。ADR-0032 決定 3）。
+  # ローテーションは persistent 層の chat_api_key_version を +1 して apply するだけで、
+  # この層の apply は要らない。旧 CHAT_API_KEY_CONFIG_CHECKSUM（ADR-0027「付随する決定」）は
+  # 値が state に無いと作れず、platform の自動再起動で不要になったため廃止した。
+  # data "azurerm_key_vault_secret" は値を state に読み込むので使わない。
+  chat_api_key_secret_id = "${data.azurerm_key_vault.main.vault_uri}secrets/chat-api-key"
 }
 
 resource "azurerm_container_app" "main" {
@@ -179,11 +184,13 @@ resource "azurerm_container_app" "main" {
     }
   }
 
-  # /chat 保護の API キー（#107）。Terraform 生成（random_password.chat_api_key）。
-  # frontend の secret と同じ値
+  # /chat 保護の API キー（#107）。Key Vault の secret `chat-api-key` への参照（ADR-0032）。
+  # frontend の secret と同じ参照先。identity は Key Vault Secrets User を持つ #8（台帳 §B #15）。
+  # 同期失敗は persistent 層の log search alert alert-kv-secret-sync-failed が検知する
   secret {
-    name  = "chat-api-key"
-    value = random_password.chat_api_key.result
+    name                = "chat-api-key"
+    key_vault_secret_id = local.chat_api_key_secret_id
+    identity            = data.azurerm_user_assigned_identity.acr_pull.id
   }
 
   template {
@@ -274,17 +281,10 @@ resource "azurerm_container_app" "main" {
         value = var.chat_disabled ? "true" : "false"
       }
 
-      # CHAT_API_KEY rotation の revision 反映担保（ADR-0027「付随する決定」）。
-      # secret 更新は既存 revision に自動反映されないため、鍵のハッシュを revision-scope の
-      # 非 secret env として frontend と backend serving の両 template に同一値で持たせ、
-      # rotation の apply が両 app で必ず新 revision を作るようにする（DSN_CONFIG_CHECKSUM と
-      # 同型。sha256 先頭 8 桁のみで不可逆）。cross-app の同時性・原子性は主張しない
-      # （revision 切替は app ごとに独立。partial apply 時の収束手順は
-      # vnet-integration-cutover.md §6-2）。
-      env {
-        name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
-        value = "key-${nonsensitive(substr(sha256(random_password.chat_api_key.result), 0, 8))}"
-      }
+      # 旧 CHAT_API_KEY_CONFIG_CHECKSUM env は Key Vault 参照化（ADR-0032）で廃止した。
+      # ローテーション時の再起動は platform が行う（local.chat_api_key_secret_id のコメント参照）。
+      # frontend と backend serving の再起動は app ごとに独立に進むため、rotation 中に
+      # 両者の chat-api-key が一致しない期間が生じ得る点は従来と同じ（ADR-0027「付随する決定」）。
 
       # LLM provider 切替（Issue #195。ADR-0009）。空なら env を注入せず backend の既定
       # "stub"（ADR-0004）のまま動く。rollback = 変数を空へ戻して apply
@@ -883,10 +883,12 @@ resource "azurerm_container_app" "front" {
     identity = data.azurerm_user_assigned_identity.acr_pull.id
   }
 
-  # BFF が server 側で付与する /chat の API キー（ADR-0027 決定 2。ブラウザには配らない）
+  # BFF が server 側で付与する /chat の API キー（ADR-0027 決定 2。ブラウザには配らない）。
+  # backend serving と同じ Key Vault 参照（ADR-0032）
   secret {
-    name  = "chat-api-key"
-    value = random_password.chat_api_key.result
+    name                = "chat-api-key"
+    key_vault_secret_id = local.chat_api_key_secret_id
+    identity            = data.azurerm_user_assigned_identity.acr_pull.id
   }
 
   # Easy Auth（authConfigs）が参照する client secret。secret 名は ACA の Entra 構成が使う
@@ -919,12 +921,7 @@ resource "azurerm_container_app" "front" {
         secret_name = "chat-api-key"
       }
 
-      # rotation の revision 反映担保（backend serving 側と同一値。ADR-0027「付随する決定」。
-      # 詳細コメントは serving 側の同名 env を参照）
-      env {
-        name  = "CHAT_API_KEY_CONFIG_CHECKSUM"
-        value = "key-${nonsensitive(substr(sha256(random_password.chat_api_key.result), 0, 8))}"
-      }
+      # 旧 CHAT_API_KEY_CONFIG_CHECKSUM env は廃止（backend serving 側のコメント参照。ADR-0032）
     }
   }
 

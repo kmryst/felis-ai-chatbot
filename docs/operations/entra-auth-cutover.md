@@ -171,8 +171,17 @@ PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c 'select curr
   （付録 A）。常設しないのは、write-only の password 引数を sensitive / ephemeral 変数で書くと plan に空の in-place
   update が出続けるため（[実測記録 §10](../verification/entra-auth/observations.md)）
 - Azure OpenAI: `disableLocalAuth=false` に戻せばキー認証が復活する（キー自体は失効していない）
-- chat API キー: `chat_api_key_rotation` を変えて apply すれば再生成される。値が要るときは
-  `terraform -chdir=terraform/ephemeral output -raw chat_api_key`（ファイルや履歴に残さない）
+- chat API キー: Key Vault `kv-felisaichatbot-dev` の secret `chat-api-key` に置き、backend serving と frontend は
+  バージョン無しの Key Vault 参照で読む（Issue #286 / [ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md)）。
+  ローテーションは persistent 層の `terraform.tfvars` で `chat_api_key_version` を +1 して
+  `terraform -chdir=terraform/persistent apply`（新バージョンは Container Apps が 30 分以内に取り込み、
+  両 app の revision を再起動する。ephemeral 層の apply は不要）。値が要るときは
+  `az keyvault secret show --vault-name kv-felisaichatbot-dev -n chat-api-key --query value -o tsv`
+  の出力をパイプで直接使い、画面・ファイル・履歴に残さない。
+  Key Vault 参照から直接値へ戻す手順と、rotation 中に frontend と backend の `chat-api-key` が一致しないときの
+  復旧手順は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の PR 2 の節。
+  `az containerapp revision restart` は Key Vault の値を取り直さない（2026-10-01 実測。platform が最後に同期した値のまま replica が作り直される）ので、
+  値を取り直すには Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...,identityref:...`）か 30 分周期の定期同期を使う
 - tfvars の編集は編集前のコピーを `backup-before-*.tfvars`（gitignore 済み。Terraform は自動読込しない）に
   残してから行う
 

@@ -116,7 +116,7 @@ az containerapp show -n ca-felisaichatbot-dev -g rg-felisaichatbot-dev-tf \
 `AZURE_OPENAI_API_KEY` は Container Apps の secret（application-scope）であり、値の更新だけ
 では新 revision が作られない。`AZURE_OPENAI_CONFIG_CHECKSUM`（key の sha256 先頭 8 桁。
 不可逆）を revision-scope の env として template に持たせることで、key を変えた apply が
-必ず新 revision 作成を伴う（`DSN_CONFIG_CHECKSUM` / `CHAT_API_KEY_CONFIG_CHECKSUM` と同型。
+必ず新 revision 作成を伴う（`DSN_CONFIG_CHECKSUM` と同型。旧 `CHAT_API_KEY_CONFIG_CHECKSUM` も同型だったが Key Vault 参照化で廃止。
 ADR-0027「付随する決定」）。
 
 ## 関連
