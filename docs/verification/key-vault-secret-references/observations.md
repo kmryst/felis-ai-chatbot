@@ -145,7 +145,7 @@ lock ファイルの変更はこの PR に含める。
 
 ### rollback 1 回（Key Vault 参照 → 直接値 → Key Vault 参照。2026-09-28 実施。すべて az CLI）
 
-rollback 用の値は apply の前（07:37Z）に Key Vault から scratchpad の mode 600 ファイル（改行なし、64 バイト）へ取り出しておいたものを使い、
+rollback 用の値は apply の前（07:37Z）に Key Vault から作業端末の一時ファイル（mode 600、改行なし、64 バイト）へ取り出しておいたものを使い、
 Key Vault へは読みに行かない（Key Vault の読み取り障害が切替失敗の原因だった場合でも戻せるようにするため）。
 直接値が入っている間は ephemeral 層で Terraform（plan を含む）を実行しない（値方式の secret の値が state に書かれるため）。
 
@@ -225,7 +225,7 @@ Key Vault 参照はバージョン無しなので ephemeral 層の apply は不�
 | 時刻 (UTC) | 操作 / 確認 | 結果 |
 | --- | --- | --- |
 | 04:38:29 | 基準（読み取り） | serving `--0000005`（replica 2026-09-28T08:53:00Z）/ frontend `--0000004`（replica 08:53:02Z）。Key Vault / serving / frontend の sha256 先頭 12 桁は 3 つとも `a934ba6b5413`。`list-versions` 1 件 |
-| 04:38 | rollback 用の値（ローテーション前のバージョン）を scratchpad の mode 600 ファイルへ（改行なし、64 バイト） | 6-9 の PASS まで保持 |
+| 04:38 | rollback 用の値（ローテーション前のバージョン）を作業端末の一時ファイル（mode 600、改行なし、64 バイト）へ | 6-9 の PASS まで保持 |
 | 04:38:56 | 外形監視の停止 `gh variable set PROBE_ENABLED --body false` | `false` を確認 |
 | 04:39:04 | persistent 層 `terraform.tfvars` に `chat_api_key_version = 2` を追記（編集前のコピーを `backup-before-chat-api-key-rotation-<UTC>.tfvars` に残す。いずれも gitignore 済み） | — |
 | 04:4x | `terraform -chdir=terraform/persistent plan -detailed-exitcode -out=tfplan-pr2-rotation`（ユーザー） | exit 2、`Plan: 0 to add, 1 to change, 0 to destroy.`。差分は `azurerm_key_vault_secret.chat_api_key` の `value_wo_version: 1 -> 2`（`value_wo = (write-only attribute)`）のみ。他のリソースに差分なし |
@@ -302,12 +302,12 @@ To verify, click the link below and enter the OTP code displayed. The code expir
 Microsoft Learn [Create and manage action groups in Azure Monitor](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups)（Notification types の Email 行、2026-07-21 版）:
 "Email addresses must be verified through a one-time passcode (OTP) within 30 minutes of saving the action group. This verification persists across all past and future action groups within the same tenant.
 If the passcode expires, open the action group and select Resend. An unverified receiver can't receive alert or test notifications after enforcement is active."
-（メールアドレスは Action Group の保存から 30 分以内に OTP で確認しなければならない。確認は同じテナント内の過去・将来のすべての Action Group に引き継がれる。
+（メールアドレスは Action Group の保存から 30 分以内に OTP で確認しなければならない。確認は同じディレクトリ（tenant）内の過去・将来のすべての Action Group に引き継がれる。
 パスコードが失効したら Action Group を開いて Resend を選ぶ。未確認の受信者は、強制が有効になった後はアラート通知もテスト通知も受け取れない）。
 同ページの作成手順の注記: "New email addresses receive a one-time passcode (OTP) validation request. Previously validated email addresses receive a standard notification email."
 （新しいメールアドレスには OTP の確認要求が送られ、確認済みのアドレスには通常の通知メールが送られる）。
 
-旧 subscription（別テナント）では 2026-08-27 に同じアドレスで受信できていたが、確認はテナント単位で引き継がれるため、09-18 に作った新テナントでは改めて確認が必要だった。
+旧 subscription では 2026-08-27 に同じアドレスで受信できていたが、確認は同じディレクトリ内の Action Group にしか引き継がれないため、09-18 に別のディレクトリに作った Action Group では改めて確認が必要だった。
 `az monitor action-group show` の `emailReceivers[].status` は確認の有無に関係なく `Enabled` で、確認状態は Azure CLI / REST（api-version 2023-01-01 / 2024-10-01-preview）には出ない。
 Resend も Azure portal の Action Group 画面の操作のみで、CLI / REST には無い。
 
@@ -324,7 +324,7 @@ Resend も Azure portal の Action Group 画面の操作のみで、CLI / REST �
 | 06:07:56 → 06:08:00 | `apply tfplan-alert-email`（ユーザー） | `0 added, 1 changed`。plan ファイルは削除 |
 | 06:08 | 読み取り確認 `az monitor action-group show` | receiver `opsmail` は `status: Enabled`、アドレスの sha256 先頭 12 桁が `16458216cf25` → `02406007e366` に変わった（ドメインは gmail.com のまま） |
 | 06:08 | 新アドレスに "Action required: Verify your email for Azure Monitor action group" が届き、ユーザーが OTP を入力（15:08 JST） | 確認完了（apply から数分以内）。以後このアドレスへ通知が届くはず。最初の配送確認は本ルールの `Resolved` 通知 |
-| 06:09 | 新アドレスに Action Group からの通知メール（"You've been added to an Azure Monitor action group" とみられる）が届く（15:09 JST） | **新テナントの Action Group から配送されたメールの最初の実績**。アラート通知そのものの配送は本ルールの `Resolved` メールで確認する |
+| 06:09 | 新アドレスに Action Group からの通知メール（"You've been added to an Azure Monitor action group" とみられる）が届く（15:09 JST） | **現 subscription の Action Group から配送されたメールの最初の実績**。アラート通知そのものの配送は本ルールの `Resolved` メールで確認する |
 
 `variables.tf` の説明文と台帳 §B #10 に、tfvars に書かないこと・OTP 確認が要ることを追記した（本 PR に含める）。
 本 PR の発火試験は「ルールが実際の同期失敗で `Fired` になる」までを PASS とし、メール到達は Action Group の宛先確認（Key Vault 参照とは独立）として記録する。

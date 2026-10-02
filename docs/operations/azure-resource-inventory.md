@@ -595,7 +595,7 @@ az monitor action-group list -g rg-felisaichatbot-dev-tf -o table    # 空にな
 
 - **email receiver の宛先確認（OTP。2026-10-01 に実測）**: 新しいメールアドレスを receiver にすると Azure から
   "Action required: Verify your email for Azure Monitor action group" が届き、**30 分以内に OTP で確認するまで通知もテスト通知も届かない**。
-  確認はテナント単位で引き継がれるため、テナント（Azure アカウント）を変えたら同じアドレスでも再確認が要る
+  確認は同じディレクトリ内の Action Group に引き継がれる。別のディレクトリに作った Action Group では同じアドレスでも改めて確認が要る
   （[Microsoft Learn: action-groups](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups) Notification types の Email 行）。
   確認状態は `az monitor action-group show` にも REST にも出ない（未確認でも `status: Enabled`）。OTP が失効したら Azure portal で Action Group を開き
   receiver の **Resend**（CLI / REST には無い）。2026-09-19 の移行時に作った receiver は確認されておらず、2026-10-01 まで新 subscription の
