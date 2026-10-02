@@ -496,7 +496,7 @@ coordinator の独立実測により、ステップ C 完了報告後の 12:37 �
 
 **主目的は「`min_replicas = 0` と宣言しながら 1 レプリカが常駐し、その宣言のせいで idle 適格を
 外していた」という宣言と実態の食い違いの解消**（コスト効果は副次）。判断の背景として、
-サブスクリプションは FreeTrial / spendingLimit: On（coordinator 実測）でクレジット枯渇は当面の
+サブスクリプションは Free Trial で spending limit が有効（coordinator 実測）でクレジット枯渇は当面の
 制約にならないことも確認済み。serving は縮退が実測で確認できているため 0 のまま触らない。
 
 - 12:55:08Z `terraform plan`: 差分は ops の `min_replicas = 0 -> 1` の in-place 1 件のみ

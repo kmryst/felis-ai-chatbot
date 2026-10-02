@@ -79,7 +79,7 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 
 ## 12か月無料枠（PostgreSQL Flexible Server）
 
-2026-08-19 サインアップの Azure 無料アカウントには、$200 クレジット（30 日）とは別に **12 か月の無料サービス枠**があり、PostgreSQL Flexible Server が含まれる。
+Azure 無料アカウントには、$200 クレジット（30 日）とは別に **12 か月の無料サービス枠**があり、PostgreSQL Flexible Server が含まれる。
 
 - 原文: 「750 hours of Flexible Server—Burstable B1MS Instance, 32 GB storage, and 32 GB backup storage」（出典: <https://azure.microsoft.com/en-us/pricing/purchase-options/azure-account> ）
 - **$200 クレジット期間中も適用される**: 「As long as you have unexpired credit or you use only free services within the limits, you're not charged.」（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
@@ -132,63 +132,20 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 
 ### リスクと未確定事項（「確定」と書かない）
 
-- **Day 4 の PITR ドリルでは復元先としてもう 1 台の B1ms が一時的に立つ**。2 台分の稼働時間が 750 時間に合算されるなら当月分を超え得る。超えた場合も**超過分はクレジットから引かれるだけで実支出は $0**（クレジット失効 2026-09-18 まで）
+- **Day 4 の PITR ドリルでは復元先としてもう 1 台の B1ms が一時的に立つ**。2 台分の稼働時間が 750 時間に合算されるなら当月分を超え得る。超えた場合も**超過分はクレジットから引かれるだけで実支出は $0**
 - **2026-08 の実績では超過リスクは無い**: 8/30 取得時点で 192 / 750 時間（本節「750 時間の消費状況の確認手段」）。仮に月末まで連続稼働し、PITR ドリルの復元先 1 台が合算されるとしても 750 時間には届かない
 - **未確定**（公式に明文を確認できていない事項。確定として扱わない）:
   - 複数台の B1ms を並行稼働させたとき 750 時間が**合算**されるのか
   - **停止中**の時間が 750 時間を消費するか（停止中もストレージ・バックアップストレージの課金自体は継続する。計画書 §2-1 No.6）
   - 原文の「32 GB」が GB / GiB のどちらの厳密解釈か
   - 上記のうち**合算**と**停止中**の 2 件は、今後の PITR ドリル（復元先としてもう 1 台の B1ms が一時的に立つ）で実測できる見込みがある。**ドリル実施までは未確定のまま扱う**
-- **無料枠の終了は公式記述では 2027-08 頃**（サインアップ 2026-08-19 から 12 か月。「Your free services and quantities expire at the end of 12 months.」（訳）「無料サービスと数量は 12 か月の終わりに失効します」。出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
-  - **実測値は 2027-09-19**（2026-08-30 に `az rest` でサブスクリプションを取得。`promotions[].endDateTime: 2027-09-19T06:59:55Z`）。サインアップ 2026-08-19 からは **13 か月**にあたる
-  - **公式は一貫して "12 months" と書いており、この 1 か月の差を説明する一次情報は見つかっていない = 未解明**。実測値のほうを運用の目安に使い、**どちらが正しいかは断定しない**（本節の判断期限 2026-09-18 は $200 クレジットの失効日であって無料枠の話ではないため、この差は当面の判断に影響しない）
+- **無料枠は 12 か月で終了する**（「Your free services and quantities expire at the end of 12 months.」（訳）「無料サービスと数量は 12 か月の終わりに失効します」。出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）
 
-## 課金アカウントとサブスクリプションの構造（2026-08-30 実測）
+## Cost Management のコストデータの性質
 
-> 本節の実測値は**移行元**のサブスクリプションのもの。2026-09-18 に新しいサブスクリプションへ移行した
-> （[ADR-0030](../adr/0030-subscription-migration-and-02-suffix-naming.md)）後は再実測していない。
-> 移行先で確認する場合は同じ `az rest` の読み取りを行い、本節を更新する。
+本書と計画書に載るコストの実測値（`usageDetails` 由来）を読むときの前提。
 
-`az rest --method get` で課金スコープとサブスクリプションを読み取った結果（2026-08-30 取得）。
-**課金アカウントの契約タイプとサブスクリプションのオファーは別の階層であり、混同すると
-「請求書が出るかどうか」の判定を間違える。**
-
-識別子は本書にハードコードしない（`$SUB` 等のプレースホルダを使う運用。上の
-「750 時間の消費状況の確認手段」節と同じ）。
-
-| 階層 | 項目 | 実測値 |
-| --- | --- | --- |
-| Billing account | `accountType` | `Individual` |
-| Billing account | **`agreementType`** | **`MicrosoftCustomerAgreement`（MCA）** |
-| Billing account | `accountStatus` | `Active` |
-| Billing profile | `currency` | `JPY` |
-| Billing profile | **`invoiceDay`** | **`9`** |
-| Billing profile | `spendingLimit` | `On` |
-| Billing profile | `billingRelationshipType` | `Direct` |
-| Invoices | `totalCount` | **`0`**（2026-08-30 時点でまだ 1 枚も発行されていない） |
-| Subscription | `state` | `Enabled` |
-| Subscription | **`quotaId`** | **`FreeTrial_2014-09-01`（= オファー MS-AZR-0044P）** |
-| Subscription | `spendingLimit` | `On` |
-| Subscription | `promotions[].endDateTime` | `2027-09-19T06:59:55Z`（本書「12か月無料枠」節の実測終了日） |
-
-### MCA では invoice が必ず発行される
-
-> "If you have a billing account for a Microsoft Customer Agreement (MCA) or a Microsoft Partner Agreement (MPA), you always receive an invoice."
-
-（訳）
-
-> Microsoft Customer Agreement (MCA) または Microsoft Partner Agreement (MPA) の課金アカウントを
-> お持ちの場合、常に請求書が発行されます。
-
-- 出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/understand/download-azure-invoice> （2026-08-30 確認）
-- 対比: MOSP なら「使用量が月次クレジット額を超えた場合にのみ発行」。**本アカウントは MCA なので毎月出る**
-- 発行日は請求サイクル終了後 5〜12 日（同ページ）。実測の `invoiceDay: 9` と合わせると
-  **8 月分 ≒ 2026-09-09**（クレジット失効 2026-09-18T06:59:34Z の 9 日前）、
-  **9 月分 ≒ 2026-10-09**（失効の 21 日後）。usage file は請求書発行後 72 時間以内（同ページ）
-- `totalCount: 0` は「MCA だが 8 月分がまだ請求サイクル内」という状態であって、
-  **「invoice が出ないアカウント」ではない**
-
-### Free Trial オファーでは Cost Management の履歴が invoice と一致しないことがある
+### Cost Management の履歴が invoice と一致しないことがある
 
 > "Historical data for credit-based and pay-in-advance offers might not match your invoice. … The price shown on your invoice might differ from the price used for cost estimation."
 
@@ -198,10 +155,8 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 > 請求書に表示される価格は、コスト見積もりに使用された価格と異なる場合があります。
 
 - 出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data> （2026-08-30 確認）。
-  対象オファーの一覧に **`Free Trial (MS-AZR-0044P)`** が明記されている = **本サブスクリプションが該当する**
-- したがって本書と計画書に載る `usageDetails` 由来の数字は、**invoice の数字と一致する保証がない**。
-  **両方を残し、差分そのものを証跡として扱う**（退避運用は
-  [credit-window-execution-plan.md](./credit-window-execution-plan.md) §9-1）
+  対象オファーの一覧に Free Trial が含まれる
+- したがって本書と計画書に載る `usageDetails` 由来の数字は、**invoice の数字と一致する保証がない**
 
 ### 数値がいつ締まるか
 
@@ -228,9 +183,6 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 > オープン月（未請求）期間中、Cost Management のデータは推定値としてのみ扱うべきです。
 
 - 出典: いずれも <https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data> （2026-08-30 確認）
-- **9 月分が確定するのは最速 10/5 頃、invoice は 10/9 頃**で、どちらもクレジット失効 2026-09-18 より後。
-  **teardown を何日前倒ししても「9 月分の確定値」は失効前に取れない**（この帰結が
-  teardown 9/15 を維持する判断の根拠 = [credit-window-execution-plan.md](./credit-window-execution-plan.md) §10-6）
 
 ### データ保持
 
@@ -242,30 +194,10 @@ apply の前に下表の 11 namespace を一括登録し、2026-09-19 の読み�
 > Azure ポータルの Cost Management 機能は直近 13 か月のデータを提供します。
 
 - 出典: 同上（2026-08-30 確認）
-- **ただし「無効化されたサブスクリプションでも同じ保持期間か」は明記が無い = 未確定**（下記）
 
 ### 未確定（一次情報を確認できていない。確定として扱わない）
 
-計画書 §10-6 の退避運用は、この一覧を**失効前に潰せない前提**として設計してある。
-
-1. クレジット失効による無効化の**後**に、Cost Management / Consumption API を「読み取り」できるかの明文
-2. 無効化されたサブスクリプションのデータ保持期間が、有効時と同じかどうか
-3. クレジット失効による無効化の段階的タイムライン（何日後にリソース削除等）。
-   **サブスクリプションのキャンセルのケースには 3 日 / 30〜90 日 / 90 日 の記述があるが、
-   失効ケースに同じ日数が適用されるとは書かれていない。混同しない**
-4. 失効で無効化された後の再有効化の猶予期間（日数）
-5. MCA invoice の保持期間・ダウンロード可能期間
-6. 無効化後に、同一サブスクリプション内の Storage Account の BLOB をダウンロードできるか
-   （「storage is read-only」という間接記述のみで、一次情報が存在しない）
-7. `balanceSummary` が失効後に何を返すか（`lots` には明文があるが `balanceSummary` には無い）
-8. Exports が Free Trial オファー（MS-AZR-0044P）で動作するかの明文
-9. 無料枠の実測終了日 2027-09-19 が公式の "12 months" とずれる理由（本書「12か月無料枠」節）
-
-## 従量課金へのアップグレード（判断期限 2026-09-18）
-
-- **アップグレードしないと、クレジットの失効（2026-09-18。lots API 実測。計画書 §8）でサブスクリプションと全サービスが無効化される**: 「Your subscription and services are disabled when your credit runs out or expires at the end of 30 days. To continue using Azure services, you must upgrade your account.」（訳）「クレジットが尽きたとき、または 30 日の終わりに失効したとき、サブスクリプションとサービスは無効化されます。Azure サービスを使い続けるには、アカウントをアップグレードする必要があります。」（出典: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/avoid-charges-free-account> ）。**「使い切って枯渇」と「余ったまま期限切れ」で扱いは同じ**であり、`spendingLimit: On` のままなら 2026-09-18 に無効化される
-- アップグレードそのものに料金はなく、**12 か月無料枠はアップグレード後も継続**し、枠を超えた利用分だけが従量課金になる: 「After you upgrade, you'll have continued access to free services for 12 months and you get charged only for usage beyond the free services and quantities.」（出典: 同上。手順: <https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/upgrade-azure-subscription> ）
-- つまり「アップグレードして §A の構成を無料枠内で残す」か「2026-09-18 までに全部畳む」かの二択で、**判断期限は 2026-09-18**
+- Cost Management の Exports が Free Trial で動作するかの明文
 
 ## プロジェクト終了時の後片付け
 
