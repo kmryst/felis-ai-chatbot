@@ -254,14 +254,16 @@ Container Apps は解決済みの値で動き続けるので、サインイン�
   （対話シェルに貼り付けても subshell の終了時に動く。`INT` / `TERM` は `exit 130` で明示的に終了させ、中断後に処理が続かないようにする。
   Bash の trap の仕様: <https://www.gnu.org/s/bash/manual/bash.html#Bourne-Shell-Builtins>。`az rest --body` は `@{file}` のみで標準入力は使えない。
   外部コマンドをスタブにした模擬実行（2026-10-03）: 正常終了 / PATCH 失敗 / 発行中の `SIGINT` / PATCH 中の `SIGINT` / 対話シェルへの貼り付け、の
-  いずれも一時ファイルが残らなかった。発行中に中断すると PATCH は呼ばれず、PATCH 中に中断すると実行中の PATCH は完了するがその後の処理は続かない）
+  いずれも一時ファイルが残らなかった。発行中に中断すると PATCH は呼ばれず、PATCH 中に中断すると実行中の PATCH は完了するがその後の処理は続かない。
+  後片付け（shred）の最中の `SIGINT` でも、EXIT の処理が先頭で `trap '' INT TERM` を設定しているため削除が完了する）
 
 ```bash
 # 全体を subshell に入れる: 対話シェルに貼り付けても、subshell の終了時に EXIT の trap が動いて一時ファイルが消える
 (
 set -euo pipefail
 BODY=""
-trap 'if [ -n "$BODY" ]; then shred -u "$BODY" 2>/dev/null || rm -f "$BODY"; fi' EXIT
+# EXIT の後片付けは、先頭で INT / TERM を無視してから行う（shred の最中に Ctrl+C を受けると INT の handler の exit が削除を打ち切るため）
+trap 'trap "" INT TERM; if [ -n "$BODY" ]; then shred -u "$BODY" 2>/dev/null || rm -f "$BODY"; fi' EXIT
 trap 'exit 130' INT TERM   # 中断時は明示的に終了する（EXIT の trap が走り、以後の処理は続かない）
 RG=rg-felisaichatbot-dev-tf
 APP_ID=$(az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[0].appId" -o tsv)
@@ -302,11 +304,13 @@ az containerapp show -g $RG -n ca-felisaichatbot-dev-front \
 - 直接値が入っている間は **ephemeral 層で Terraform を実行しない**（plan も不可。値方式の secret の値が state に書かれる）
 - `chat-api-key` の Key Vault 参照は PATCH の body に残す。Key Vault 自体の障害中にこの PATCH が `chat-api-key` の参照の検証で拒否されるかは**未検証**
   （拒否された場合、chat API キーの値は Key Vault にしか無いので直接値にはできない。Container Apps が保持している値で動き続けるのを待つ）
-- **Key Vault 参照へ戻す（障害の解消後）**: §6-2 のパイプで**もう 1 本**発行して Key Vault に新バージョンとして投入 → 同じ PATCH で
+- **Key Vault 参照へ戻す（障害の解消後）**: **まず、この時点で動いている replica 名を記録し直す**（§7-2 手順 1 と同じ `az containerapp replica list`。
+  スクリプト冒頭の記録は「直接値への rollback の前」の replica で、rollback 後の replica は復旧用の値でサインインを通すため、判定に使うと
+  復旧用の資格情報を早く消しすぎる）→ §6-2 のパイプで**もう 1 本**発行して Key Vault に新バージョンとして投入 → 同じ PATCH で
   `microsoft-provider-authentication-secret` を `{name, keyVaultUrl: "https://kv-felisaichatbot-dev.vault.azure.net/secrets/easy-auth-client-secret", identity: $id}`
   にする（値は書かない。`IDENTITY_ID` は上のとおり `registries[0].identity` から取る。`az identity show --query id` は `resourcegroups` 小文字を返し、
   Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）→ **復旧用の資格情報を削除する前に §7-2 の手順 3 〜 6 を順に満たす**:
-  同期 `Succeeded` → platform 側の値の sha256 が Key Vault の最新値と一致 → スクリプト冒頭で記録した replica が一覧から消え（または `Running` でなくなり）、
+  同期 `Succeeded` → platform 側の値の sha256 が Key Vault の最新値と一致 → **この項の冒頭で記録し直した** replica が一覧から消え（または `Running` でなくなり）、
   それ以外の replica がすべて `Running`（同期から旧 container の停止まで数十秒ずれる。2026-10-03 実測は 06:30:33 → 06:30:57。この間は旧 replica が復旧用の値で
   サインインを通すため、ここで消すと旧 replica でのサインインが失敗する。「同期より後に作られた replica」は条件にしない = §7-2 手順 5）
   → `/.auth/logout` からサインインし直して sidecar の token POST 200 →
