@@ -2,10 +2,11 @@
 
 ## ステータス
 
-Proposed
+Accepted
 
-（Issue #286 の PR 1 で起票。chat API キー（PR 2）と Easy Auth クライアントシークレット（PR 3）の切り替えを
-実測で確認した時点で Accepted にする）
+（Issue #286 の PR 1（2026-09-23）で Proposed として起票。chat API キーの切り替え・rollback・ローテーション・同期失敗アラートの発火（PR 2、2026-09-28〜10-01）と、
+Easy Auth クライアントシークレットの切り替えと旧資格情報の削除（PR 3、2026-10-03）を実測で確認し、2026-10-03 に Accepted にした。
+実測は [docs/verification/key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md)）
 
 ## 日付
 
@@ -124,10 +125,14 @@ Proposed
 - **運用**: ローテーション中はアプリの revision が再起動される（瞬断がある）。Easy Auth の旧資格情報は、
   新バージョンの同期とサインインを確認してから Entra から削除する（順序を逆にすると同期までサインインできない）
 - **rollback**: Key Vault 参照から直接値へは az CLI で戻す。直接値が入っている間は ephemeral 層で Terraform を実行しない
-  （値方式の secret の値が state に書かれるため）。手順は PR 2 / PR 3 の手順書に置く
+  （値方式の secret の値が state に書かれるため）。chat API キーは `az containerapp secret set` で戻せる（PR 2 で往復を実測）。
+  Easy Auth の `microsoft-provider-authentication-secret`（40 文字）は `az containerapp secret set` の key 20 文字制限に当たるため、
+  ARM への PATCH（`az rest`）で戻す（手順は [entra-easy-auth-setup.md](../operations/entra-easy-auth-setup.md) §8。未検証）。
+  Key Vault の secret 名は `chat-api-key` / `easy-auth-client-secret`
 - **課金**: Key Vault Standard の操作数、log search alert 1 件、`AuditEvent` の取り込み。7 日間の実測から月額を推定して記録する（PR 4）
 - **過去の state**: tfstate の blob バージョニングにより、過去のバージョンには切り替え前の値が残る。
-  切り替え時に chat API キーは新しい値に置き換わり、Easy Auth の旧資格情報は Entra から削除するため、残った値は使えない値になる
+  切り替え時に chat API キーは新しい値に置き換わり（2026-09-28 切替、2026-10-01 ローテーション）、Easy Auth は新しい資格情報で切り替えて
+  旧資格情報を Entra から削除した（2026-10-03）ため、残った値は使えない値になった
 
 ## 関連
 
