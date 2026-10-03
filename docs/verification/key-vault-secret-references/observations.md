@@ -426,3 +426,96 @@ Azure mobile app の push の 3 経路を同時に比べる試験。これを別
   試験の時刻計画はこの位相から立てる
 - Action Group の email receiver は OTP 確認が済むまで通知を受け取れず、確認前に発火した alert は確認後も通知されない（設定変更は以後の alert にだけ適用）。
   受信者を変えたら、必ずその後に発火する alert で到達を確認する
+
+## PR 3: Easy Auth のクライアントシークレットを Key Vault 参照に切り替える（2026-10-03 実施）
+
+対象: frontend `ca-felisaichatbot-dev-front` の secret `microsoft-provider-authentication-secret`（authConfigs の `clientSecretSettingName` が参照）。
+値方式（`value = var.easy_auth_client_secret`。tfvars と state に平文）から、Key Vault `kv-felisaichatbot-dev` の secret `easy-auth-client-secret` への
+バージョン無しの Key Vault 参照（`key_vault_secret_id` + `identity`）に切り替えた。これで ADR-0031 が「state に残る」とした秘密値 2 つが両方 state から消えた。
+
+ユーザー判断（計画時）: PR 2 のマージ後に着手 / クライアントシークレットは**新しく発行**し、発行コマンドの出力を `az keyvault secret set` へ直接パイプして人も Claude Code も値を見ない
+（既存値を tfvars から移すと値をもう一度扱うことになり、過去の state バージョンの値も有効なまま残る）/ rollback の演習と本番でのローテーション追従試験は省略
+（Key Vault 参照 → 直接値 → Key Vault 参照の往復は PR 2 で、Easy Auth sidecar のローテーション追従は Issue #287 の検証環境で実測済み。本 PR の切替自体が
+「app に存在しなかった新しい値が Key Vault 参照経由で sidecar に届く」実測になる）/ Key Vault の secret 名は `easy-auth-client-secret`。
+
+### 変更内容（ephemeral 層）
+
+- 変数 `easy_auth_client_secret` を削除。`local.easy_auth_client_secret_id` と `data "azurerm_key_vault_secrets" "main"`（secret の名前一覧だけを読む。値は読まない）を追加。
+  frontend の `secret "microsoft-provider-authentication-secret"` を `key_vault_secret_id` + `identity`（`id-felisaichatbot-dev`）に変更。
+  frontend の precondition を `var.easy_auth_client_id != "" && contains(data.azurerm_key_vault_secrets.main.names, "easy-auth-client-secret")` に置き換え（ADR-0027 決定 6 の fail-closed を維持）
+- `terraform fmt -check` / `validate`（別 `TF_DATA_DIR`、`init -backend=false`）PASS
+
+### 事前確認（2026-10-03。すべて読み取り）
+
+| 確認 | 結果 |
+| --- | --- |
+| main | `c86c972`（PR 2 = #298 マージ済み、#299 の Action Group 作り直しも反映済み） |
+| frontend の secret | `microsoft-provider-authentication-secret` は値方式（`keyVaultUrl` 無し）、`chat-api-key` は Key Vault 参照。revision `ca-felisaichatbot-dev-front--0000004`、replica 2026-10-01T05:03:45Z 作成 |
+| ops app | secret は `database-url` のみ（PR 2 の発火試験のテスト用 secret は残っていない） |
+| Key Vault | secret は `chat-api-key` のみ。soft-delete 中 0 件。Key Vault スコープのロール割当は `Key Vault Secrets User` / `Key Vault Secrets Officer` の 2 件 |
+| Entra の資格情報 | `easyauth` 1 本（2026-09-19 発行 / 2027-09-19 失効） |
+| `az containerapp secret set` の制約 | `--help` に "'key' cannot be longer than 20 characters"（key は 20 文字まで）。`microsoft-provider-authentication-secret` は 40 文字なので、この secret を CLI で直接値に戻すことはできない（rollback は ARM への PATCH = entra-easy-auth-setup.md §8） |
+| Easy Auth sidecar のコンテナ名 | `ContainerAppConsoleLogs_CL` の `ContainerName_s` は `front` と `http-auth`（検証環境と同じ） |
+| `PROBE_ENABLED` | `true` |
+
+### 新しいクライアントシークレットの発行と Key Vault への投入（2026-10-03。ユーザーが実施）
+
+```bash
+az ad app credential reset --id "$APP_ID" --append --display-name "easyauth-202610" --years 1 --query password -o tsv \
+  | tr -d '\n' | az keyvault secret set --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --file /dev/stdin --output none
+```
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 06:21:24 → 06:21:25 | 上記のパイプ（`umask 077`） | 終了コード 0。az CLI の警告 "The output includes credentials that you must protect" は出るが、値はパイプに流れるだけで画面には出ない。`--file /dev/stdin` はそのまま通った |
+| 06:21:3x | 確認（読み取り。値は出さない） | Entra の資格情報 2 本（新 `easyauth-202610` 06:21:25Z 〜 2027-10-03、旧 `easyauth`）。Key Vault `easy-auth-client-secret` は `enabled: true`、06:21:26Z 作成、バージョン 1 件。値は長さ 40（検証環境の実測と同じ）、改行 0、空白 0。sha256 先頭 12 桁 `4887212dea68` |
+
+この時点ではどの app もこの secret を参照しておらず、frontend は旧値で稼働。
+
+### plan と apply（2026-10-03。Terraform はユーザーが実施）
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 06:2x | `terraform -chdir=terraform/ephemeral init` → `plan -detailed-exitcode -out=tfplan-pr3-cutover` | exit 2、`Plan: 0 to add, 1 to change, 0 to destroy.`。差分は `azurerm_container_app.front[0]` の `secret` ブロックのみ（set 型 + sensitive のため「- 2 / + 2」表示）。`azapi_resource.front_auth[0]` / `main` / Job / ops に差分なし。警告は tfvars に残る `easy_auth_client_secret` の "Value for undeclared variable" 1 件 |
+| 事前 | plan の `show -json` を name ごとに比較（値は sha256 先頭 12 桁と長さのみ） | 変わるのは `microsoft-provider-authentication-secret` のみ: before = 値方式（長さ 40、sha256 先頭 `e04bb91eba1a` = 稼働中の platform 側の値と一致）→ after = `keyVaultUrl .../secrets/easy-auth-client-secret` + identity（`/resourceGroups/` 表記）、`value` 無し。`chat-api-key` は before / after 同一。template 同一 |
+| 06:28:53 | 外形監視の停止 `gh variable set PROBE_ENABLED --body false` | `false` |
+| 06:30:20 → 06:30:48 | `apply tfplan-pr3-cutover`（`azurerm_container_app.front[0]` 17 秒）→ plan ファイル削除 | `Apply complete! Resources: 0 added, 1 changed, 0 destroyed.` |
+| 06:30:31 〜 06:30:33 | Key Vault `AuditEvent`（`AzureDiagnostics`） | `SecretGet` `easy-auth-client-secret` が identity `id-felisaichatbot-dev` の client ID から `Success` 5 件 |
+| 06:30:33 / 06:30:34 | `ContainerAppSystemLogs_CL` | `SyncingSecretFromAzureKeyVaultForContainerAppSucceeded` 2 行、`Revision '...--0000004' updated. No new revision was provisioned.`、`No revision restart or provisioning was needed.`。`Failed` 0 件 |
+| 06:30:32 → 06:30:57 | replica | **再作成された**: 新 replica `...-6799d9bb89-652sb` 06:30:32Z 作成（`AssigningReplica` 06:30:33、image pull 06:30:47、`ContainerStarted` 06:30:48）、旧 replica（10-01 作成）の container は 06:30:57 に `ManuallyStopped`。revision は `--0000004` のまま。platform のログは "No revision restart or provisioning was needed." だが、secret の値が変わったため replica は差し替わっている（PR 2 の 4-12 = identity の表記だけの変更では replica は変わらなかった）。`RevisionRestartWithNewSecrets` の行は出ない（ローテーション時とは別の経路） |
+| 06:31 | 構成（`az containerapp show`） | PASS: `microsoft-provider-authentication-secret` = `keyVaultUrl` + identity（`/resourceGroups/` 表記）、`value` 無し。`chat-api-key` 不変。authConfigs の `clientSecretSettingName` 不変 |
+| 06:31 | frontend `/readyz` 5 秒間隔 6 回 | すべて 200（新 replica の `ContainerStarted` 06:30:48 以降。再起動中の低下は秒粒度では測っていない = ADR-0023） |
+| 06:31 | 値の一致（sha256 先頭 12 桁） | platform 側の `microsoft-provider-authentication-secret` = `4887212dea68` = Key Vault の新値（旧 `e04bb91eba1a` から変わった）。`chat-api-key` は `74919a81d6a3` で不変 |
+| 06:32:56 / 06:33:18 / 06:34:10 | **サインイン確認（ユーザーのブラウザ。シークレットウィンドウ = 既存の cookie 無し）** | sidecar `http-auth` のログ: `/.auth/login/aad/callback` POST → token POST `Completed with 200` → `LoginComplete`（ClientId = Easy Auth の app registration）が 3 回。`AADSTS7000215` 0 件。**app のどこにも無かった新しい値が Key Vault 参照経由で sidecar に届き、認可コードの交換に使われた** |
+| 06:34:24 / 06:34:25 | チャット 1 往復（ユーザーのブラウザ） | backend `POST /chat` 200（1,151 ms）、frontend `POST /api/chat` 200（SSE、3,503 ms）。401 / Unauthorized 0 件。chat API キーの経路は壊れていない |
+| 06:35:30 | 外形監視の再開 `PROBE_ENABLED=true` | **欠測期間: 06:28:53Z 〜 06:35:30Z（約 6 分 37 秒）** |
+| 06:3x | `terraform -chdir=terraform/persistent plan -detailed-exitcode`（ユーザー） | `No changes.`（exit 0）。PR 3 は persistent 層を変更しない |
+
+### 旧資格情報の削除（切替の確定。2026-10-03）
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 06:35:31 | `az ad app credential delete --id "$APP_ID" --key-id <旧 easyauth の keyId>` | 削除。`credential list` は `easyauth-202610` 1 本のみ。**過去の tfstate バージョンに残る旧値はこの時点で無効になった** |
+| 06:38:45 | **削除後のサインイン確認（ユーザーのブラウザ。新しいシークレットウィンドウ）** | sidecar: token POST `Completed with 200`、`LoginComplete`。`AADSTS7000215` 0 件 |
+| 06:38:59 / 06:39:05 | チャット 1 往復 | backend `POST /chat` 200、frontend `POST /api/chat` 200 |
+
+### tfvars からの除去と plan 収束（2026-10-03。ユーザーが実施）
+
+| 時刻 (UTC) | 操作 / 確認 | 結果 |
+| --- | --- | --- |
+| 06:40:19 | `terraform/ephemeral/terraform.tfvars` のバックアップ（`umask 077`、gitignore 済み）を取り、`easy_auth_client_secret` の行を削除 | tfvars に `easy_auth_client_secret` 0 行、`easy_auth_client_id` 1 行。環境変数 `TF_VAR_easy_auth_client_secret` は無い |
+| 06:4x | `terraform -chdir=terraform/ephemeral plan -detailed-exitcode` | `No changes.`（exit 0）。undeclared variable の警告も消えた |
+| 06:4x | バックアップを `shred -u`（中身は読まない） | 残り 0 件。値は旧資格情報のもので 06:35:31 以降は使えないが、ローカルにも残さない |
+
+### 分かったこと（PR 3）
+
+- 値方式 → Key Vault 参照の切替 apply は、secret の**値が変わる**ため replica が差し替わる（`AssigningReplica` → 新 replica → 旧 container `ManuallyStopped`。約 25 秒）。
+  platform のログは "No revision restart or provisioning was needed." で、ローテーション時の `RevisionRestartWithNewSecrets` も出ない。identity の表記だけが変わる in-place update（PR 2）では replica は変わらなかった。
+  **secret の値が変わる apply は、ログの文言に関わらず再起動を伴う前提で外形監視を止める**
+- Easy Auth の client secret の正しい確認は「既存のセッション cookie が無い状態で `/.auth/login/aad/callback` を通し、sidecar の token POST が 200」で、
+  サインイン済みのタブを再読み込みしても client secret は使われない。`/.auth/me` は使えない（Container Apps では 404。Issue #287 の実測）
+- `az ad app credential reset ... -o tsv | tr -d '\n' | az keyvault secret set --file /dev/stdin` のパイプで、値を画面・ファイル・履歴・Terraform に通さずに投入できる（長さ 40、改行無しで保存された）
+- `az containerapp secret set` の key は 20 文字まで（`--help` の記載）。Easy Auth の既定名 `microsoft-provider-authentication-secret`（40 文字）はこの CLI で直接値に戻せず、
+  戻し方は ARM への PATCH になる（手順書 §8。未検証）
+- 切替 apply の `/readyz` 欠測は約 6 分 37 秒（作業自体は apply 28 秒 + 確認）。ADR-0031 が「state に残る」とした秘密値 2 つは 2026-10-03 をもって両方 state から消え、
+  過去の state バージョンの値は chat API キーのローテーション（10-01）と Easy Auth の旧資格情報の削除（10-03）で無効になった
