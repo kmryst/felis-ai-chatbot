@@ -220,14 +220,18 @@ platform が 30 分周期の定期同期で取り込み、frontend の replica �
    は secret 名が CLI の 20 文字制限に当たるので使えない。§8 の `az rest` PATCH で同じ `keyVaultUrl` + `identity` を書き直す）
 3. platform 側の値が新バージョンと一致することを確認する（`az containerapp secret list --show-values` の該当 value と
    Key Vault 最新版を sha256 で比較。値は画面に出さない）
-4. 割当済みユーザーのブラウザで **`https://<frontend FQDN>/.auth/logout` を開いてから** サインインし直す
+4. **replica の切替が終わったことを確認する**: `az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-front --revision <latestReadyRevisionName> --query "[].{name:name,created:properties.createdTime,state:properties.runningState}"`
+   で、同期より後に作られた replica だけが `Running` で、それ以前の replica が残っていないこと。
+   同期 `Succeeded` から旧 replica の停止までは数十秒ずれる（2026-10-03 の切替では同期 06:30:33 → 旧 container の停止 06:30:57）。
+   旧 replica が動いている間は旧い値でサインインが成立し続けるので、ここを飛ばすと手順 5 の確認が旧い値の成功を拾う
+5. 割当済みユーザーのブラウザで **`https://<frontend FQDN>/.auth/logout` を開いてから** サインインし直す
    （既存のセッション cookie が残っていると client secret を使う認可コードの交換を通らず、確認にならない）。
    sidecar（コンテナ `http-auth`）のログで `oauth2/v2.0/token` の POST が `Completed with 200`、
    `AADSTS7000215` が無いことを確認する。新旧どちらの資格情報も Entra では有効なので、
-   **旧シークレットは手順 2 の同期が確認できるまで削除しない**（先に削除すると同期までサインインが失敗する）
-5. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`。
+   **旧シークレットは手順 3 / 4 / 5 がすべて満たされるまで削除しない**（先に削除すると、同期か replica の切替が終わるまでサインインが失敗する）
+6. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`。
    削除後にもう一度 `/.auth/logout` → サインインで確認する
-6. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する。
+7. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する。
    Key Vault の旧バージョンは参照されないまま残る（削除してもよい）
 
 ## 8. Key Vault 参照から直接値へ戻す（rollback）
@@ -241,7 +245,8 @@ Container Apps は解決済みの値で動き続けるので、サインイン�
 - **復旧に使う値は Key Vault から取らない。** Key Vault が読めない状況がこの手順の前提であり、障害後に Key Vault へ読みに行く設計では
   戻せない（PR 2 の chat API キーの rollback も、Key Vault を読まずに事前確保した値で戻した）。Easy Auth のクライアントシークレットは
   Entra で `--append` 発行すれば Key Vault に依存せずに有効な値が手に入るので、**復旧用のシークレットを新しく発行してそのまま PATCH に渡す**
-- 値の取得が失敗したときに空の値で PATCH しないよう、`set -euo pipefail` と長さの検査を PATCH の実行条件にする
+- 値の取得が失敗したときに空の値で PATCH しないよう、`set -euo pipefail` と長さの検査を PATCH の実行条件にする。
+  秘密値の入った一時ファイルは `mktemp` で作り、`trap` で異常終了・中断時にも削除する（`az rest --body` は `@{file}` のみで標準入力は使えない）
 
 ```bash
 set -euo pipefail
@@ -258,34 +263,38 @@ EASY_AUTH_ROLLBACK_SECRET=$(az ad app credential reset --id "$APP_ID" --append \
 [ "${#EASY_AUTH_ROLLBACK_SECRET}" -ge 32 ] || { echo "secret length ${#EASY_AUTH_ROLLBACK_SECRET} < 32: abort" >&2; exit 1; }
 echo "secret length: ${#EASY_AUTH_ROLLBACK_SECRET}"
 # 3. PATCH body（secrets 配列は丸ごと置き換わるので chat-api-key の Key Vault 参照も一緒に書く）。
-#    値は環境変数経由で jq に渡し（プロセス引数に出さない）、ファイルは mode 600
+#    一時ファイルは mktemp（mode 600）で作り、作る前に trap で後片付けを登録する（PATCH の失敗・中断でも値を残さない）。
+#    値は環境変数経由で jq に渡し、プロセス引数に出さない
+BODY=$(mktemp)
+trap 'shred -u "$BODY" 2>/dev/null || rm -f "$BODY"' EXIT INT TERM
 export EASY_AUTH_ROLLBACK_SECRET
 jq -n --arg id "$IDENTITY_ID" '{properties:{configuration:{secrets:[
     {name:"chat-api-key", keyVaultUrl:"https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key", identity:$id},
-    {name:"microsoft-provider-authentication-secret", value:env.EASY_AUTH_ROLLBACK_SECRET}]}}}' \
-  > /tmp/front-secrets-rollback.json
+    {name:"microsoft-provider-authentication-secret", value:env.EASY_AUTH_ROLLBACK_SECRET}]}}}' > "$BODY"
 unset EASY_AUTH_ROLLBACK_SECRET
-# 4. 生成物の検査: 値が空でないこと（長さだけを見る）
-[ "$(jq -r '.properties.configuration.secrets[] | select(.name=="microsoft-provider-authentication-secret") | .value | length' /tmp/front-secrets-rollback.json)" -ge 32 ] \
-  || { echo "rollback body has empty value: abort" >&2; shred -u /tmp/front-secrets-rollback.json; exit 1; }
-# 5. PATCH
+# 4. 生成物の検査: 値が空でないこと（長さだけを見る）。失敗時は trap が一時ファイルを消す
+[ "$(jq -r '.properties.configuration.secrets[] | select(.name=="microsoft-provider-authentication-secret") | .value | length' "$BODY")" -ge 32 ] \
+  || { echo "rollback body has empty value: abort" >&2; exit 1; }
+# 5. PATCH（終了コードに関わらず trap が一時ファイルを shred する）
 az rest --method patch --url "https://management.azure.com${FRONT_RES}?api-version=2025-07-01" \
-  --body @/tmp/front-secrets-rollback.json --output none
-shred -u /tmp/front-secrets-rollback.json
+  --body @"$BODY" --output none
 az containerapp show -g $RG -n ca-felisaichatbot-dev-front \
   --query "properties.configuration.secrets[].{name:name,kv:keyVaultUrl}" -o json   # Easy Auth の secret は kv が null になる
 ```
 
-- 確認: §7-2 の手順 4 と同じ（`/.auth/logout` → サインイン → sidecar の token POST 200）。新しいシークレットは Entra で即時に有効
+- 確認: §7-2 の手順 5 と同じ（`/.auth/logout` → サインイン → sidecar の token POST 200）。新しいシークレットは Entra で即時に有効
 - 直接値が入っている間は **ephemeral 層で Terraform を実行しない**（plan も不可。値方式の secret の値が state に書かれる）
 - `chat-api-key` の Key Vault 参照は PATCH の body に残す。Key Vault 自体の障害中にこの PATCH が `chat-api-key` の参照の検証で拒否されるかは**未検証**
   （拒否された場合、chat API キーの値は Key Vault にしか無いので直接値にはできない。Container Apps が保持している値で動き続けるのを待つ）
 - **Key Vault 参照へ戻す（障害の解消後）**: §6-2 のパイプで**もう 1 本**発行して Key Vault に新バージョンとして投入 → 同じ PATCH で
   `microsoft-provider-authentication-secret` を `{name, keyVaultUrl: "https://kv-felisaichatbot-dev.vault.azure.net/secrets/easy-auth-client-secret", identity: $id}`
   にする（値は書かない。`IDENTITY_ID` は上のとおり `registries[0].identity` から取る。`az identity show --query id` は `resourcegroups` 小文字を返し、
-  Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）→ 同期 `Succeeded` と `/.auth/logout` からのサインインを確認 →
-  `az ad app credential delete` で復旧用の `easyauth-rollback-*` と、それ以前の資格情報を削除し、§7-1 で 1 本だけになっていることを確認 →
-  `terraform -chdir=terraform/ephemeral plan -detailed-exitcode` が exit 0
+  Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）→ **復旧用の資格情報を削除する前に §7-2 の手順 2 〜 5 を順に満たす**:
+  同期 `Succeeded` → platform 側の値の sha256 が Key Vault の最新値と一致 → 旧 replica がすべて停止し新 replica だけが `Running`
+  （同期から旧 container の停止まで数十秒ずれる。2026-10-03 実測は 06:30:33 → 06:30:57。この間は旧 replica が復旧用の値でサインインを通すため、
+  ここで消すと旧 replica でのサインインが失敗する）→ `/.auth/logout` からサインインし直して sidecar の token POST 200 →
+  そのうえで `az ad app credential delete` で復旧用の `easyauth-rollback-*` と、それ以前の資格情報を削除し、§7-1 で 1 本だけになっていることを確認 →
+  削除後にもう一度 `/.auth/logout` → サインイン → `terraform -chdir=terraform/ephemeral plan -detailed-exitcode` が exit 0
 - この手順は**未検証**（2026-10-03 の切替では rollback 演習を省いた）。Key Vault 参照 → 直接値 → Key Vault 参照の往復自体は
   chat API キーで実測済み（[key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md)）
 
