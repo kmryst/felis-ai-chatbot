@@ -162,7 +162,8 @@ variable "frontend_container_image" {
     （例: felisaichatbotacrdev02.azurecr.io/frontend:sha-abc1234。frontend/Dockerfile）。
     空のままなら frontend Container App と authConfigs は作られない（ADR-0027 決定 6 の
     fail-closed bootstrap 順序: chat_disabled = true かつ frontend 未作成の第 1 段 apply を
-    成立させるため）。指定する場合は easy_auth_client_id / easy_auth_client_secret も必須
+    成立させるため）。指定する場合は easy_auth_client_id と、Key Vault の secret
+    easy-auth-client-secret（ADR-0032。人が投入する）も必須
     （frontend の precondition が検査する。authConfigs 無しの frontend を作らない）。
   DESC
   type        = string
@@ -193,22 +194,12 @@ variable "easy_auth_client_id" {
     app registration 本体は Terraform 管理外・ユーザー実行
     （ADR-0012 の権限境界。手順は docs/operations/entra-easy-auth-setup.md）。
     frontend_container_image を指定する場合は必須（precondition が検査する）。
+    client secret はこの層の変数ではなく Key Vault の secret easy-auth-client-secret に
+    置き、frontend の secret（microsoft-provider-authentication-secret）が Key Vault 参照で
+    読む（Issue #286 / ADR-0032。旧変数 easy_auth_client_secret は廃止）。
+    投入・復旧・1 年ごとのローテーションは docs/operations/entra-easy-auth-setup.md §1 / §6 / §7。
   DESC
   type        = string
-  default     = ""
-}
-
-variable "easy_auth_client_secret" {
-  description = <<-DESC
-    Easy Auth 用 app registration の client secret。frontend Container App の secret
-    （microsoft-provider-authentication-secret）として保持し、authConfigs が参照する。
-    実値はコミットせず terraform/ephemeral/terraform.tfvars（gitignore 済み）で渡す
-    （ADR-0030 決定 3: 秘密値は層ごとの tfvars で渡し、TF_VAR_* の export と混在させない）。
-    値を失ったときの復旧と 1 年ごとのローテーション（ADR-0031）は
-    docs/operations/entra-easy-auth-setup.md §6 / §7。
-  DESC
-  type        = string
-  sensitive   = true
   default     = ""
 }
 

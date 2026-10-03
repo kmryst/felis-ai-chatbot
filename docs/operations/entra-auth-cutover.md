@@ -182,6 +182,10 @@ PGPASSWORD="$(python -m app.entra_auth db)" psql "$DATABASE_URL" -c 'select curr
   復旧手順は [key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md) の PR 2 の節。
   `az containerapp revision restart` は Key Vault の値を取り直さない（2026-10-01 実測。platform が最後に同期した値のまま replica が作り直される）ので、
   値を取り直すには Key Vault 参照の設定し直し（`az containerapp secret set ... keyvaultref:...,identityref:...`）か 30 分周期の定期同期を使う
+- Easy Auth のクライアントシークレット: Key Vault の secret `easy-auth-client-secret` に置き、frontend の secret
+  `microsoft-provider-authentication-secret` がバージョン無しの Key Vault 参照で読む（ADR-0032。2026-10-03 切替）。
+  投入・ローテーション（1 年ごと。Entra で `--append` 発行 → Key Vault に新バージョン投入 → 同期後に旧資格情報を削除）は
+  [entra-easy-auth-setup.md](./entra-easy-auth-setup.md) §1 / §7。直接値へ戻す手段は同 §8
 - tfvars の編集は編集前のコピーを `backup-before-*.tfvars`（gitignore 済み。Terraform は自動読込しない）に
   残してから行う
 
