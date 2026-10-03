@@ -6,8 +6,9 @@ Contributor）の権限外のため、**tenant 管理権限を持つユーザー
 （ADR-0012 の権限境界）。作成したオブジェクトは
 [azure-resource-inventory.md](./azure-resource-inventory.md) §B に台帳として記録する。
 
-> client secret は画面に echo せず、`terraform/ephemeral/terraform.tfvars`（gitignore 済み・コミット禁止）
-> にのみ保存する。テストユーザーのパスワードは保存しない（§4）。
+> client secret は画面に echo せず、発行コマンドの出力を Key Vault `kv-felisaichatbot-dev` の secret
+> `easy-auth-client-secret` へ直接パイプする（§1。[ADR-0032](../adr/0032-key-vault-references-for-container-apps-secrets.md) 決定 2）。
+> ファイル・tfvars・シェル履歴に残さない。テストユーザーのパスワードは保存しない（§4）。
 
 ## 1. app registration（application object）
 
@@ -34,17 +35,25 @@ app_id=$(az ad app create \
   }]' \
   --query appId -o tsv)
 
-# client secret（値は表示せず terraform/ephemeral/terraform.tfvars の easy_auth_client_secret へ保存する）
-az ad app credential reset --id "$app_id" --append --display-name easyauth --years 1 \
-  --query password -o tsv > /dev/null   # 実際は値を安全に terraform.tfvars へ書き込むこと（画面に出さない）
+# client secret: 発行した値を画面・ファイル・履歴に出さず、そのまま Key Vault の secret へパイプする
+# （ADR-0032 決定 2。`--append` 必須 = §6-2。実行者には Key Vault Secrets Officer が要る = 台帳 §B #15）。
+# `tr -d '\n'` は -o tsv の末尾改行を落とす（改行込みで保存すると認可コードの交換が失敗する）
+az ad app credential reset --id "$app_id" --append --display-name "easyauth-$(date -u +%Y%m)" --years 1 \
+  --query password -o tsv | tr -d '\n' \
+  | az keyvault secret set --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --file /dev/stdin --output none
+# 確認（値は出さない）: 資格情報の本数と失効日、Key Vault 側の有効状態と長さ（40 文字）
+az ad app credential list --id "$app_id" --query "[].{displayName:displayName,keyId:keyId,endDateTime:endDateTime}" -o table
+az keyvault secret show --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --query "attributes.enabled" -o tsv
+az keyvault secret show --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --query value -o tsv | tr -d '\n' | wc -c
 ```
 
-- `easy_auth_client_id`（= `$app_id`）と `easy_auth_client_secret` を `terraform/ephemeral/terraform.tfvars` に
-  書く（ADR-0030 決定 3: 秘密値は層ごとの tfvars で渡し、`TF_VAR_*` の export と混在させない）
+- `easy_auth_client_id`（= `$app_id`）を `terraform/ephemeral/terraform.tfvars` に書く（ADR-0030 決定 3）。
+  client secret は Terraform の変数ではない（旧変数 `easy_auth_client_secret` は 2026-10-03 に廃止）。
+  frontend の secret `microsoft-provider-authentication-secret` が Key Vault 参照で読み、ephemeral 層の
+  precondition は Key Vault に `easy-auth-client-secret` が存在することを plan 時に検査する
 - **ローカルの環境変数ファイル（`.env`）には置かない。** 以前は `TF_VAR_easy_auth_client_id` /
-  `TF_VAR_easy_auth_client_secret` を export する方式で、ADR-0030 決定 3 で tfvars へ一本化した。
-  両方に持つと、どちらの値が apply に効いたのか追えず、ローテーション（§7）で古い値が残る。
-  これらを読むのは ephemeral 層の Terraform だけなので、環境変数側に残っていれば消す
+  `TF_VAR_easy_auth_client_secret` を export する方式で、ADR-0030 決定 3 で tfvars へ一本化し、
+  ADR-0032 で client secret を Key Vault へ移した。環境変数側に残っていれば消す
 
 ## 2. enterprise application（service principal）側
 
@@ -135,51 +144,43 @@ Entra ID はクライアントシークレットの値を保持せず、発行�
 （Microsoft Graph `application: addPassword`: "There is no way to retrieve this password in the future."
 = このパスワードを後から取得する方法は無い。出典:
 <https://learn.microsoft.com/en-us/graph/api/application-addpassword?view=graph-rest-1.0> ）。
-`terraform/ephemeral/terraform.tfvars` を失ってもシークレット自体は失効していないので、
-**再発行の前に Terraform state を確認する**。
+値の正本は Key Vault の secret `easy-auth-client-secret` で、Terraform state や tfvars には無い（ADR-0032）。
 
-### 6-1. state から取り出す（先に試す経路）
-
-ephemeral 層の state には frontend Container App の secret
-`microsoft-provider-authentication-secret` として平文で入っている（ADR-0031「影響」の
-「state に残る秘密値」）。**2026-09-21 に取り出せることを確認済み**（値は取り出さず、
-存在と長さだけを確認した）。
+### 6-1. Key Vault から読む（先に試す経路）
 
 ```bash
-terraform -chdir=terraform/ephemeral state pull \
-  | jq -r '.resources[]
-           | select(.type=="azurerm_container_app" and .name=="front")
-           | .instances[].attributes.secret[]
-           | select(.name=="microsoft-provider-authentication-secret") | .value' \
-  | wc -c          # まず長さだけ確認する（値を画面に出さない）
+az keyvault secret show --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --query "attributes.enabled" -o tsv
+az keyvault secret list-versions --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret \
+  --query "[].{created:attributes.created,enabled:attributes.enabled}" -o table
 ```
 
-- 値を戻すときも画面とシェル履歴に出さない。上記の `| wc -c` を
-  `> terraform/ephemeral/secret.tmp` 等（mode 600・書き戻し後に削除）に替えて
-  `terraform.tfvars` の `easy_auth_client_secret` へ貼り、一時ファイルを消す
-- frontend Container App を destroy 済みで state に `azurerm_container_app.front` が無い場合、
-  この経路は使えない（§6-2 へ）
+- 値が要る操作（§8 の直接値への rollback など）は `az keyvault secret show ... --query value -o tsv | tr -d '\n'` の
+  出力をパイプで直接使い、画面・ファイル・履歴に残さない
+- Key Vault ごと失った（destroy して soft-delete 保持 7 日も過ぎた）場合のみ §6-2 で再発行する。
+  2026-10-03 以前の ephemeral 層の state バージョンには旧資格情報の値が平文で残っているが、その資格情報は
+  同日に Entra から削除済みで使えない
 
-### 6-2. 再発行する（state から取れない場合のみ）
+### 6-2. 再発行する（Key Vault から取れない場合のみ）
 
 **`--append` を必ず付ける。** `az ad app credential reset` は既定で既存の資格情報を消す
 （公式: "By default, this command clears all passwords and keys, and let graph service generate
 a password credential." = 既定ではすべてのパスワードとキーを削除し、Graph サービスに
 パスワード資格情報を生成させる。出典:
 <https://learn.microsoft.com/en-us/cli/azure/ad/app/credential?view=azure-cli-latest> ）。
-`--append` 無しで実行すると**現行のシークレットがその場で無効になり、新しい値で
-ephemeral 層を apply し直すまで frontend のサインインが失敗する**。
+`--append` 無しで実行すると**現行のシークレットがその場で無効になり、Key Vault に新しい値を
+投入して Container Apps が同期するまで（最長 30 分）frontend のサインインが失敗する**。
 
 ```bash
 app_id=$(az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[0].appId" -o tsv)
 
-# 追加発行（既存は消さない）。値は画面に出さず terraform.tfvars へ書き込む
-az ad app credential reset --id "$app_id" --append \
-  --display-name "easyauth-$(date -u +%Y%m)" --years 1 --query password -o tsv > /dev/null
+# 追加発行（既存は消さない）→ Key Vault に新バージョンとして投入（§1 と同じパイプ。値は画面に出さない）
+az ad app credential reset --id "$app_id" --append --display-name "easyauth-$(date -u +%Y%m)" --years 1 \
+  --query password -o tsv | tr -d '\n' \
+  | az keyvault secret set --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --file /dev/stdin --output none
 ```
 
-- 書き戻したら §7 の手順 3 以降（plan → apply → サインイン実測 → 旧 keyId の削除）を行う
-- 値を失った古い資格情報は、新しい値で apply して疎通を確認したあとに
+- 投入したら §7 の手順 3 以降（同期の確認 → サインイン実測 → 旧 keyId の削除）を行う
+- 値を失った古い資格情報は、新しい値での同期とサインインを確認したあとに
   `az ad app credential delete --id "$app_id" --key-id <古い keyId>` で削除する
 
 ## 7. クライアントシークレットのローテーション（1 年ごと）
@@ -198,23 +199,67 @@ az ad app credential list --id "$app_id" \
   --query "[].{displayName:displayName,keyId:keyId,startDateTime:startDateTime,endDateTime:endDateTime}" -o table
 ```
 
-2026-09-21 時点: `easyauth` 1 本のみ、2026-09-19 発行 / **2027-09-19 失効**
-（[azure-resource-inventory.md](./azure-resource-inventory.md) §12）。
+2026-10-03 時点: `easyauth-202610` 1 本のみ、2026-10-03 発行 / **2027-10-03 失効**
+（[azure-resource-inventory.md](./azure-resource-inventory.md) §12。Key Vault 参照への切替時に発行し、
+旧 `easyauth`（2026-09-19 発行）は同日に削除した）。
 **失効したまま放置した場合の挙動は未検証**のため、失効の 1 か月前までに入れ替える。
 
-### 7-2. 入れ替えの順序
+### 7-2. 入れ替えの順序（Terraform の apply は要らない）
 
-1. 新しいシークレットを**追加**発行する（§6-2 のコマンド。`--append` 必須。
-   `--display-name` は `easyauth-<YYYYMM>` のように発行月で区別する）
-2. `terraform/ephemeral/terraform.tfvars` の `easy_auth_client_secret` を新しい値に差し替える。
-   編集前のコピーを `backup-before-*.tfvars`（gitignore 済み・Terraform は自動読込しない）に残す
-   （[entra-auth-cutover.md](./entra-auth-cutover.md) §6）
-3. `terraform -chdir=terraform/ephemeral plan` が frontend Container App の in-place update
-   （secret + authConfigs）だけで、destroy / replacement を含まないことを確認してから apply する
-4. 割当済みユーザーのブラウザで frontend にサインインできることを実測する
-   （新旧どちらの値でも Entra は検証するため、この時点では旧シークレットも生きている）
-5. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`
-6. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する
+Container Apps の secret はバージョン無しの Key Vault 参照なので、Key Vault に新バージョンを投入すれば
+platform が 30 分周期の定期同期で取り込み、frontend の replica を再起動する（`RevisionRestartWithNewSecrets`。
+新しい revision は作られない。authConfigs からしか参照していなくても再起動は起きる = 2026-09-22 実測）。
+再起動中は `/readyz` が数十秒落ちるので、`gh variable set PROBE_ENABLED --body false` で外形監視を止めてから行い、
+確認後に `true` へ戻す。
+
+1. 新しいシークレットを**追加**発行し、そのまま Key Vault に新バージョンとして投入する（§6-2 のパイプ。
+   `--append` 必須。`--display-name` は `easyauth-<YYYYMM>` のように発行月で区別する）。投入時刻を控える
+2. 同期を待つ: `ContainerAppSystemLogs_CL | where ContainerAppName_s == "ca-felisaichatbot-dev-front" and Reason_s in ("SyncingSecretFromAzureKeyVaultForContainerAppSucceeded", "RevisionRestartWithNewSecrets")`
+   に投入時刻より後の行が出るまで（最長 30 分 + 取り込み遅延）。待てない場合は Key Vault 参照を設定し直すと
+   直後に同期が走る（`az containerapp secret set ... "microsoft-provider-authentication-secret=keyvaultref:<URL>,identityref:<identity の resource ID>"`
+   は secret 名が CLI の 20 文字制限に当たるので使えない。§8 の `az rest` PATCH で同じ `keyVaultUrl` + `identity` を書き直す）
+3. platform 側の値が新バージョンと一致することを確認する（`az containerapp secret list --show-values` の該当 value と
+   Key Vault 最新版を sha256 で比較。値は画面に出さない）
+4. 割当済みユーザーのブラウザで **`https://<frontend FQDN>/.auth/logout` を開いてから** サインインし直す
+   （既存のセッション cookie が残っていると client secret を使う認可コードの交換を通らず、確認にならない）。
+   sidecar（コンテナ `http-auth`）のログで `oauth2/v2.0/token` の POST が `Completed with 200`、
+   `AADSTS7000215` が無いことを確認する。新旧どちらの資格情報も Entra では有効なので、
+   **旧シークレットは手順 2 の同期が確認できるまで削除しない**（先に削除すると同期までサインインが失敗する）
+5. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`。
+   削除後にもう一度 `/.auth/logout` → サインインで確認する
+6. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する。
+   Key Vault の旧バージョンは参照されないまま残る（削除してもよい）
+
+## 8. Key Vault 参照から直接値へ戻す（rollback）
+
+Key Vault 参照の解決が壊れた（同期が `Failed` し続ける、ロール割当を失った等）ときの最後の手段。
+chat API キーで使った `az containerapp secret set --secrets "<name>=<値>"` は、secret 名 `microsoft-provider-authentication-secret`
+（40 文字）が CLI の **key 20 文字制限**（`az containerapp secret set --help`）に当たるため使えない。ARM に直接 PATCH する。
+
+```bash
+RG=rg-felisaichatbot-dev-tf
+APP_ID_RES=$(az containerapp show -g $RG -n ca-felisaichatbot-dev-front --query id -o tsv)
+IDENTITY_ID=$(az containerapp show -g $RG -n ca-felisaichatbot-dev --query "properties.configuration.registries[0].identity" -o tsv)
+umask 077
+# PATCH は secrets 配列を丸ごと置き換えるので、chat-api-key の Key Vault 参照も一緒に書く。値はパイプで埋め、ファイルは mode 600
+az keyvault secret show --vault-name kv-felisaichatbot-dev -n easy-auth-client-secret --query value -o tsv | tr -d '\n' \
+  | jq -Rs --arg id "$IDENTITY_ID" '{properties:{configuration:{secrets:[
+      {name:"chat-api-key", keyVaultUrl:"https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key", identity:$id},
+      {name:"microsoft-provider-authentication-secret", value:.}]}}}' > /tmp/front-secrets-rollback.json
+az rest --method patch --url "https://management.azure.com${APP_ID_RES}?api-version=2025-07-01" \
+  --body @/tmp/front-secrets-rollback.json --output none
+shred -u /tmp/front-secrets-rollback.json
+```
+
+- 直接値が入っている間は **ephemeral 層で Terraform を実行しない**（plan も不可。値方式の secret の値が state に書かれる）
+- Key Vault 参照へ戻すときは同じ PATCH で `microsoft-provider-authentication-secret` を
+  `{name, keyVaultUrl: ".../secrets/easy-auth-client-secret", identity: $id}` にする（値は書かない）。
+  `IDENTITY_ID` は上のとおり `registries[0].identity` から取る（`az identity show --query id` は `resourcegroups` 小文字を返し、
+  Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）
+- 旧資格情報が Entra に残っている間（切替直後）は、Terraform の変更を一時的に戻して旧値で apply する方が単純だった
+  （2026-10-03 の切替時の計画）。旧資格情報の削除後はこの §8 だけが戻し方になる
+- この手順は**未検証**（2026-10-03 の切替では rollback 演習を省いた）。Key Vault 参照 → 直接値 → Key Vault 参照の往復自体は
+  chat API キーで実測済み（[key-vault-secret-references/observations.md](../verification/key-vault-secret-references/observations.md)）
 
 ## 関連
 

@@ -92,8 +92,9 @@ env | grep -o '^TF_VAR_[A-Za-z_]*' | sort
 #   /chat 保護（#107）の TF_VAR_chat_disabled が並ぶこと（TF_VAR_administrator_password と
 #   TF_VAR_chat_api_key は ADR-0031 で変数ごと廃止。残っていると undeclared variable の警告）。
 #   frontend + Easy Auth（#194。§7）では TF_VAR_frontend_container_image も並ぶ
-#   （easy_auth_client_id / easy_auth_client_secret は TF_VAR_* では渡さない。
-#   terraform/ephemeral/terraform.tfvars に書く = ADR-0030 決定 3。
+#   （easy_auth_client_id は TF_VAR_* では渡さず terraform/ephemeral/terraform.tfvars に書く
+#   = ADR-0030 決定 3。client secret は Terraform の変数ではなく Key Vault の secret
+#   easy-auth-client-secret に置く = ADR-0032。
 #   bootstrap 第 1 段 = frontend 未作成で apply する場合は
 #   TF_VAR_frontend_container_image を意図的に未設定または空にする。§7-1）
 ```
@@ -533,7 +534,8 @@ bootstrap）と決定 8（`READYZ_URL` の付け替え = ADR-0026 の順序）�
 前提:
 
 - §0-2 の `TF_VAR_*` が export 済みで、`terraform/ephemeral/terraform.tfvars` に
-  `easy_auth_client_id` / `easy_auth_client_secret` が書かれている（ADR-0030 決定 3。
+  `easy_auth_client_id` が書かれ、client secret は Key Vault の secret `easy-auth-client-secret` に
+  投入済みである（ADR-0030 決定 3 / ADR-0032。
   Entra 側の作成手順と、値を失った場合の復旧 / ローテーションは
   [entra-easy-auth-setup.md](./entra-easy-auth-setup.md) / 同 §6 / §7）
 - §2 の 3 イメージ（backend / backend-ops / frontend）が同一 `DEPLOY_SHA` で push 済み
