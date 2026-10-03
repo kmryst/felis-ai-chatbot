@@ -153,6 +153,20 @@ locals {
   # 値が state に無いと作れず、platform の自動再起動で不要になったため廃止した。
   # data "azurerm_key_vault_secret" は値を state に読み込むので使わない。
   chat_api_key_secret_id = "${data.azurerm_key_vault.main.vault_uri}secrets/chat-api-key"
+
+  # Easy Auth のクライアントシークレット（ADR-0032 決定 2）。値は人が Entra で発行して
+  # `az keyvault secret set` で Key Vault の secret `easy-auth-client-secret` に投入し、
+  # Terraform は値に触れない（手順は docs/operations/entra-easy-auth-setup.md §1 / §7）。
+  # バージョン無しなので 1 年ごとのローテーションも Key Vault への新バージョン投入だけで済む
+  easy_auth_client_secret_id = "${data.azurerm_key_vault.main.vault_uri}secrets/easy-auth-client-secret"
+}
+
+# Key Vault にある secret の「名前の一覧」だけを読む（値は読まない。state に入るのは名前・ID・
+# enabled・tags のみ）。frontend の precondition が `easy-auth-client-secret` の存在を plan 時に
+# 検査するために使う（ADR-0027 決定 6 の fail-closed を Key Vault 参照に合わせて置き換えた）。
+# data "azurerm_key_vault_secret"（単数）は値を state に読み込むので使わない。
+data "azurerm_key_vault_secrets" "main" {
+  key_vault_id = data.azurerm_key_vault.main.id
 }
 
 resource "azurerm_container_app" "main" {
@@ -892,10 +906,15 @@ resource "azurerm_container_app" "front" {
   }
 
   # Easy Auth（authConfigs）が参照する client secret。secret 名は ACA の Entra 構成が使う
-  # 既定名に合わせる（出典: https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra ）
+  # 既定名に合わせる（出典: https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra ）。
+  # 値は Key Vault の secret `easy-auth-client-secret` への参照（ADR-0032）。authConfigs の
+  # clientSecretSettingName からしか参照されないが、新バージョンの取り込み時は環境変数で参照する
+  # secret と同じく replica が再起動される（RevisionRestartWithNewSecrets。2026-09-22 実測）。
+  # 同期失敗は persistent 層の log search alert alert-kv-secret-sync-failed が検知する
   secret {
-    name  = "microsoft-provider-authentication-secret"
-    value = var.easy_auth_client_secret
+    name                = "microsoft-provider-authentication-secret"
+    key_vault_secret_id = local.easy_auth_client_secret_id
+    identity            = data.azurerm_user_assigned_identity.acr_pull.id
   }
 
   template {
@@ -940,9 +959,10 @@ resource "azurerm_container_app" "front" {
   lifecycle {
     precondition {
       # authConfigs 無しの frontend を計画に載せない（ADR-0027 決定 6 の fail-closed。
-      # Easy Auth の資材が揃うまで frontend は作成できない）
-      condition     = var.easy_auth_client_id != "" && var.easy_auth_client_secret != ""
-      error_message = "frontend_container_image を指定する場合は easy_auth_client_id / easy_auth_client_secret も必須です（authConfigs 無しの frontend 公開を防ぐ。ADR-0027 決定 6）。"
+      # Easy Auth の資材が揃うまで frontend は作成できない）。client secret は Key Vault の
+      # secret `easy-auth-client-secret` の存在で検査する（値は読まない。ADR-0032）
+      condition     = var.easy_auth_client_id != "" && contains(data.azurerm_key_vault_secrets.main.names, "easy-auth-client-secret")
+      error_message = "frontend_container_image を指定する場合は easy_auth_client_id と、Key Vault の secret easy-auth-client-secret（docs/operations/entra-easy-auth-setup.md §1 で投入）が必須です（authConfigs 無しの frontend 公開を防ぐ。ADR-0027 決定 6 / ADR-0032）。"
     }
   }
 }
