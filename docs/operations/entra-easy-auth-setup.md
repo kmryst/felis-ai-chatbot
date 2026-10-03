@@ -212,26 +212,30 @@ platform が 30 分周期の定期同期で取り込み、frontend の replica �
 再起動中は `/readyz` が数十秒落ちるので、`gh variable set PROBE_ENABLED --body false` で外形監視を止めてから行い、
 確認後に `true` へ戻す。
 
-1. 新しいシークレットを**追加**発行し、そのまま Key Vault に新バージョンとして投入する（§6-2 のパイプ。
+1. **変更前の replica 名を記録する**（切替完了の判定に使う）:
+   `az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-front --revision "$(az containerapp show -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-front --query properties.latestReadyRevisionName -o tsv)" --query "[].{name:name,created:properties.createdTime,state:properties.runningState}" -o table`
+2. 新しいシークレットを**追加**発行し、そのまま Key Vault に新バージョンとして投入する（§6-2 のパイプ。
    `--append` 必須。`--display-name` は `easyauth-<YYYYMM>` のように発行月で区別する）。投入時刻を控える
-2. 同期を待つ: `ContainerAppSystemLogs_CL | where ContainerAppName_s == "ca-felisaichatbot-dev-front" and Reason_s in ("SyncingSecretFromAzureKeyVaultForContainerAppSucceeded", "RevisionRestartWithNewSecrets")`
+3. 同期を待つ: `ContainerAppSystemLogs_CL | where ContainerAppName_s == "ca-felisaichatbot-dev-front" and Reason_s in ("SyncingSecretFromAzureKeyVaultForContainerAppSucceeded", "RevisionRestartWithNewSecrets")`
    に投入時刻より後の行が出るまで（最長 30 分 + 取り込み遅延）。待てない場合は Key Vault 参照を設定し直すと
    直後に同期が走る（`az containerapp secret set ... "microsoft-provider-authentication-secret=keyvaultref:<URL>,identityref:<identity の resource ID>"`
    は secret 名が CLI の 20 文字制限に当たるので使えない。§8 の `az rest` PATCH で同じ `keyVaultUrl` + `identity` を書き直す）
-3. platform 側の値が新バージョンと一致することを確認する（`az containerapp secret list --show-values` の該当 value と
+4. platform 側の値が新バージョンと一致することを確認する（`az containerapp secret list --show-values` の該当 value と
    Key Vault 最新版を sha256 で比較。値は画面に出さない）
-4. **replica の切替が終わったことを確認する**: `az containerapp replica list -g rg-felisaichatbot-dev-tf -n ca-felisaichatbot-dev-front --revision <latestReadyRevisionName> --query "[].{name:name,created:properties.createdTime,state:properties.runningState}"`
-   で、同期より後に作られた replica だけが `Running` で、それ以前の replica が残っていないこと。
-   同期 `Succeeded` から旧 replica の停止までは数十秒ずれる（2026-10-03 の切替では同期 06:30:33 → 旧 container の停止 06:30:57）。
-   旧 replica が動いている間は旧い値でサインインが成立し続けるので、ここを飛ばすと手順 5 の確認が旧い値の成功を拾う
-5. 割当済みユーザーのブラウザで **`https://<frontend FQDN>/.auth/logout` を開いてから** サインインし直す
+5. **replica の切替が終わったことを確認する**: 手順 1 と同じ `az containerapp replica list` で、
+   (a) 手順 1 で記録した replica が一覧からすべて消えている（または `runningState` が `Running` でない）、
+   (b) それ以外の replica がすべて `Running`、の両方。
+   「同期より後に作られた replica」を条件にしてはいけない: 2026-10-03 の切替では新 replica の作成（06:30:32）が同期 `Succeeded`
+   のログ（06:30:33 / 34）より先で、その条件では完了と判定できなかった。同期から旧 container の停止（06:30:57）までは数十秒ずれ、
+   旧 replica が動いている間は旧い値でサインインが成立し続けるので、ここを飛ばすと手順 6 の確認が旧い値の成功を拾う
+6. 割当済みユーザーのブラウザで **`https://<frontend FQDN>/.auth/logout` を開いてから** サインインし直す
    （既存のセッション cookie が残っていると client secret を使う認可コードの交換を通らず、確認にならない）。
    sidecar（コンテナ `http-auth`）のログで `oauth2/v2.0/token` の POST が `Completed with 200`、
    `AADSTS7000215` が無いことを確認する。新旧どちらの資格情報も Entra では有効なので、
-   **旧シークレットは手順 3 / 4 / 5 がすべて満たされるまで削除しない**（先に削除すると、同期か replica の切替が終わるまでサインインが失敗する）
-6. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`。
+   **旧シークレットは手順 4 / 5 / 6 がすべて満たされるまで削除しない**（先に削除すると、同期か replica の切替が終わるまでサインインが失敗する）
+7. 旧シークレットを削除する: `az ad app credential delete --id "$app_id" --key-id <旧 keyId>`。
    削除後にもう一度 `/.auth/logout` → サインインで確認する
-7. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する。
+8. §7-1 を再実行して新しい 1 本だけになっていることを確認し、台帳 §12 の失効日を更新する。
    Key Vault の旧バージョンは参照されないまま残る（削除してもよい）
 
 ## 8. Key Vault 参照から直接値へ戻す（rollback）
@@ -246,16 +250,29 @@ Container Apps は解決済みの値で動き続けるので、サインイン�
   戻せない（PR 2 の chat API キーの rollback も、Key Vault を読まずに事前確保した値で戻した）。Easy Auth のクライアントシークレットは
   Entra で `--append` 発行すれば Key Vault に依存せずに有効な値が手に入るので、**復旧用のシークレットを新しく発行してそのまま PATCH に渡す**
 - 値の取得が失敗したときに空の値で PATCH しないよう、`set -euo pipefail` と長さの検査を PATCH の実行条件にする。
-  秘密値の入った一時ファイルは `mktemp` で作り、`trap` で異常終了・中断時にも削除する（`az rest --body` は `@{file}` のみで標準入力は使えない）
+  秘密値の入った一時ファイルは `mktemp` で作り、スクリプト全体を subshell `( ... )` に入れて `EXIT` の trap で削除する
+  （対話シェルに貼り付けても subshell の終了時に動く。`INT` / `TERM` は `exit 130` で明示的に終了させ、中断後に処理が続かないようにする。
+  Bash の trap の仕様: <https://www.gnu.org/s/bash/manual/bash.html#Bourne-Shell-Builtins>。`az rest --body` は `@{file}` のみで標準入力は使えない。
+  外部コマンドをスタブにした模擬実行（2026-10-03）: 正常終了 / PATCH 失敗 / 発行中の `SIGINT` / PATCH 中の `SIGINT` / 対話シェルへの貼り付け、の
+  いずれも一時ファイルが残らなかった。発行中に中断すると PATCH は呼ばれず、PATCH 中に中断すると実行中の PATCH は完了するがその後の処理は続かない）
 
 ```bash
+# 全体を subshell に入れる: 対話シェルに貼り付けても、subshell の終了時に EXIT の trap が動いて一時ファイルが消える
+(
 set -euo pipefail
+BODY=""
+trap 'if [ -n "$BODY" ]; then shred -u "$BODY" 2>/dev/null || rm -f "$BODY"; fi' EXIT
+trap 'exit 130' INT TERM   # 中断時は明示的に終了する（EXIT の trap が走り、以後の処理は続かない）
 RG=rg-felisaichatbot-dev-tf
 APP_ID=$(az ad app list --display-name felis-ai-chatbot-dev-easyauth --query "[0].appId" -o tsv)
 FRONT_RES=$(az containerapp show -g $RG -n ca-felisaichatbot-dev-front --query id -o tsv)
 IDENTITY_ID=$(az containerapp show -g $RG -n ca-felisaichatbot-dev --query "properties.configuration.registries[0].identity" -o tsv)
+REV=$(az containerapp show -g $RG -n ca-felisaichatbot-dev-front --query properties.latestReadyRevisionName -o tsv)
 umask 077
 
+# 0. 変更前の replica 名を記録する（§7-2 手順 1。Key Vault 参照へ戻すときの切替完了の判定に使う）
+echo "replicas before:"; az containerapp replica list -g $RG -n ca-felisaichatbot-dev-front --revision "$REV" \
+  --query "[].{name:name,created:properties.createdTime,state:properties.runningState}" -o table
 # 1. 復旧用のシークレットを Entra で追加発行し、値をシェル変数に受ける（画面に出さない。Key Vault を経由しない）
 EASY_AUTH_ROLLBACK_SECRET=$(az ad app credential reset --id "$APP_ID" --append \
   --display-name "easyauth-rollback-$(date -u +%Y%m%dT%H%M)" --years 1 --query password -o tsv | tr -d '\n')
@@ -263,36 +280,36 @@ EASY_AUTH_ROLLBACK_SECRET=$(az ad app credential reset --id "$APP_ID" --append \
 [ "${#EASY_AUTH_ROLLBACK_SECRET}" -ge 32 ] || { echo "secret length ${#EASY_AUTH_ROLLBACK_SECRET} < 32: abort" >&2; exit 1; }
 echo "secret length: ${#EASY_AUTH_ROLLBACK_SECRET}"
 # 3. PATCH body（secrets 配列は丸ごと置き換わるので chat-api-key の Key Vault 参照も一緒に書く）。
-#    一時ファイルは mktemp（mode 600）で作り、作る前に trap で後片付けを登録する（PATCH の失敗・中断でも値を残さない）。
-#    値は環境変数経由で jq に渡し、プロセス引数に出さない
+#    一時ファイルは mktemp（mode 600）。値は環境変数経由で jq に渡し、プロセス引数に出さない
 BODY=$(mktemp)
-trap 'shred -u "$BODY" 2>/dev/null || rm -f "$BODY"' EXIT INT TERM
 export EASY_AUTH_ROLLBACK_SECRET
 jq -n --arg id "$IDENTITY_ID" '{properties:{configuration:{secrets:[
     {name:"chat-api-key", keyVaultUrl:"https://kv-felisaichatbot-dev.vault.azure.net/secrets/chat-api-key", identity:$id},
     {name:"microsoft-provider-authentication-secret", value:env.EASY_AUTH_ROLLBACK_SECRET}]}}}' > "$BODY"
 unset EASY_AUTH_ROLLBACK_SECRET
-# 4. 生成物の検査: 値が空でないこと（長さだけを見る）。失敗時は trap が一時ファイルを消す
+# 4. 生成物の検査: 値が空でないこと（長さだけを見る）。失敗時は EXIT の trap が一時ファイルを消す
 [ "$(jq -r '.properties.configuration.secrets[] | select(.name=="microsoft-provider-authentication-secret") | .value | length' "$BODY")" -ge 32 ] \
   || { echo "rollback body has empty value: abort" >&2; exit 1; }
-# 5. PATCH（終了コードに関わらず trap が一時ファイルを shred する）
+# 5. PATCH（成功・失敗・中断のいずれでも、subshell を抜けるときに EXIT の trap が一時ファイルを shred する）
 az rest --method patch --url "https://management.azure.com${FRONT_RES}?api-version=2025-07-01" \
   --body @"$BODY" --output none
 az containerapp show -g $RG -n ca-felisaichatbot-dev-front \
   --query "properties.configuration.secrets[].{name:name,kv:keyVaultUrl}" -o json   # Easy Auth の secret は kv が null になる
+)
 ```
 
-- 確認: §7-2 の手順 5 と同じ（`/.auth/logout` → サインイン → sidecar の token POST 200）。新しいシークレットは Entra で即時に有効
+- 確認: §7-2 の手順 6 と同じ（`/.auth/logout` → サインイン → sidecar の token POST 200）。新しいシークレットは Entra で即時に有効
 - 直接値が入っている間は **ephemeral 層で Terraform を実行しない**（plan も不可。値方式の secret の値が state に書かれる）
 - `chat-api-key` の Key Vault 参照は PATCH の body に残す。Key Vault 自体の障害中にこの PATCH が `chat-api-key` の参照の検証で拒否されるかは**未検証**
   （拒否された場合、chat API キーの値は Key Vault にしか無いので直接値にはできない。Container Apps が保持している値で動き続けるのを待つ）
 - **Key Vault 参照へ戻す（障害の解消後）**: §6-2 のパイプで**もう 1 本**発行して Key Vault に新バージョンとして投入 → 同じ PATCH で
   `microsoft-provider-authentication-secret` を `{name, keyVaultUrl: "https://kv-felisaichatbot-dev.vault.azure.net/secrets/easy-auth-client-secret", identity: $id}`
   にする（値は書かない。`IDENTITY_ID` は上のとおり `registries[0].identity` から取る。`az identity show --query id` は `resourcegroups` 小文字を返し、
-  Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）→ **復旧用の資格情報を削除する前に §7-2 の手順 2 〜 5 を順に満たす**:
-  同期 `Succeeded` → platform 側の値の sha256 が Key Vault の最新値と一致 → 旧 replica がすべて停止し新 replica だけが `Running`
-  （同期から旧 container の停止まで数十秒ずれる。2026-10-03 実測は 06:30:33 → 06:30:57。この間は旧 replica が復旧用の値でサインインを通すため、
-  ここで消すと旧 replica でのサインインが失敗する）→ `/.auth/logout` からサインインし直して sidecar の token POST 200 →
+  Terraform の表記と食い違って次の plan が差分になる = 2026-09-28 実測）→ **復旧用の資格情報を削除する前に §7-2 の手順 3 〜 6 を順に満たす**:
+  同期 `Succeeded` → platform 側の値の sha256 が Key Vault の最新値と一致 → スクリプト冒頭で記録した replica が一覧から消え（または `Running` でなくなり）、
+  それ以外の replica がすべて `Running`（同期から旧 container の停止まで数十秒ずれる。2026-10-03 実測は 06:30:33 → 06:30:57。この間は旧 replica が復旧用の値で
+  サインインを通すため、ここで消すと旧 replica でのサインインが失敗する。「同期より後に作られた replica」は条件にしない = §7-2 手順 5）
+  → `/.auth/logout` からサインインし直して sidecar の token POST 200 →
   そのうえで `az ad app credential delete` で復旧用の `easyauth-rollback-*` と、それ以前の資格情報を削除し、§7-1 で 1 本だけになっていることを確認 →
   削除後にもう一度 `/.auth/logout` → サインイン → `terraform -chdir=terraform/ephemeral plan -detailed-exitcode` が exit 0
 - この手順は**未検証**（2026-10-03 の切替では rollback 演習を省いた）。Key Vault 参照 → 直接値 → Key Vault 参照の往復自体は
