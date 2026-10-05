@@ -519,3 +519,69 @@ az ad app credential reset --id "$APP_ID" --append --display-name "easyauth-2026
   戻し方は ARM への PATCH になる（手順書 §8。未検証）
 - 切替 apply の `/readyz` 欠測は約 6 分 37 秒（作業自体は apply 28 秒 + 確認）。ADR-0031 が「state に残る」とした秘密値 2 つは 2026-10-03 をもって両方 state から消え、
   過去の state バージョンの値は chat API キーのローテーション（10-01）と Easy Auth の旧資格情報の削除（10-03）で無効になった
+
+## 最新 state の再照合（2026-10-04。すべて読み取り）
+
+目的: PR 3 の切替（10-03）後、両方の層の最新 raw state に、対象の秘密値 2 つ（chat API キー、Easy Auth のクライアントシークレット）の現在値が保存されていないことを確かめる。
+PR 3 では state の照合をしていなかった（PR 1 の確認と PR 2 の 2026-09-28 07:47 の確認は chat API キーのみ）。過去の state バージョン（blob のバージョン履歴）は対象外で、読みに行っていない。
+
+実施は Claude Code。`terraform state pull` と `terraform workspace show` / `list`、`az keyvault secret show` だけを使い、state・Azure リソース・Key Vault・Entra の資格情報は変更していない。
+state と秘密値は Python のプロセス内（メモリ上）だけで扱い、画面・ファイルには出していない。出力は一致の有無（true / false）、属性名、型、長さ、null かどうかだけ。
+
+### 対象の特定
+
+| 確認 | 結果 |
+| --- | --- |
+| working directory | `terraform/persistent`（Key Vault 側。`azurerm_key_vault_secret.chat_api_key`）と `terraform/ephemeral`（アプリ側。Container Apps と `azapi_resource.front_auth`） |
+| backend | どちらも azurerm backend、Storage Account `felisaichatbottfstate02` / container `tfstate`。key は `persistent/terraform.tfstate` と `ephemeral/terraform.tfstate`。`.terraform/terraform.tfstate` の backend 設定も同じ |
+| workspace | どちらも `terraform workspace list` は `default` のみ（現在も `default`） |
+| state 上の名前 | Key Vault `kv-felisaichatbot-dev`、Container App `ca-felisaichatbot-dev` / `ca-felisaichatbot-dev-front` / `ca-felisaichatbot-dev-ops`、resource group `rg-felisaichatbot-dev-tf` |
+| state の基本情報 | persistent: serial 16、resources 21。ephemeral: serial 16、resources 17。どちらも `terraform_version` 1.14.8 |
+| 比較に使った現在値 | `chat-api-key`: 長さ 64、enabled、バージョン `c2eb05b4...`（10-01 のローテーションで作成）。`easy-auth-client-secret`: 長さ 40、enabled、バージョン `ae8d1b65...`（10-03 06:21:26Z 作成） |
+
+### 現在値との照合（値は表示しない）
+
+両方の層の raw state 全体で、現在値が次のどの形でも見つからないことを確かめた。
+
+- そのままの形
+- JSON エスケープした形
+- base64 化した形（属性の文字列値の中を検索）
+- 各 instance の `private`（provider の private data）を base64 デコードした中身
+
+| 秘密値 | persistent の state | ephemeral の state |
+| --- | --- | --- |
+| chat API キー（`chat-api-key` の現在値） | PASS: 一致なし | PASS: 一致なし |
+| Easy Auth のクライアントシークレット（`easy-auth-client-secret` の現在値） | PASS: 一致なし | PASS: 一致なし |
+
+### 対象 resource の state 構造
+
+| 確認 | 結果 |
+| --- | --- |
+| `azurerm_key_vault_secret.chat_api_key` | PASS: `value` は長さ 0、`value_wo` は null、`value_wo_version` は number。`sensitive_attributes` は `value` |
+| `random_password` / `random_string` の resource | PASS: 両方の state で 0 件（ephemeral resource は state に入らない） |
+| `data.azurerm_key_vault_secret`（値を読む data source） | PASS: 両方の state で 0 件。ephemeral 層にあるのは名前一覧だけを読む `data.azurerm_key_vault_secrets.main` |
+| `azurerm_container_app.front` の secret | PASS: `chat-api-key` は `value` が null、`microsoft-provider-authentication-secret` は `value` が長さ 0。どちらも `key_vault_secret_id`（バージョン無し）と `identity` あり。env `CHAT_API_KEY` は `secret_name` 参照 |
+| `azurerm_container_app.main` の secret | PASS: `chat-api-key` は `value` が長さ 0、`key_vault_secret_id`（バージョン無し）と `identity` あり。env `CHAT_API_KEY` は `secret_name` 参照 |
+| `azapi_resource.front_auth`（authConfigs） | PASS: `body` にあるのは `clientSecretSettingName`（secret の名前）だけで、クライアントシークレットの値の属性は無い。`output` は `id` / `type` / `globalValidation.excludedPaths` のみ、`sensitive_body` は null |
+
+### 判定
+
+**PASS（対象は chat API キーと Easy Auth のクライアントシークレットの 2 つだけ）**: この 2 つの現在値は、両方の層の最新 raw state に保存されていない。
+対象 resource の state 構造でも、この 2 つの値を持つ属性（`value` / `value_wo`、Container Apps の secret の `value`）は空か null だった。
+
+この PASS は「felis-ai-chatbot のすべての秘密値が state から消えた」という意味ではない。対象外の秘密値は次の節のとおり state に残っている。
+
+### 検証対象外で確認した事項
+
+最新 raw state を確認する過程で、今回の対象 2 つ以外に、秘密値になりうる属性に値が入っていることを確認した（値は表示していない。記録は属性名と長さだけ）。
+これらは Issue #286 の移行対象でも、上の PASS 判定の対象でもない。今回の検証では state から除去する対応はしておらず、Terraform・Azure 側とも変更していない。将来の確認・改善の候補として記録する。
+
+| state に値が残っているもの | 層 | 状態 |
+| --- | --- | --- |
+| `azurerm_log_analytics_workspace.main` の `primary_shared_key` / `secondary_shared_key` | persistent（resource）と ephemeral（data source） | 文字列（長さ 88） |
+| secret `database-url`（serving `ca-felisaichatbot-dev`、ops `ca-felisaichatbot-dev-ops`、Container Apps Job 4 件） | ephemeral | 値方式の文字列（長さ 120）。Key Vault 参照ではない |
+
+### 残った未検証事項
+
+- 過去の state バージョンの内容は対象外（切替前の値が残っていることは PR 1 の事前確認のとおり。値は 10-01 のローテーションと 10-03 の旧資格情報の削除で無効化済み）
+- 照合に使ったのは Key Vault の現在値だけで、`chat-api-key` の旧バージョン（`19ec93bf...`）などの過去の値との照合はしていない（構造の確認で、対象 resource の値の属性が空か null であることは確かめた）
