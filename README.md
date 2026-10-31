@@ -96,8 +96,4 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 - [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md): フェーズ 1 の実測記録・食い違い・未検証項目
 - [docs/verification/failover-drill/observations.md](./docs/verification/failover-drill/observations.md): HA failover / tier 変更ドリルの実測記録（downtime・zone 遷移・公称との照合・限定）
 - [docs/operations/credit-window-execution-plan.md](./docs/operations/credit-window-execution-plan.md): 進行中のフェーズ計画（PITR ドリル / メンテナンスドリル / teardown）
-
-## ローカルで動かす
-
-手順は [docs/development/local-setup.md](./docs/development/local-setup.md) にまとめています
-（`cp .env.example .env` のあと `docker compose up -d`）。
+- [docs/development/local-setup.md](./docs/development/local-setup.md): ローカルで動かす手順（`.env` の用意と `docker compose up -d`）
