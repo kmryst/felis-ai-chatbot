@@ -66,7 +66,7 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 
 ![図 2: GitHub Actions の外形監視、開発者のローカル環境からの Terraform・デプロイ・運用操作、Azure Monitor のアラート、PostgreSQL flexible server のバックアップの構成](./docs/architecture/architecture-operations.png)
 
-## 実測から出た発見
+## Lessons learned
 
 数値と再現手順の正本は
 [docs/verification/observation-phase1/observations.md](./docs/verification/observation-phase1/observations.md) です。
@@ -87,7 +87,7 @@ Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / 
 - **cron `*/5` に対して実際に起動したのは 15.2%。** 起動しなかった 733 機会は success とも
   failure とも言えないため unknown として分母から外しています。72h の稼働率は測れていません
 
-## もっと見る
+## Documentation
 
 - [docs/production-readiness.md](./docs/production-readiness.md): 本番運用との差分（理由と追跡先つき）
 - [docs/operations/slo/slo-document.md](./docs/operations/slo/slo-document.md): user-facing SLI / SLO、error budget、および review procedure の入口
