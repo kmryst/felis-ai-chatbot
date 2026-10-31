@@ -6,7 +6,7 @@ backend は internal ingress で frontend の BFF 経由でのみ到達可能）
 成果物はアプリではなく、**その PostgreSQL の Backup / PITR / Maintenance / Monitoring / HA を
 設定で終わらせずドリルとして実行し、実測値を証跡として残したこと**です。
 
-## 構成図
+## Architecture
 
 図 1: チャットのリクエストの流れ
 
@@ -16,7 +16,7 @@ backend は internal ingress で frontend の BFF 経由でのみ到達可能）
 
 ![図 2: GitHub Actions の外形監視、開発者のローカル環境からの Terraform・デプロイ・運用操作、Azure Monitor のアラート、PostgreSQL flexible server のバックアップの構成](./docs/architecture/architecture-operations.png)
 
-## 対象ロールと、このリポジトリで示せること
+## What this repository demonstrates
 
 - **対象ロール**: DevOps Engineer / SRE / Platform Engineer / インフラエンジニア
 - **基盤**: Terraform で PostgreSQL Flexible Server / Container Apps（frontend / backend / ops の 3 App + Job 4 本）/
@@ -30,7 +30,7 @@ backend は internal ingress で frontend の BFF 経由でのみ到達可能）
 - **公開している弱点**: 本番運用に足りていないものを理由と追跡先つきで 1 枚に集約
   （[docs/production-readiness.md](./docs/production-readiness.md)）
 
-## 実測値
+## Results
 
 進行中のプロジェクトです。**未実測を先に並べています。**
 
@@ -53,14 +53,14 @@ backend は internal ingress で frontend の BFF 経由でのみ到達可能）
 > バックアップからの復旧時間ではありません。
 > RTO 目標（3 時間）を実測値をもとに改定するかは未判断です（目標値は同文書 §2 のまま）。
 
-## このプロジェクトの立て付け
+## Background
 
 実務では DB 運用を担当していません。カタログスペックや手順書の知識ではなく、
 **自分で構築して実際に動かした実測値で答えられる状態**を作るために、
 Azure 上に PostgreSQL を建てて Backup / PITR / Maintenance / Monitoring / HA を
 設計・実行・記録しました。
 
-「実務でやった」とは書きません。立て付けは
+「実務でやった」とは書きません。位置づけは
 「実務では担当していない。だから自分で構築して一通りやった。これがその記録」で固定しています。
 勝負どころは追い質問（リストアは試したか / 保持期間はどう決めたか /
 メンテナンス中に止まったか / vacuum は見ているか）で、
