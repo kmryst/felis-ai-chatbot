@@ -262,7 +262,7 @@ restore_cli_rc=0 t0-cli-after=2026-09-12T06:53:48.799Z
 ```console
 gate_at=2026-09-12T07:08:17.924Z
 locks=lock-pgsql-source-cannotdelete
-RST_ID=/subscriptions/e503b2a6-d4d8-4954-82aa-4f64d36651f5/resourceGroups/rg-felisaichatbot-dev-tf/providers/Microsoft.DBforPostgreSQL/flexibleServers/pgsql-felisaichatbot-dev-r3a-0912
+RST_ID=/subscriptions/<sub>/resourceGroups/rg-felisaichatbot-dev-tf/providers/Microsoft.DBforPostgreSQL/flexibleServers/pgsql-felisaichatbot-dev-r3a-0912
 fail_closed_checks=3/3 passed
 delete_start=2026-09-12T07:08:20.398Z
 delete_rc=0 delete_end=2026-09-12T07:09:43.030Z
