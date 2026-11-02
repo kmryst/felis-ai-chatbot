@@ -40,4 +40,4 @@ python3 docs/architecture/src/check_views.py \
   docs/architecture/architecture-operations.drawio
 ```
 
-不一致が 0 件なら終了コード 0、1 件以上なら 1。
+不一致が 0 件なら終了コード 0、1 件以上なら 1、引数が足りなければ 2。

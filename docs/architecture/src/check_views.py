@@ -5,7 +5,7 @@ label and style (exit/entry points excluded, since they are layout).
 For every vertex in a view (title and legend excluded): the full diagram has the same id with the same label.
 
 usage: python3 check_views.py <full.drawio> <view.drawio> [<view.drawio> ...]
-exit code: 0 = no mismatch, 1 = mismatch found
+exit code: 0 = no mismatch, 1 = mismatch found, 2 = usage error
 """
 import re
 import sys
@@ -35,6 +35,9 @@ def is_view_specific(cid):
 
 
 def main(argv):
+    if len(argv) < 3:
+        print("usage: python3 check_views.py <full.drawio> <view.drawio> [<view.drawio> ...]")
+        return 2
     full = load(argv[1])
     bad = 0
     for path in argv[2:]:
