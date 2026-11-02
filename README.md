@@ -12,6 +12,8 @@ backend は internal ingress で frontend の BFF 経由でのみ到達可能）
 
 ![図 1: ブラウザから Easy Auth・frontend（BFF）・backend（RAG API）を経て Azure OpenAI と PostgreSQL flexible server に至るチャットのリクエストの流れ](./docs/architecture/architecture-request-flow.png)
 
+回答は backend から frontend（BFF）を経て、Server-Sent Events（SSE）でブラウザへストリーミング返却します（図 1 は要求の向きだけを矢印で描いています）。
+
 図 2: デプロイ・運用・監視・バックアップ
 
 ![図 2: GitHub Actions の外形監視、開発者のローカル環境からの Terraform・デプロイ・運用操作、Azure Monitor のアラート、PostgreSQL flexible server のバックアップの構成](./docs/architecture/architecture-operations.png)
