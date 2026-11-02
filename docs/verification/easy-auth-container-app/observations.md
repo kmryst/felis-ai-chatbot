@@ -23,7 +23,7 @@ ADR-0028（[/chat の SSE 化と応答契約の固定](../../adr/0028-chat-sse-r
   （再測定には一時リソースの再作成が必要で、本 PR の範囲外）
 - [raw/](./raw/) の SSE クライアントログ・revision 測定ログは、実行時にローカルへ書き出された
   出力ファイルの現物のコピー。テスト 1（header 偽装）の raw は実行ログからの事後抽出で、
-  Bearer token 値のみ `[REDACTED]` にマスクした
+  Bearer token 値は `[REDACTED]` にマスクし、`iss` の tenant ID はほかの文書と同じ placeholder（`<tenant>`）に置き換えた
 - ログから読み取れなかった値は本記録では埋めず、§8「ログから復元できなかった情報」に列挙した
 
 ## 2. 実施条件（identity）
