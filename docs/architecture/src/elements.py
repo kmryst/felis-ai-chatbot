@@ -47,10 +47,13 @@ BOXES = {
 }
 
 # ---- frames: kind -> (name, style). Names: English, sentence case, Microsoft Learn wording. No internal names. ----
+SUBNET_STYLE = "fillColor=#FFFFFF;strokeColor=#2E7D32;fontSize=17;fontStyle=0;fontColor=#2E7D32;dashed=1;dashPattern=6 4"
 FRAMES = {
     "rg": ("Resource group", "fillColor=none;strokeColor=#999999;fontSize=17;fontStyle=0;fontColor=#555555;dashed=1;dashPattern=6 4"),
     "vnet": ("Virtual network", "fillColor=#F3FAF3;strokeColor=#2E7D32;fontSize=18;fontStyle=1;fontColor=#2E7D32"),
-    "subnet": ("Subnet", "fillColor=#FFFFFF;strokeColor=#2E7D32;fontSize=17;fontStyle=0;fontColor=#2E7D32;dashed=1;dashPattern=6 4"),
+    # one kind per subnet so each frame shows which subnet it is (Terraform: azurerm_subnet.aca / azurerm_subnet.pgsql)
+    "subnetApps": ("Container Apps subnet", SUBNET_STYLE),
+    "subnetDb": ("PostgreSQL subnet", SUBNET_STYLE),
     "cae": ("Container Apps environment", "fillColor=#EAF3FC;strokeColor=#0078D4;fontSize=19;fontStyle=1;fontColor=#0078D4"),
     "entra": ("Microsoft Entra ID", "fillColor=#FFFFFF;strokeColor=#0062AD;fontSize=18;fontStyle=1;fontColor=#0062AD"),
     "legend": ("凡例", "fillColor=#FFFFFF;strokeColor=#5B5B5B;fontSize=19;fontStyle=1;fontColor=#5B5B5B"),
@@ -63,8 +66,8 @@ FRAME_IDS = {
     "rgMain": "rg",
     "rgState": "rg",
     "vnet": "vnet",
-    "subnetApps": "subnet",
-    "subnetDb": "subnet",
+    "subnetApps": "subnetApps",
+    "subnetDb": "subnetDb",
     "caEnv": "cae",
     "legend": "legend",
 }
@@ -83,7 +86,7 @@ EDGES = {
     "flow6": ("backend", "postgres", "main", "⑥ 類似度検索", "PostgreSQL protocol/TLS", True),
     "flow7": ("backend", "openai", "main", "⑦ 回答の生成", "HTTPS, SSE", True),
     "token": ("caEnv", "entraId", "other", "managed identity のトークン取得", None, True),
-    "kvRefs": ("caEnv", "keyVault", "other", "secret の取得（frontend・backend）", "Key Vault references", True),
+    "kvRefs": ("caEnv", "keyVault", "other", "secret の取得", "Key Vault references", True),
     "vnetLink": ("privateDns", "vnet", "link", "", None, True),
     # deployment, operations, monitoring, backup (purpose and means on one label)
     "probe": ("github", "frontend", "other", "/readyz", None, False),
@@ -93,9 +96,9 @@ EDGES = {
     "push": ("developer", "registry", "other", "docker push", None, False),
     "apply": ("developer", "resourceManager", "other", "terraform apply", None, False),
     "state": ("developer", "stateStorage", "other", "state の読み書き", None, False),
-    "pull": ("caEnv", "registry", "other", "イメージ pull", None, False),
+    "pull": ("caEnv", "registry", "other", "image pull", None, False),
     "embedJob": ("jobs", "openai", "other", "既存文書の embedding 生成", None, False),
-    "jobsDb": ("jobs", "postgres", "other", "マイグレーション<br>データ投入・embedding<br>観測値の採取（毎分）", None, False),
+    "jobsDb": ("jobs", "postgres", "other", "migration<br>RAG データの投入<br>embedding<br>観測値の採取（毎分）", None, False),
     "opsDb": ("opsApp", "postgres", "other", "運用作業", None, False),
     "backup": ("postgres", "backupStorage", "other",
                "automated backups（snapshot）<br>WAL（Microsoft.Storage<br>service endpoint 経由）", None, False),
